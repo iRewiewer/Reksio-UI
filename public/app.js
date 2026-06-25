@@ -161,13 +161,46 @@ function clearConsole() {
   renderConsole();
 }
 
+function absoluteUrl(value) {
+  return new URL(value, window.location.href).href;
+}
+
+function copyTextFallback(text) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    return document.execCommand('copy');
+  } finally {
+    textarea.remove();
+  }
+}
+
 async function copyConsole() {
   const text = state.logs
     .map((entry) => `[${entry.time}] [${entry.source}] [${entry.level}] ${entry.message}${entry.detail ? `\n${entry.detail}` : ''}`)
     .join('\n');
 
   try {
-    await navigator.clipboard.writeText(text);
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (error) {
+        if (!copyTextFallback(text)) {
+          throw error;
+        }
+      }
+    } else if (!copyTextFallback(text)) {
+      throw new Error('Clipboard API is unavailable in this browser context.');
+    }
+
     addLog('launcher', 'info', 'Console copied to clipboard');
   } catch (error) {
     addLog('launcher', 'error', 'Failed to copy console', error);
@@ -259,7 +292,7 @@ function buildLaunchUrl(game) {
 
   if (game.type === 'iso') {
     params.set('loader', 'iso-remote');
-    params.set('source', game.isoUrl);
+    params.set('source', absoluteUrl(game.isoUrl));
   } else {
     params.set('loader', 'github');
     params.set('source', game.source);
@@ -592,6 +625,37 @@ function selectGame(gameId, shouldLoad) {
   }
 }
 
+async function logIsoEndpoint(game) {
+  if (game.type !== 'iso' || !game.isoUrl) {
+    return;
+  }
+
+  const isoUrl = absoluteUrl(game.isoUrl);
+
+  try {
+    const response = await fetch(isoUrl, {
+      cache: 'no-store',
+      headers: {
+        Range: 'bytes=0-0'
+      }
+    });
+    const sample = await response.arrayBuffer();
+    const statusText = [response.status, response.statusText].filter(Boolean).join(' ');
+    const detail = [
+      `url: ${isoUrl}`,
+      `accept-ranges: ${response.headers.get('accept-ranges') || 'missing'}`,
+      `content-range: ${response.headers.get('content-range') || 'missing'}`,
+      `content-length: ${response.headers.get('content-length') || 'missing'}`,
+      `content-type: ${response.headers.get('content-type') || 'missing'}`,
+      `sample-bytes: ${sample.byteLength}`
+    ].join('\n');
+
+    addLog('launcher', response.ok || response.status === 206 ? 'info' : 'warn', `ISO probe ${statusText}`, detail);
+  } catch (error) {
+    addLog('launcher', 'error', 'ISO probe failed', error);
+  }
+}
+
 function loadSelectedGame() {
   const game = getSelectedGame();
 
@@ -603,6 +667,7 @@ function loadSelectedGame() {
   prepareSaveSlot(game.id);
   const launchUrl = buildLaunchUrl(game);
   addLog('launcher', 'info', `Loading ${game.title}`, launchUrl);
+  logIsoEndpoint(game);
   nodes.gameFrame.src = launchUrl;
   state.loadedId = game.id;
   renderDetails();

@@ -74,3 +74,33 @@ index 6e0a5d0..9b62453 100644
  let config = {}
  const start = () => {
      gameContainer.removeEventListener('click', start)
+diff --git a/src/engine/logging.ts b/src/engine/logging.ts
+index 2df2d3e..db1d118 100644
+--- a/src/engine/logging.ts
++++ b/src/engine/logging.ts
+@@ -57,11 +57,9 @@ export const fmt = (strings: TemplateStringsArray, ...values: any[]): FormatInfo
+ export const allLogs: any[] = []
+ 
+ class Logger {
+-    private severityMapping: Record<string, any> = {
+-        info: console.log,
+-        warn: console.warn,
+-        error: console.error,
+-        debug: console.debug,
++    private printToConsole(severity: string, ...args: any[]) {
++        const printer = (severity === 'info' ? console.log : (console as any)[severity]).bind(console)
++        printer(...args)
+     }
+ 
+     private appendExtraData(formatting: FormatInfo, extraData?: any) {
+@@ -108,9 +106,9 @@ class Logger {
+             extraData,
+         })
+ 
+-        this.severityMapping[severity](formatInfoWithExtra.richText, ...formatInfoWithExtra.richArgs)
++        this.printToConsole(severity, formatInfoWithExtra.richText, ...formatInfoWithExtra.richArgs)
+         if (err) {
+-            this.severityMapping[severity](err)
++            this.printToConsole(severity, err)
+         }
+     }
