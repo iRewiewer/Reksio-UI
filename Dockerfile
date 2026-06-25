@@ -1,7 +1,7 @@
 FROM node:22-alpine AS engine-build
 
 ARG REKSIOENGINE_REPO=https://github.com/ReksioEngine/ReksioEngine.git
-ARG REKSIOENGINE_REF=main
+ARG REKSIOENGINE_REF=master
 
 WORKDIR /engine
 

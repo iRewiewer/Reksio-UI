@@ -54,7 +54,7 @@ Build argument:
 
 | Name | Default | Purpose |
 | --- | --- | --- |
-| `REKSIOENGINE_REF` | `main` | Git ref used to build `ReksioEngine` |
+| `REKSIOENGINE_REF` | `master` | Git ref used to build `ReksioEngine` |
 
 ## Local development
 
