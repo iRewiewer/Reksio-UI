@@ -30,6 +30,14 @@
         <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
         <path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" />
       </symbol>
+      <symbol id="icon-note" viewBox="0 0 24 24">
+        <path d="M4 4h16v16H4Z" />
+        <path d="M8 8h8M8 12h8M8 16h5" />
+      </symbol>
+      <symbol id="icon-terminal" viewBox="0 0 24 24">
+        <path d="m4 7 5 5-5 5" />
+        <path d="M12 19h8" />
+      </symbol>
       <symbol id="icon-play" viewBox="0 0 24 24">
         <path d="M8 5v14l11-7Z" />
       </symbol>
@@ -46,11 +54,6 @@
       <symbol id="icon-upload" viewBox="0 0 24 24">
         <path d="M12 16V4M7 9l5-5 5 5M5 20h14" />
       </symbol>
-      <symbol id="icon-volume" viewBox="0 0 24 24">
-        <path d="M11 5 6 9H3v6h3l5 4Z" />
-        <path d="M15 9a5 5 0 0 1 0 6" />
-        <path d="M18 6a9 9 0 0 1 0 12" />
-      </symbol>
     </svg>
 
     <div class="app-shell">
@@ -63,9 +66,17 @@
               <div class="brand-subtitle">Self-hosted engine frontend</div>
             </div>
           </div>
-          <button class="icon-button" id="addGameButton" type="button" title="Add game" aria-label="Add game">
-            <svg><use href="#icon-add"></use></svg>
-          </button>
+          <div class="brand-actions">
+            <button class="icon-button" id="consoleButton" type="button" title="Console" aria-label="Console">
+              <svg><use href="#icon-terminal"></use></svg>
+            </button>
+            <button class="icon-button" id="notesButton" type="button" title="Notes" aria-label="Notes">
+              <svg><use href="#icon-note"></use></svg>
+            </button>
+            <button class="icon-button" id="addGameButton" type="button" title="Add game" aria-label="Add game">
+              <svg><use href="#icon-add"></use></svg>
+            </button>
+          </div>
         </header>
 
         <label class="search-box">
@@ -100,11 +111,6 @@
           </div>
 
           <div class="toolbar-actions">
-            <label class="volume-control" title="Volume">
-              <svg><use href="#icon-volume"></use></svg>
-              <input id="volumeSlider" type="range" min="0" max="100" value="70" />
-              <span id="volumeValue">70%</span>
-            </label>
             <button class="tool-button primary" id="playButton" type="button">
               <svg><use href="#icon-play"></use></svg>
               Play
@@ -248,6 +254,86 @@
             </button>
           </div>
         </form>
+      </div>
+    </dialog>
+
+    <dialog class="add-dialog console-dialog" id="consoleDialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <div class="eyebrow">Debug</div>
+            <h2>Console</h2>
+          </div>
+          <button class="icon-button" id="closeConsoleDialogButton" type="button" title="Close" aria-label="Close">
+            <svg><use href="#icon-close"></use></svg>
+          </button>
+        </header>
+
+        <div class="console-toolbar">
+          <div class="console-summary" id="consoleSummary">No logs yet</div>
+          <div class="console-actions">
+            <button class="text-button" id="copyConsoleButton" type="button">
+              <svg><use href="#icon-note"></use></svg>
+              Copy
+            </button>
+            <button class="text-button" id="clearConsoleButton" type="button">
+              <svg><use href="#icon-trash"></use></svg>
+              Clear
+            </button>
+          </div>
+        </div>
+
+        <div class="console-log" id="consoleLog" aria-live="polite"></div>
+      </div>
+    </dialog>
+
+    <dialog class="add-dialog notes-dialog" id="notesDialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <div class="eyebrow">Notes</div>
+            <h2>Library Notes</h2>
+          </div>
+          <button class="icon-button" id="closeNotesDialogButton" type="button" title="Close" aria-label="Close">
+            <svg><use href="#icon-close"></use></svg>
+          </button>
+        </header>
+
+        <div class="notes-layout">
+          <aside class="notes-list-panel">
+            <button class="wide-button" id="newNoteButton" type="button">
+              <svg><use href="#icon-add"></use></svg>
+              New Note
+            </button>
+            <div class="notes-list" id="notesList" aria-live="polite"></div>
+          </aside>
+
+          <form class="notes-editor" id="notesForm">
+            <label class="field">
+              <span>Title</span>
+              <input id="noteTitleInput" name="title" type="text" placeholder="Install notes, disc quirks, translation status" />
+            </label>
+
+            <label class="field notes-body-field">
+              <span>Note</span>
+              <textarea id="noteBodyInput" name="body" rows="12" placeholder="Write anything useful for this library."></textarea>
+            </label>
+
+            <div class="dialog-footer">
+              <span class="form-status" id="notesStatus">Select or create a note.</span>
+              <div class="note-actions">
+                <button class="wide-button danger" id="deleteNoteButton" type="button">
+                  <svg><use href="#icon-trash"></use></svg>
+                  Delete
+                </button>
+                <button class="tool-button primary" id="saveNoteButton" type="submit">
+                  <svg><use href="#icon-check"></use></svg>
+                  Save Note
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
       </div>
     </dialog>
 

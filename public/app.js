@@ -2,7 +2,10 @@
 
 const state = {
   games: [],
+  notes: [],
+  logs: [],
   selectedId: null,
+  selectedNoteId: null,
   loadedId: null,
   filter: 'all',
   search: ''
@@ -11,7 +14,14 @@ const state = {
 const nodes = {
   addGameButton: document.getElementById('addGameButton'),
   closeDialogButton: document.getElementById('closeDialogButton'),
+  closeConsoleDialogButton: document.getElementById('closeConsoleDialogButton'),
   addGameDialog: document.getElementById('addGameDialog'),
+  clearConsoleButton: document.getElementById('clearConsoleButton'),
+  consoleButton: document.getElementById('consoleButton'),
+  consoleDialog: document.getElementById('consoleDialog'),
+  consoleLog: document.getElementById('consoleLog'),
+  consoleSummary: document.getElementById('consoleSummary'),
+  copyConsoleButton: document.getElementById('copyConsoleButton'),
   deleteGameButton: document.getElementById('deleteGameButton'),
   detailCover: document.getElementById('detailCover'),
   detailNotes: document.getElementById('detailNotes'),
@@ -29,6 +39,16 @@ const nodes = {
   isoFormStatus: document.getElementById('isoFormStatus'),
   isoTitleInput: document.getElementById('isoTitleInput'),
   metaList: document.getElementById('metaList'),
+  closeNotesDialogButton: document.getElementById('closeNotesDialogButton'),
+  deleteNoteButton: document.getElementById('deleteNoteButton'),
+  newNoteButton: document.getElementById('newNoteButton'),
+  noteBodyInput: document.getElementById('noteBodyInput'),
+  noteTitleInput: document.getElementById('noteTitleInput'),
+  notesButton: document.getElementById('notesButton'),
+  notesDialog: document.getElementById('notesDialog'),
+  notesForm: document.getElementById('notesForm'),
+  notesList: document.getElementById('notesList'),
+  notesStatus: document.getElementById('notesStatus'),
   openRawButton: document.getElementById('openRawButton'),
   playButton: document.getElementById('playButton'),
   refreshButton: document.getElementById('refreshButton'),
@@ -40,17 +60,118 @@ const nodes = {
   serverStatus: document.getElementById('serverStatus'),
   stageEmpty: document.getElementById('stageEmpty'),
   tabs: document.querySelectorAll('.dialog-tab'),
-  uploadProgress: document.getElementById('uploadProgress'),
-  volumeSlider: document.getElementById('volumeSlider'),
-  volumeValue: document.getElementById('volumeValue')
+  uploadProgress: document.getElementById('uploadProgress')
 };
 
 let selectedIsoFile = null;
 let saveSyncTimer = null;
-const VOLUME_STORAGE_KEY = 'reksioLauncher.volume';
+const MAX_LOG_ENTRIES = 500;
 
 function icon(name) {
   return `<svg><use href="#icon-${name}"></use></svg>`;
+}
+
+function serializeLogValue(value) {
+  if (value instanceof Error) {
+    return value.stack || value.message;
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function normalizeLogLevel(level) {
+  return ['debug', 'info', 'warn', 'error'].includes(level) ? level : 'info';
+}
+
+function addLog(source, level, message, detail = '') {
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    time: new Date().toISOString(),
+    source,
+    level: normalizeLogLevel(level),
+    message: Array.isArray(message) ? message.map(serializeLogValue).join(' ') : serializeLogValue(message),
+    detail: detail ? serializeLogValue(detail) : ''
+  };
+
+  state.logs.push(entry);
+
+  if (state.logs.length > MAX_LOG_ENTRIES) {
+    state.logs.splice(0, state.logs.length - MAX_LOG_ENTRIES);
+  }
+
+  renderConsole();
+}
+
+function formatLogTime(value) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(new Date(value));
+}
+
+function renderConsole() {
+  const counts = state.logs.reduce(
+    (totals, entry) => {
+      totals[entry.level] += 1;
+      return totals;
+    },
+    { debug: 0, info: 0, warn: 0, error: 0 }
+  );
+
+  nodes.consoleSummary.textContent = state.logs.length
+    ? `${state.logs.length} logs - ${counts.error} errors - ${counts.warn} warnings`
+    : 'No logs yet';
+
+  nodes.consoleLog.innerHTML = state.logs.length
+    ? state.logs
+        .map(
+          (entry) => `
+            <article class="console-entry ${entry.level}">
+              <div class="console-entry-meta">
+                <span>${escapeHtml(formatLogTime(entry.time))}</span>
+                <span>${escapeHtml(entry.source)}</span>
+                <span>${escapeHtml(entry.level.toUpperCase())}</span>
+              </div>
+              <pre>${escapeHtml(entry.message)}${entry.detail ? `\n${escapeHtml(entry.detail)}` : ''}</pre>
+            </article>
+          `
+        )
+        .join('')
+    : '<div class="console-empty">Logs from the launcher and game iframe will appear here.</div>';
+
+  nodes.consoleLog.scrollTop = nodes.consoleLog.scrollHeight;
+}
+
+function openConsoleDialog() {
+  renderConsole();
+  nodes.consoleDialog.showModal();
+}
+
+function clearConsole() {
+  state.logs = [];
+  renderConsole();
+}
+
+async function copyConsole() {
+  const text = state.logs
+    .map((entry) => `[${entry.time}] [${entry.source}] [${entry.level}] ${entry.message}${entry.detail ? `\n${entry.detail}` : ''}`)
+    .join('\n');
+
+  try {
+    await navigator.clipboard.writeText(text);
+    addLog('launcher', 'info', 'Console copied to clipboard');
+  } catch (error) {
+    addLog('launcher', 'error', 'Failed to copy console', error);
+  }
 }
 
 function getSelectedGame() {
@@ -144,48 +265,27 @@ function buildLaunchUrl(game) {
     params.set('source', game.source);
   }
 
-  params.set('volume', getVolume().toFixed(2));
   return `/engine/?${params.toString()}`;
 }
 
-function clampVolume(value) {
-  return Math.max(0, Math.min(1, value));
-}
-
-function getVolume() {
-  return clampVolume(Number(nodes.volumeSlider.value) / 100);
-}
-
-function setVolumeDisplay() {
-  const value = Math.round(getVolume() * 100);
-  nodes.volumeValue.textContent = `${value}%`;
-  nodes.volumeSlider.setAttribute('aria-valuetext', `${value}%`);
-}
-
-function applyVolumeToFrame() {
-  const volume = getVolume();
-  setVolumeDisplay();
-  localStorage.setItem(VOLUME_STORAGE_KEY, String(Math.round(volume * 100)));
-
-  if (nodes.gameFrame.contentWindow) {
-    nodes.gameFrame.contentWindow.postMessage(
-      {
-        type: 'reksio:set-volume',
-        volume
-      },
-      window.location.origin
-    );
-  }
-}
-
-function restoreVolume() {
-  const savedVolume = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
-
-  if (Number.isFinite(savedVolume)) {
-    nodes.volumeSlider.value = String(Math.max(0, Math.min(100, Math.round(savedVolume))));
+function handleEngineMessage(event) {
+  if (event.origin !== window.location.origin) {
+    return;
   }
 
-  setVolumeDisplay();
+  const data = event.data;
+
+  if (!data || typeof data !== 'object') {
+    return;
+  }
+
+  if (data.type === 'reksio:console') {
+    addLog(data.source || 'engine', data.level || 'info', data.args || data.message || '');
+  }
+
+  if (data.type === 'reksio:error') {
+    addLog(data.source || 'engine', 'error', data.message || 'Unhandled engine error', data.stack || '');
+  }
 }
 
 async function apiFetch(url, options = {}) {
@@ -209,6 +309,156 @@ async function apiFetch(url, options = {}) {
   }
 
   return response.json();
+}
+
+function getSelectedNote() {
+  return state.notes.find((note) => note.id === state.selectedNoteId) || null;
+}
+
+function notePreview(note) {
+  return (note.body || '').replace(/\s+/g, ' ').trim() || 'No note body yet.';
+}
+
+function setNotesStatus(message) {
+  nodes.notesStatus.textContent = message;
+}
+
+function renderNotes() {
+  if (!state.notes.length) {
+    nodes.notesList.innerHTML = '<div class="notes-empty">No notes yet</div>';
+  } else {
+    nodes.notesList.innerHTML = state.notes
+      .map((note) => {
+        const active = note.id === state.selectedNoteId ? ' active' : '';
+        return `
+          <button class="note-item${active}" type="button" data-note-id="${note.id}">
+            <span class="note-title">${escapeHtml(note.title)}</span>
+            <span class="note-preview">${escapeHtml(notePreview(note))}</span>
+          </button>
+        `;
+      })
+      .join('');
+  }
+
+  nodes.notesList.querySelectorAll('.note-item').forEach((button) => {
+    button.addEventListener('click', () => selectNote(button.dataset.noteId));
+  });
+
+  renderNoteEditor();
+}
+
+function renderNoteEditor() {
+  const note = getSelectedNote();
+
+  if (!note) {
+    nodes.noteTitleInput.value = '';
+    nodes.noteBodyInput.value = '';
+    nodes.deleteNoteButton.disabled = true;
+    setNotesStatus(state.notes.length ? 'Select a note or create a new one.' : 'Create your first note.');
+    return;
+  }
+
+  nodes.noteTitleInput.value = note.title;
+  nodes.noteBodyInput.value = note.body;
+  nodes.deleteNoteButton.disabled = false;
+  setNotesStatus(`Last saved ${formatDate(note.updatedAt)}`);
+}
+
+function selectNote(noteId) {
+  state.selectedNoteId = noteId;
+  renderNotes();
+}
+
+function startNewNote() {
+  state.selectedNoteId = null;
+  nodes.noteTitleInput.value = '';
+  nodes.noteBodyInput.value = '';
+  nodes.deleteNoteButton.disabled = true;
+  nodes.noteTitleInput.focus();
+  setNotesStatus('New note');
+  renderNotes();
+}
+
+async function loadNotes() {
+  setNotesStatus('Loading notes');
+  const body = await apiFetch('/api/notes');
+  state.notes = body.notes;
+
+  if (state.selectedNoteId && !state.notes.some((note) => note.id === state.selectedNoteId)) {
+    state.selectedNoteId = null;
+  }
+
+  if (!state.selectedNoteId && state.notes.length) {
+    state.selectedNoteId = state.notes[0].id;
+  }
+
+  renderNotes();
+}
+
+async function openNotesDialog() {
+  nodes.notesDialog.showModal();
+
+  try {
+    await loadNotes();
+  } catch (error) {
+    addLog('launcher', 'error', 'Failed to open notes', error);
+    setNotesStatus(error.message);
+  }
+}
+
+async function saveCurrentNote(event) {
+  event.preventDefault();
+
+  const payload = {
+    title: nodes.noteTitleInput.value,
+    body: nodes.noteBodyInput.value
+  };
+  const selectedNote = getSelectedNote();
+  const url = selectedNote ? `/api/notes/${encodeURIComponent(selectedNote.id)}` : '/api/notes';
+  const method = selectedNote ? 'PUT' : 'POST';
+
+  try {
+    setNotesStatus('Saving');
+    const result = await apiFetch(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    await loadNotes();
+    state.selectedNoteId = result.note.id;
+    renderNotes();
+    setNotesStatus('Saved');
+  } catch (error) {
+    addLog('launcher', 'error', 'Failed to save note', error);
+    setNotesStatus(error.message);
+  }
+}
+
+async function deleteCurrentNote() {
+  const note = getSelectedNote();
+
+  if (!note) {
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete "${note.title}"?`);
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    setNotesStatus('Deleting');
+    await apiFetch(`/api/notes/${encodeURIComponent(note.id)}`, { method: 'DELETE' });
+    state.selectedNoteId = null;
+    await loadNotes();
+  } catch (error) {
+    addLog('launcher', 'error', 'Failed to delete note', error);
+    setNotesStatus(error.message);
+  }
 }
 
 function filteredGames() {
@@ -351,7 +601,9 @@ function loadSelectedGame() {
 
   syncCurrentSave();
   prepareSaveSlot(game.id);
-  nodes.gameFrame.src = buildLaunchUrl(game);
+  const launchUrl = buildLaunchUrl(game);
+  addLog('launcher', 'info', `Loading ${game.title}`, launchUrl);
+  nodes.gameFrame.src = launchUrl;
   state.loadedId = game.id;
   renderDetails();
 
@@ -382,6 +634,7 @@ async function loadGames(preferredId) {
       renderDetails();
     }
   } catch (error) {
+    addLog('launcher', 'error', 'Failed to load games', error);
     nodes.serverStatus.textContent = error.message;
     nodes.gameList.innerHTML = `<div class="list-empty">${escapeHtml(error.message)}</div>`;
     renderDetails();
@@ -501,6 +754,7 @@ async function addGithubSource(event) {
     await loadGames(result.game.id);
     selectGame(result.game.id, true);
   } catch (error) {
+    addLog('launcher', 'error', 'Failed to add GitHub source', error);
     nodes.githubFormStatus.textContent = error.message;
   }
 }
@@ -548,6 +802,15 @@ function resetSelectedSave() {
 
 nodes.addGameButton.addEventListener('click', openDialog);
 nodes.closeDialogButton.addEventListener('click', () => nodes.addGameDialog.close());
+nodes.consoleButton.addEventListener('click', openConsoleDialog);
+nodes.closeConsoleDialogButton.addEventListener('click', () => nodes.consoleDialog.close());
+nodes.clearConsoleButton.addEventListener('click', clearConsole);
+nodes.copyConsoleButton.addEventListener('click', copyConsole);
+nodes.notesButton.addEventListener('click', openNotesDialog);
+nodes.closeNotesDialogButton.addEventListener('click', () => nodes.notesDialog.close());
+nodes.newNoteButton.addEventListener('click', startNewNote);
+nodes.notesForm.addEventListener('submit', saveCurrentNote);
+nodes.deleteNoteButton.addEventListener('click', deleteCurrentNote);
 nodes.refreshButton.addEventListener('click', () => loadGames());
 nodes.searchInput.addEventListener('input', (event) => {
   state.search = event.target.value;
@@ -598,18 +861,25 @@ nodes.fullscreenButton.addEventListener('click', () => {
     nodes.gameFrame.requestFullscreen();
   }
 });
-nodes.volumeSlider.addEventListener('input', applyVolumeToFrame);
 nodes.deleteGameButton.addEventListener('click', () => {
   deleteSelectedGame().catch((error) => {
+    addLog('launcher', 'error', 'Failed to delete game', error);
     nodes.serverStatus.textContent = error.message;
   });
 });
 nodes.resetSaveButton.addEventListener('click', resetSelectedSave);
 nodes.gameFrame.addEventListener('load', () => {
   syncCurrentSave();
-  applyVolumeToFrame();
+  addLog('launcher', 'info', 'Game iframe loaded', nodes.gameFrame.src);
+});
+window.addEventListener('message', handleEngineMessage);
+window.addEventListener('error', (event) => {
+  addLog('launcher', 'error', event.message, `${event.filename}:${event.lineno}:${event.colno}`);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  addLog('launcher', 'error', 'Unhandled promise rejection', event.reason);
 });
 window.addEventListener('beforeunload', syncCurrentSave);
 
-restoreVolume();
+addLog('launcher', 'info', 'Launcher ready');
 loadGames();

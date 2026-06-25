@@ -100,6 +100,7 @@ svg {
 
 .brand-row,
 .brand-lockup,
+.brand-actions,
 .toolbar-actions,
 .dialog-header,
 .dialog-footer {
@@ -123,6 +124,10 @@ svg {
 .brand-lockup {
   min-width: 0;
   gap: 12px;
+}
+
+.brand-actions {
+  gap: 8px;
 }
 
 .brand-mark,
@@ -402,32 +407,6 @@ h2 {
   gap: 8px;
 }
 
-.volume-control {
-  display: grid;
-  grid-template-columns: auto 110px 42px;
-  align-items: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-strong);
-  color: var(--muted);
-}
-
-.volume-control input {
-  width: 110px;
-  accent-color: var(--teal);
-  cursor: pointer;
-}
-
-.volume-control span {
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 800;
-  text-align: right;
-}
-
 .tool-button.primary {
   border-color: var(--red);
   background: var(--red);
@@ -550,6 +529,14 @@ h2 {
   box-shadow: var(--shadow);
 }
 
+.notes-dialog {
+  width: min(820px, calc(100vw - 28px));
+}
+
+.console-dialog {
+  width: min(900px, calc(100vw - 28px));
+}
+
 .add-dialog::backdrop {
   background: rgba(12, 14, 16, 0.58);
 }
@@ -567,6 +554,181 @@ h2 {
 
 .dialog-pane.active {
   display: grid;
+}
+
+.console-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.console-summary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.console-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.console-log {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  height: min(58vh, 520px);
+  min-height: 300px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0b0d0b;
+}
+
+.console-entry {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: rgba(27, 29, 25, 0.82);
+}
+
+.console-entry.debug {
+  border-left-color: #859095;
+}
+
+.console-entry.info {
+  border-left-color: var(--teal);
+}
+
+.console-entry.warn {
+  border-left-color: var(--gold);
+}
+
+.console-entry.error {
+  border-left-color: var(--danger);
+}
+
+.console-entry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.console-entry pre {
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  color: var(--ink);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.console-empty {
+  align-self: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+.notes-layout {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 440px;
+}
+
+.notes-list-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.notes-list {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.note-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 64px;
+  margin: 0 0 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(37, 39, 32, 0.82);
+  color: var(--ink);
+  text-align: left;
+}
+
+.note-item.active {
+  border-color: var(--teal);
+  box-shadow: inset 4px 0 0 var(--teal);
+}
+
+.note-title,
+.note-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-title {
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.note-preview,
+.notes-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.notes-empty {
+  padding: 18px 8px;
+  text-align: center;
+}
+
+.notes-editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  min-width: 0;
+}
+
+.notes-body-field {
+  min-height: 0;
+}
+
+.notes-body-field textarea {
+  min-height: 240px;
+  height: 100%;
+}
+
+.note-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.note-actions .wide-button {
+  width: auto;
 }
 
 .field {
@@ -704,15 +866,6 @@ h2 {
     justify-content: stretch;
   }
 
-  .volume-control {
-    grid-template-columns: auto minmax(86px, 1fr) 42px;
-    width: 100%;
-  }
-
-  .volume-control input {
-    width: 100%;
-  }
-
   .tool-button {
     flex: 1;
   }
@@ -745,5 +898,26 @@ h2 {
   .dialog-footer {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .console-toolbar,
+  .console-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .notes-layout {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .notes-list {
+    max-height: 190px;
+  }
+
+  .note-actions,
+  .note-actions .wide-button,
+  .note-actions .tool-button {
+    width: 100%;
   }
 }

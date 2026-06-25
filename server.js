@@ -13,6 +13,7 @@ const DATA_DIR = path.resolve(process.env.REKSIO_DATA_DIR || path.join(process.c
 const GAMES_DIR = path.join(DATA_DIR, 'games');
 const TMP_DIR = path.join(DATA_DIR, 'tmp');
 const META_PATH = path.join(DATA_DIR, 'games.json');
+const NOTES_PATH = path.join(DATA_DIR, 'notes.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ENGINE_DIR = path.join(PUBLIC_DIR, 'engine');
 const MAX_ISO_SIZE_BYTES = Number(process.env.MAX_ISO_SIZE_BYTES || 8 * 1024 * 1024 * 1024);
@@ -76,9 +77,25 @@ function createGameId(title) {
   return `${slugify(title)}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
 }
 
+function createNoteId() {
+  return `note-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+}
+
 function normalizeLocale(value, fallback = 'custom') {
   const cleaned = textValue(value, fallback).toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 16);
   return cleaned || fallback;
+}
+
+function noteBodyValue(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim().slice(0, 12000);
+}
+
+function hasNoteContent(body) {
+  return Boolean(textValue(body.title) || noteBodyValue(body.body));
 }
 
 function isoPathFor(game) {
@@ -93,6 +110,12 @@ async function ensureDataDirs() {
     await fsp.access(META_PATH, fs.constants.F_OK);
   } catch {
     await fsp.writeFile(META_PATH, '[]\n', 'utf8');
+  }
+
+  try {
+    await fsp.access(NOTES_PATH, fs.constants.F_OK);
+  } catch {
+    await fsp.writeFile(NOTES_PATH, '[]\n', 'utf8');
   }
 }
 
@@ -117,9 +140,55 @@ async function writeUserGames(games) {
   await fsp.rename(tmpPath, META_PATH);
 }
 
+async function readNotes() {
+  await ensureDataDirs();
+
+  const raw = await fsp.readFile(NOTES_PATH, 'utf8');
+  const parsed = JSON.parse(raw || '[]');
+
+  if (!Array.isArray(parsed)) {
+    throw new Error('Notes metadata file is not an array.');
+  }
+
+  return parsed;
+}
+
+async function writeNotes(notes) {
+  await ensureDataDirs();
+
+  const tmpPath = `${NOTES_PATH}.${process.pid}.${Date.now()}.tmp`;
+  await fsp.writeFile(tmpPath, `${JSON.stringify(notes, null, 2)}\n`, 'utf8');
+  await fsp.rename(tmpPath, NOTES_PATH);
+}
+
 async function getAllGames() {
   const userGames = await readUserGames();
   return [...BUILTIN_GAMES, ...userGames];
+}
+
+function publicNote(note) {
+  return {
+    id: note.id,
+    title: note.title || 'Untitled note',
+    body: note.body || '',
+    createdAt: note.createdAt || null,
+    updatedAt: note.updatedAt || null
+  };
+}
+
+function noteFromBody(body, existingNote = null) {
+  const noteBody = noteBodyValue(body.body);
+  const fallbackTitle = noteBody.split('\n').find(Boolean) || 'Untitled note';
+  const title = textValue(body.title, fallbackTitle).slice(0, 100);
+  const now = new Date().toISOString();
+
+  return {
+    id: existingNote ? existingNote.id : createNoteId(),
+    title,
+    body: noteBody,
+    createdAt: existingNote ? existingNote.createdAt : now,
+    updatedAt: now
+  };
 }
 
 function publicGame(game) {
@@ -195,6 +264,76 @@ app.get('/api/games', async (req, res, next) => {
   try {
     const games = await getAllGames();
     res.json({ games: games.map(publicGame) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/notes', async (req, res, next) => {
+  try {
+    const notes = await readNotes();
+    notes.sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+    res.json({ notes: notes.map(publicNote) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/notes', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+
+    if (!hasNoteContent(body)) {
+      throw Object.assign(new Error('Add a title or note body.'), { statusCode: 400 });
+    }
+
+    const note = noteFromBody(body);
+    const notes = await readNotes();
+    notes.push(note);
+    await writeNotes(notes);
+
+    res.status(201).json({ note: publicNote(note) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/notes/:id', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+
+    if (!hasNoteContent(body)) {
+      throw Object.assign(new Error('Add a title or note body.'), { statusCode: 400 });
+    }
+
+    const notes = await readNotes();
+    const index = notes.findIndex((note) => note.id === req.params.id);
+
+    if (index === -1) {
+      throw Object.assign(new Error('Note not found.'), { statusCode: 404 });
+    }
+
+    const note = noteFromBody(body, notes[index]);
+    notes[index] = note;
+    await writeNotes(notes);
+
+    res.json({ note: publicNote(note) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/notes/:id', async (req, res, next) => {
+  try {
+    const notes = await readNotes();
+    const nextNotes = notes.filter((note) => note.id !== req.params.id);
+
+    if (nextNotes.length === notes.length) {
+      throw Object.assign(new Error('Note not found.'), { statusCode: 404 });
+    }
+
+    await writeNotes(nextNotes);
+    res.status(204).end();
   } catch (error) {
     next(error);
   }
