@@ -21,6 +21,8 @@ data/
     <game-id>/game.iso
 ```
 
+On startup, the container prepares the mounted data directory so uploaded games can be written by the app.
+
 ## Add Custom ISO
 
 1. Open the launcher.
