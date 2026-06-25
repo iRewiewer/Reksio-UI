@@ -1,0 +1,46 @@
+diff --git a/src/devPlayer.ts b/src/devPlayer.ts
+index 6e0a5d0..65bde35 100644
+--- a/src/devPlayer.ts
++++ b/src/devPlayer.ts
+@@ -8,6 +8,7 @@ import {
+ } from './filesystem/fileLoader'
+ import { SaveFileManager } from './engine/saveFile'
+ import { IndexedDBStorage } from './filesystem/fileStorage'
++import { globalAudio } from './engine/audio'
+ 
+ const urlParams = new URLSearchParams(window.location.search)
+ const gameContainer = document.getElementById('game')!
+@@ -29,6 +30,33 @@ const baseOptions = {
+     storage: new IndexedDBStorage('reksio'),
+ }
+ 
++const parseLauncherVolume = (value: unknown) => {
++    const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
++    return Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : null
++}
++
++const applyLauncherVolume = (value: unknown) => {
++    const volume = parseLauncherVolume(value)
++    if (volume !== null) {
++        globalAudio.setMasterVolume(volume)
++    }
++}
++
++applyLauncherVolume(urlParams.get('volume'))
++
++window.addEventListener('message', (event) => {
++    if (event.origin !== window.location.origin) {
++        return
++    }
++
++    const data = event.data as { type?: unknown; volume?: unknown }
++    if (data == null || typeof data !== 'object' || data.type !== 'reksio:set-volume') {
++        return
++    }
++
++    applyLauncherVolume(data.volume)
++})
++
+ let config = {}
+ const start = () => {
+     gameContainer.removeEventListener('click', start)

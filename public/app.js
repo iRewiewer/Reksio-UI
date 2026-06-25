@@ -40,11 +40,14 @@ const nodes = {
   serverStatus: document.getElementById('serverStatus'),
   stageEmpty: document.getElementById('stageEmpty'),
   tabs: document.querySelectorAll('.dialog-tab'),
-  uploadProgress: document.getElementById('uploadProgress')
+  uploadProgress: document.getElementById('uploadProgress'),
+  volumeSlider: document.getElementById('volumeSlider'),
+  volumeValue: document.getElementById('volumeValue')
 };
 
 let selectedIsoFile = null;
 let saveSyncTimer = null;
+const VOLUME_STORAGE_KEY = 'reksioLauncher.volume';
 
 function icon(name) {
   return `<svg><use href="#icon-${name}"></use></svg>`;
@@ -141,7 +144,48 @@ function buildLaunchUrl(game) {
     params.set('source', game.source);
   }
 
+  params.set('volume', getVolume().toFixed(2));
   return `/engine/?${params.toString()}`;
+}
+
+function clampVolume(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function getVolume() {
+  return clampVolume(Number(nodes.volumeSlider.value) / 100);
+}
+
+function setVolumeDisplay() {
+  const value = Math.round(getVolume() * 100);
+  nodes.volumeValue.textContent = `${value}%`;
+  nodes.volumeSlider.setAttribute('aria-valuetext', `${value}%`);
+}
+
+function applyVolumeToFrame() {
+  const volume = getVolume();
+  setVolumeDisplay();
+  localStorage.setItem(VOLUME_STORAGE_KEY, String(Math.round(volume * 100)));
+
+  if (nodes.gameFrame.contentWindow) {
+    nodes.gameFrame.contentWindow.postMessage(
+      {
+        type: 'reksio:set-volume',
+        volume
+      },
+      window.location.origin
+    );
+  }
+}
+
+function restoreVolume() {
+  const savedVolume = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
+
+  if (Number.isFinite(savedVolume)) {
+    nodes.volumeSlider.value = String(Math.max(0, Math.min(100, Math.round(savedVolume))));
+  }
+
+  setVolumeDisplay();
 }
 
 async function apiFetch(url, options = {}) {
@@ -554,13 +598,18 @@ nodes.fullscreenButton.addEventListener('click', () => {
     nodes.gameFrame.requestFullscreen();
   }
 });
+nodes.volumeSlider.addEventListener('input', applyVolumeToFrame);
 nodes.deleteGameButton.addEventListener('click', () => {
   deleteSelectedGame().catch((error) => {
     nodes.serverStatus.textContent = error.message;
   });
 });
 nodes.resetSaveButton.addEventListener('click', resetSelectedSave);
-nodes.gameFrame.addEventListener('load', syncCurrentSave);
+nodes.gameFrame.addEventListener('load', () => {
+  syncCurrentSave();
+  applyVolumeToFrame();
+});
 window.addEventListener('beforeunload', syncCurrentSave);
 
+restoreVolume();
 loadGames();

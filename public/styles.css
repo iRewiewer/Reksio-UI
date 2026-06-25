@@ -402,6 +402,32 @@ h2 {
   gap: 8px;
 }
 
+.volume-control {
+  display: grid;
+  grid-template-columns: auto 110px 42px;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-strong);
+  color: var(--muted);
+}
+
+.volume-control input {
+  width: 110px;
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+
+.volume-control span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: right;
+}
+
 .tool-button.primary {
   border-color: var(--red);
   background: var(--red);
@@ -676,6 +702,15 @@ h2 {
 
   .toolbar-actions {
     justify-content: stretch;
+  }
+
+  .volume-control {
+    grid-template-columns: auto minmax(86px, 1fr) 42px;
+    width: 100%;
+  }
+
+  .volume-control input {
+    width: 100%;
   }
 
   .tool-button {

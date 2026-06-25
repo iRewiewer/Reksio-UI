@@ -10,6 +10,9 @@ RUN git clone --depth 1 "${REKSIOENGINE_REPO}" . \
     && git fetch --depth 1 origin "${REKSIOENGINE_REF}" \
     && git checkout FETCH_HEAD
 
+COPY patches/reksioengine-volume.patch /tmp/reksioengine-volume.patch
+RUN git apply /tmp/reksioengine-volume.patch
+
 ENV HUSKY=0
 
 RUN corepack enable \
