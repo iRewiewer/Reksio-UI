@@ -1,0 +1,7 @@
+services:
+    reksioengine:
+        build: .
+        container_name: reksioengine
+        restart: unless-stopped
+        ports:
+            - "3030:80"
