@@ -2,7 +2,7 @@
 
 Self-hosted browser launcher for [ReksioEngine](https://github.com/ReksioEngine/ReksioEngine).
 
-The app builds the current ReksioEngine web player into the Docker image, serves a launcher UI, and stores user-added ISO games in a persistent data volume. Bundled Polish GitHub games remain available, and local Romanian ISOs can be uploaded from the browser.
+The app builds the current ReksioEngine web player into the Docker image, serves a launcher UI, and stores user-added ISO games in a persistent data volume. Bundled Polish GitHub games remain available, and custom local ISOs for other language ports can be uploaded from the browser.
 
 ## Run with Docker
 
@@ -21,7 +21,7 @@ data/
     <game-id>/game.iso
 ```
 
-## Add a Romanian ISO
+## Add Custom ISO
 
 1. Open the launcher.
 2. Click the add button in the library header.
