@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reksio UI</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <svg class="icon-sprite" aria-hidden="true">
+      <symbol id="icon-add" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="icon-archive" viewBox="0 0 24 24">
+        <path d="M4 7h16M6 7v12h12V7M9 11h6" />
+      </symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24">
+        <path d="m5 13 4 4L19 7" />
+      </symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24">
+        <path d="m6 6 12 12M18 6 6 18" />
+      </symbol>
+      <symbol id="icon-external" viewBox="0 0 24 24">
+        <path d="M14 4h6v6M10 14 20 4M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5" />
+      </symbol>
+      <symbol id="icon-fullscreen" viewBox="0 0 24 24">
+        <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5" />
+      </symbol>
+      <symbol id="icon-link" viewBox="0 0 24 24">
+        <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
+        <path d="M14 11a5 5 0 0 0-7.1 0l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" />
+      </symbol>
+      <symbol id="icon-play" viewBox="0 0 24 24">
+        <path d="M8 5v14l11-7Z" />
+      </symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24">
+        <path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6" />
+      </symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="7" />
+        <path d="m16 16 4 4" />
+      </symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24">
+        <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13" />
+      </symbol>
+      <symbol id="icon-upload" viewBox="0 0 24 24">
+        <path d="M12 16V4M7 9l5-5 5 5M5 20h14" />
+      </symbol>
+    </svg>
+
+    <div class="app-shell">
+      <aside class="library-panel">
+        <header class="brand-row">
+          <div class="brand-lockup">
+            <div class="brand-mark">R</div>
+            <div>
+              <div class="brand-title">Reksio UI</div>
+              <div class="brand-subtitle">Self-hosted engine frontend</div>
+            </div>
+          </div>
+          <button class="icon-button" id="addGameButton" type="button" title="Add game" aria-label="Add game">
+            <svg><use href="#icon-add"></use></svg>
+          </button>
+        </header>
+
+        <label class="search-box">
+          <svg><use href="#icon-search"></use></svg>
+          <input id="searchInput" type="search" placeholder="Search games" autocomplete="off" />
+        </label>
+
+        <div class="filter-row" role="tablist" aria-label="Library filters">
+          <button class="filter-button active" type="button" data-filter="all">All</button>
+          <button class="filter-button" type="button" data-filter="ro">RO</button>
+          <button class="filter-button" type="button" data-filter="pl">PL</button>
+          <button class="filter-button" type="button" data-filter="local">Local</button>
+        </div>
+
+        <div class="game-list" id="gameList" aria-live="polite"></div>
+
+        <footer class="library-footer">
+          <button class="text-button" id="refreshButton" type="button">
+            <svg><use href="#icon-refresh"></use></svg>
+            Refresh
+          </button>
+          <span id="serverStatus">Checking server</span>
+        </footer>
+      </aside>
+
+      <main class="player-panel">
+        <header class="player-toolbar">
+          <div class="selected-heading">
+            <div class="eyebrow" id="selectedSource">Library</div>
+            <h1 id="selectedTitle">Loading games</h1>
+            <div class="badge-row" id="selectedBadges"></div>
+          </div>
+
+          <div class="toolbar-actions">
+            <button class="tool-button primary" id="playButton" type="button">
+              <svg><use href="#icon-play"></use></svg>
+              Play
+            </button>
+            <button class="tool-button" id="openRawButton" type="button">
+              <svg><use href="#icon-external"></use></svg>
+              Raw
+            </button>
+            <button class="tool-button icon-only" id="fullscreenButton" type="button" title="Fullscreen" aria-label="Fullscreen">
+              <svg><use href="#icon-fullscreen"></use></svg>
+            </button>
+          </div>
+        </header>
+
+        <section class="stage-shell" aria-label="Game player">
+          <iframe id="gameFrame" class="game-frame" title="Reksio game player" allowfullscreen></iframe>
+          <div class="stage-empty" id="stageEmpty">
+            <div class="empty-mark">R</div>
+            <div>
+              <h2>No game selected</h2>
+              <p>Add or select a game from the library.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <aside class="details-panel">
+        <section class="detail-section">
+          <div class="detail-cover" id="detailCover">R</div>
+          <h2 id="detailTitle">Game details</h2>
+          <p id="detailNotes" class="detail-notes">Your library is loading.</p>
+        </section>
+
+        <section class="detail-section">
+          <dl class="meta-list" id="metaList"></dl>
+        </section>
+
+        <section class="detail-section detail-actions">
+          <button class="wide-button" id="resetSaveButton" type="button">
+            <svg><use href="#icon-refresh"></use></svg>
+            Reset Save
+          </button>
+          <button class="wide-button danger" id="deleteGameButton" type="button">
+            <svg><use href="#icon-trash"></use></svg>
+            Remove
+          </button>
+        </section>
+      </aside>
+    </div>
+
+    <dialog class="add-dialog" id="addGameDialog">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div>
+            <div class="eyebrow">Add game</div>
+            <h2>Import into library</h2>
+          </div>
+          <button class="icon-button" id="closeDialogButton" type="button" title="Close" aria-label="Close">
+            <svg><use href="#icon-close"></use></svg>
+          </button>
+        </header>
+
+        <div class="dialog-tabs" role="tablist" aria-label="Import type">
+          <button class="dialog-tab active" type="button" data-tab="iso">ISO upload</button>
+          <button class="dialog-tab" type="button" data-tab="github">GitHub source</button>
+        </div>
+
+        <form id="isoForm" class="dialog-pane active">
+          <label class="field">
+            <span>Title</span>
+            <input name="title" id="isoTitleInput" type="text" placeholder="Reksio Romanian edition" />
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Language</span>
+              <input name="language" type="text" value="Romanian" />
+            </label>
+            <label class="field">
+              <span>Locale</span>
+              <input name="locale" type="text" value="ro" />
+            </label>
+          </div>
+
+          <label class="drop-zone" id="isoDropZone">
+            <input id="isoFileInput" type="file" accept=".iso,application/x-iso9660-image" />
+            <svg><use href="#icon-upload"></use></svg>
+            <span id="isoFileLabel">Select ISO file</span>
+          </label>
+
+          <label class="field">
+            <span>Notes</span>
+            <textarea name="notes" rows="3" placeholder="Romanian disc, fan translation, version notes"></textarea>
+          </label>
+
+          <div class="progress-track" aria-hidden="true">
+            <div id="uploadProgress" class="progress-bar"></div>
+          </div>
+
+          <div class="dialog-footer">
+            <span class="form-status" id="isoFormStatus"></span>
+            <button class="tool-button primary" type="submit">
+              <svg><use href="#icon-upload"></use></svg>
+              Upload ISO
+            </button>
+          </div>
+        </form>
+
+        <form id="githubForm" class="dialog-pane">
+          <label class="field">
+            <span>Title</span>
+            <input name="title" type="text" placeholder="Reksio custom branch" />
+          </label>
+
+          <label class="field">
+            <span>GamesFiles source</span>
+            <input name="source" type="text" placeholder="reksioiskarbpiratow" required />
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Language</span>
+              <input name="language" type="text" value="Polish" />
+            </label>
+            <label class="field">
+              <span>Locale</span>
+              <input name="locale" type="text" value="pl" />
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Notes</span>
+            <textarea name="notes" rows="3" placeholder="Branch, mirror, or asset source details"></textarea>
+          </label>
+
+          <div class="dialog-footer">
+            <span class="form-status" id="githubFormStatus"></span>
+            <button class="tool-button primary" type="submit">
+              <svg><use href="#icon-link"></use></svg>
+              Add Source
+            </button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

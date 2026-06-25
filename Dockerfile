@@ -1,10 +1,14 @@
-FROM node:22-alpine AS build
+FROM node:22-alpine AS engine-build
 
-WORKDIR /app
+ARG REKSIOENGINE_REPO=https://github.com/ReksioEngine/ReksioEngine.git
+ARG REKSIOENGINE_REF=main
+
+WORKDIR /engine
 
 RUN apk add --no-cache git
-
-RUN git clone https://github.com/ReksioEngine/ReksioEngine.git .
+RUN git clone --depth 1 "${REKSIOENGINE_REPO}" . \
+    && git fetch --depth 1 origin "${REKSIOENGINE_REF}" \
+    && git checkout FETCH_HEAD
 
 ENV HUSKY=0
 
@@ -12,9 +16,32 @@ RUN corepack enable \
     && yarn install --frozen-lockfile \
     && yarn build
 
-FROM nginx:alpine
+FROM node:22-alpine AS app-deps
 
-COPY --from=build /app/dist/app /usr/share/nginx/html/engine
-COPY index.html /usr/share/nginx/html/index.html
+WORKDIR /app
 
-EXPOSE 80
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+FROM node:22-alpine
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3030
+ENV REKSIO_DATA_DIR=/data
+
+COPY --from=app-deps /app/node_modules ./node_modules
+COPY package*.json ./
+COPY server.js ./
+COPY public ./public
+COPY --from=engine-build /engine/dist/app ./public/engine
+
+RUN mkdir -p /data \
+    && chown -R node:node /data /app
+
+USER node
+
+EXPOSE 3030
+
+CMD ["node", "server.js"]

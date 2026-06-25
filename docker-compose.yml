@@ -1,7 +1,18 @@
 services:
-    reksioengine:
-        build: .
-        container_name: reksioengine
-        restart: unless-stopped
-        ports:
-            - "3030:80"
+  reksio:
+    build:
+      context: .
+      args:
+        REKSIOENGINE_REF: main
+    image: reksio-ui:local
+    container_name: reksio-ui
+    restart: unless-stopped
+    ports:
+      - "3030:3030"
+    environment:
+      NODE_ENV: production
+      PORT: 3030
+      REKSIO_DATA_DIR: /data
+      MAX_ISO_SIZE_BYTES: 8589934592
+    volumes:
+      - ./data:/data
