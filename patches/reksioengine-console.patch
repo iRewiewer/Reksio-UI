@@ -104,3 +104,72 @@ index 2df2d3e..db1d118 100644
 +            this.printToConsole(severity, err)
          }
      }
+diff --git a/src/filesystem/fileLoader.ts b/src/filesystem/fileLoader.ts
+index a60327d..e806c81 100644
+--- a/src/filesystem/fileLoader.ts
++++ b/src/filesystem/fileLoader.ts
+@@ -16,8 +16,33 @@ export abstract class FileLoader {
+ }
+ 
+ abstract class SimpleFileLoader extends FileLoader {
++    protected resolveListedPath(filename: string): string | null {
++        const normalizedFilename = normalizePath(filename)
++        const listing = this.getFilesListing()
++
++        if (listing.includes(normalizedFilename)) {
++            return normalizedFilename
++        }
++
++        const suffix = `/${normalizedFilename}`
++        const matches = listing.filter((entry) => entry.endsWith(suffix))
++
++        if (matches.length === 1) {
++            logger.warn(`Resolved '${normalizedFilename}' from nested path '${matches[0]}'`)
++            return matches[0]
++        }
++
++        if (matches.length > 1) {
++            logger.warn(`Found multiple nested candidates for '${normalizedFilename}'`, {
++                candidates: matches.slice(0, 10),
++            })
++        }
++
++        return null
++    }
++
+     hasFile(filename: string): boolean {
+-        return this.getFilesListing().includes(normalizePath(filename))
++        return this.resolveListedPath(filename) != null
+     }
+ }
+ 
+@@ -38,7 +63,8 @@ export abstract class UrlFileLoader extends SimpleFileLoader {
+     async getRawFile(filename: string): Promise<ArrayBuffer> {
+         const normalizedFilename = normalizePath(filename)
+         logger.debug(`Fetching '${normalizedFilename}'...`)
+-        const fileUrl = this.listing!.get(normalizedFilename)
++        const resolvedFilename = this.resolveListedPath(normalizedFilename)
++        const fileUrl = resolvedFilename == null ? null : this.listing!.get(resolvedFilename)
+         if (fileUrl == null) {
+             throw new FileNotFoundError(normalizedFilename)
+         }
+@@ -115,7 +141,8 @@ export class IsoFileLoader extends SimpleFileLoader {
+     async getRawFile(filename: string): Promise<ArrayBuffer> {
+         const normalizedFilename = normalizePath(filename)
+         console.debug(`Loading '${normalizedFilename}'...`)
+-        const fileResult = await this.isoReader.getFile(normalizedFilename)
++        const resolvedFilename = this.resolveListedPath(normalizedFilename)
++        const fileResult = resolvedFilename == null ? null : await this.isoReader.getFile(resolvedFilename)
+         if (fileResult == null) {
+             throw new FileNotFoundError(normalizedFilename)
+         }
+@@ -142,7 +169,8 @@ export class RemoteIsoFileLoader extends SimpleFileLoader {
+     async getRawFile(filename: string): Promise<ArrayBuffer> {
+         const normalizedFilename = normalizePath(filename)
+         console.debug(`Loading '${normalizedFilename}'...`)
+-        const fileResult = await this.isoReader.getFile(normalizedFilename)
++        const resolvedFilename = this.resolveListedPath(normalizedFilename)
++        const fileResult = resolvedFilename == null ? null : await this.isoReader.getFile(resolvedFilename)
+         if (fileResult == null) {
+             throw new FileNotFoundError(normalizedFilename)
+         }
