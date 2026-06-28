@@ -65,7 +65,14 @@ const nodes = {
 
 let selectedIsoFile = null;
 let saveSyncTimer = null;
-const MAX_LOG_ENTRIES = 500;
+let consoleRenderScheduled = false;
+let consoleDirty = false;
+let logWindowStartedAt = Date.now();
+let logWindowCount = 0;
+let suppressedLogCount = 0;
+const MAX_LOG_ENTRIES = 1000;
+const MAX_RENDERED_LOG_ENTRIES = 180;
+const MAX_NOISY_LOGS_PER_SECOND = 300;
 
 function icon(name) {
   return `<svg><use href="#icon-${name}"></use></svg>`;
@@ -91,12 +98,74 @@ function normalizeLogLevel(level) {
   return ['debug', 'info', 'warn', 'error'].includes(level) ? level : 'info';
 }
 
+function isConsoleOpen() {
+  return Boolean(nodes.consoleDialog.open);
+}
+
+function scheduleConsoleRender(force = false) {
+  consoleDirty = true;
+
+  if (!force && !isConsoleOpen()) {
+    return;
+  }
+
+  if (consoleRenderScheduled) {
+    return;
+  }
+
+  consoleRenderScheduled = true;
+  requestAnimationFrame(() => {
+    consoleRenderScheduled = false;
+
+    if (!consoleDirty || !isConsoleOpen()) {
+      return;
+    }
+
+    consoleDirty = false;
+    renderConsole();
+  });
+}
+
+function shouldSuppressLog(level) {
+  if (level === 'warn' || level === 'error') {
+    return false;
+  }
+
+  const now = Date.now();
+
+  if (now - logWindowStartedAt >= 1000) {
+    const suppressed = suppressedLogCount;
+    logWindowStartedAt = now;
+    logWindowCount = 0;
+    suppressedLogCount = 0;
+
+    if (suppressed > 0) {
+      queueMicrotask(() => addLog('launcher', 'warn', `Suppressed ${suppressed} noisy console logs to keep the UI responsive`));
+    }
+  }
+
+  logWindowCount += 1;
+
+  if (logWindowCount > MAX_NOISY_LOGS_PER_SECOND) {
+    suppressedLogCount += 1;
+    return true;
+  }
+
+  return false;
+}
+
 function addLog(source, level, message, detail = '') {
+  const normalizedLevel = normalizeLogLevel(level);
+
+  if (shouldSuppressLog(normalizedLevel)) {
+    return;
+  }
+
   const entry = {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     time: new Date().toISOString(),
     source,
-    level: normalizeLogLevel(level),
+    level: normalizedLevel,
     message: Array.isArray(message) ? message.map(serializeLogValue).join(' ') : serializeLogValue(message),
     detail: detail ? serializeLogValue(detail) : ''
   };
@@ -107,7 +176,7 @@ function addLog(source, level, message, detail = '') {
     state.logs.splice(0, state.logs.length - MAX_LOG_ENTRIES);
   }
 
-  renderConsole();
+  scheduleConsoleRender();
 }
 
 function formatLogTime(value) {
@@ -119,6 +188,8 @@ function formatLogTime(value) {
 }
 
 function renderConsole() {
+  const renderedLogs = state.logs.slice(-MAX_RENDERED_LOG_ENTRIES);
+  const truncatedCount = state.logs.length - renderedLogs.length;
   const counts = state.logs.reduce(
     (totals, entry) => {
       totals[entry.level] += 1;
@@ -132,8 +203,11 @@ function renderConsole() {
     : 'No logs yet';
 
   nodes.consoleLog.innerHTML = state.logs.length
-    ? state.logs
-        .map(
+    ? [
+        truncatedCount > 0
+          ? `<div class="console-truncated">Showing latest ${MAX_RENDERED_LOG_ENTRIES} of ${state.logs.length} retained logs.</div>`
+          : '',
+        ...renderedLogs.map(
           (entry) => `
             <article class="console-entry ${entry.level}">
               <div class="console-entry-meta">
@@ -145,19 +219,21 @@ function renderConsole() {
             </article>
           `
         )
-        .join('')
+      ].join('')
     : '<div class="console-empty">Logs from the launcher and game iframe will appear here.</div>';
 
   nodes.consoleLog.scrollTop = nodes.consoleLog.scrollHeight;
 }
 
 function openConsoleDialog() {
-  renderConsole();
   nodes.consoleDialog.showModal();
+  consoleDirty = false;
+  renderConsole();
 }
 
 function clearConsole() {
   state.logs = [];
+  consoleDirty = false;
   renderConsole();
 }
 
