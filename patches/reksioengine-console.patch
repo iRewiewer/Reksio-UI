@@ -93,7 +93,7 @@ index 2df2d3e..db1d118 100644
      }
  
      private appendExtraData(formatting: FormatInfo, extraData?: any) {
-@@ -108,9 +106,9 @@ class Logger {
+@@ -108,8 +106,8 @@ class Logger {
              extraData,
          })
  
