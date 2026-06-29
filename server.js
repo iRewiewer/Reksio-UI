@@ -12,11 +12,15 @@ const PORT = Number(process.env.PORT || 3030);
 const DATA_DIR = path.resolve(process.env.REKSIO_DATA_DIR || path.join(process.cwd(), 'data'));
 const GAMES_DIR = path.join(DATA_DIR, 'games');
 const TMP_DIR = path.join(DATA_DIR, 'tmp');
+const LOGS_DIR = path.join(DATA_DIR, 'logs');
 const META_PATH = path.join(DATA_DIR, 'games.json');
 const NOTES_PATH = path.join(DATA_DIR, 'notes.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ENGINE_DIR = path.join(PUBLIC_DIR, 'engine');
 const MAX_ISO_SIZE_BYTES = Number(process.env.MAX_ISO_SIZE_BYTES || 8 * 1024 * 1024 * 1024);
+const MAX_LOG_BATCH_ENTRIES = 1000;
+const MAX_LOG_READ_BYTES = 1024 * 1024;
+const MAX_LOG_TAIL_ENTRIES = 1000;
 
 const BUILTIN_GAMES = [
   {
@@ -50,7 +54,7 @@ const BUILTIN_GAMES = [
 const app = express();
 
 app.disable('x-powered-by');
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '2mb' }));
 
 function textValue(value, fallback = '') {
   if (typeof value !== 'string') {
@@ -81,6 +85,10 @@ function createNoteId() {
   return `note-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
 }
 
+function createLogSessionId() {
+  return `log-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+}
+
 function normalizeLocale(value, fallback = 'custom') {
   const cleaned = textValue(value, fallback).toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 16);
   return cleaned || fallback;
@@ -105,6 +113,7 @@ function isoPathFor(game) {
 async function ensureDataDirs() {
   await fsp.mkdir(GAMES_DIR, { recursive: true });
   await fsp.mkdir(TMP_DIR, { recursive: true });
+  await fsp.mkdir(LOGS_DIR, { recursive: true });
 
   try {
     await fsp.access(META_PATH, fs.constants.F_OK);
@@ -189,6 +198,153 @@ function noteFromBody(body, existingNote = null) {
     createdAt: existingNote ? existingNote.createdAt : now,
     updatedAt: now
   };
+}
+
+function validateLogSessionId(value) {
+  const id = textValue(value).toLowerCase();
+
+  if (!/^[a-z0-9][a-z0-9-]{2,80}$/.test(id)) {
+    throw Object.assign(new Error('Invalid log session id.'), { statusCode: 400 });
+  }
+
+  return id;
+}
+
+function logPathFor(sessionId) {
+  const resolvedLogsDir = path.resolve(LOGS_DIR);
+  const resolvedPath = path.resolve(resolvedLogsDir, `${validateLogSessionId(sessionId)}.ndjson`);
+
+  if (!resolvedPath.startsWith(`${resolvedLogsDir}${path.sep}`)) {
+    throw Object.assign(new Error('Invalid log session path.'), { statusCode: 400 });
+  }
+
+  return resolvedPath;
+}
+
+function normalizeLogLevel(value) {
+  return ['debug', 'info', 'warn', 'error'].includes(value) ? value : 'info';
+}
+
+function boundedString(value, maxLength) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => boundedString(entry, maxLength)).join(' ');
+  }
+
+  if (typeof value === 'string') {
+    return value.slice(0, maxLength);
+  }
+
+  if (value == null) {
+    return '';
+  }
+
+  try {
+    return JSON.stringify(value).slice(0, maxLength);
+  } catch {
+    return String(value).slice(0, maxLength);
+  }
+}
+
+function normalizeLogEntry(entry) {
+  const parsedTime = new Date(entry && entry.time);
+
+  return {
+    time: Number.isNaN(parsedTime.getTime()) ? new Date().toISOString() : parsedTime.toISOString(),
+    source: boundedString(entry && entry.source, 32) || 'launcher',
+    level: normalizeLogLevel(entry && entry.level),
+    message: boundedString(entry && entry.message, 12000),
+    detail: boundedString(entry && entry.detail, 24000)
+  };
+}
+
+function parseLogLevels(value) {
+  const levels = new Set(String(value || 'debug,info,warn,error').split(',').map((entry) => normalizeLogLevel(entry.trim())));
+  return levels.size ? levels : new Set(['debug', 'info', 'warn', 'error']);
+}
+
+function parseBoundedInteger(value, fallback, min, max) {
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, parsed));
+}
+
+async function readLogChunk(filePath, query) {
+  let stat;
+
+  try {
+    stat = await fsp.stat(filePath);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { entries: [], nextOffset: 0, size: 0, truncated: false };
+    }
+
+    throw error;
+  }
+
+  const hasOffset = query.offset !== undefined;
+  const requestedOffset = parseBoundedInteger(query.offset, 0, 0, stat.size);
+  const start = hasOffset ? requestedOffset : Math.max(0, stat.size - MAX_LOG_READ_BYTES);
+  const bytesToRead = Math.min(MAX_LOG_READ_BYTES, stat.size - start);
+
+  if (bytesToRead <= 0) {
+    return { entries: [], nextOffset: stat.size, size: stat.size, truncated: false };
+  }
+
+  const handle = await fsp.open(filePath, 'r');
+
+  try {
+    const buffer = Buffer.alloc(bytesToRead);
+    const result = await handle.read(buffer, 0, bytesToRead, start);
+    let text = buffer.subarray(0, result.bytesRead).toString('utf8');
+    let baseOffset = start;
+
+    if (start > 0) {
+      const firstNewline = text.indexOf('\n');
+
+      if (firstNewline === -1) {
+        return { entries: [], nextOffset: start + result.bytesRead, size: stat.size, truncated: true };
+      }
+
+      baseOffset += Buffer.byteLength(text.slice(0, firstNewline + 1));
+      text = text.slice(firstNewline + 1);
+    }
+
+    const lastNewline = text.lastIndexOf('\n');
+
+    if (lastNewline === -1) {
+      return { entries: [], nextOffset: baseOffset, size: stat.size, truncated: start > 0 };
+    }
+
+    const completeText = text.slice(0, lastNewline);
+    const nextOffset = baseOffset + Buffer.byteLength(text.slice(0, lastNewline + 1));
+    const levels = parseLogLevels(query.levels);
+    const limit = parseBoundedInteger(query.limit, 300, 1, MAX_LOG_TAIL_ENTRIES);
+    const entries = completeText
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry) => entry && levels.has(entry.level))
+      .slice(-limit);
+
+    return {
+      entries,
+      nextOffset,
+      size: stat.size,
+      truncated: start > 0 || nextOffset < stat.size
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
 function publicGame(game) {
@@ -333,6 +489,82 @@ app.delete('/api/notes/:id', async (req, res, next) => {
     }
 
     await writeNotes(nextNotes);
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/logs/sessions', async (req, res, next) => {
+  try {
+    const sessionId = createLogSessionId();
+    const filePath = logPathFor(sessionId);
+    const title = boundedString(req.body && req.body.title, 120) || 'Reksio UI session';
+    const gameId = boundedString(req.body && req.body.gameId, 120);
+    const initialEntry = normalizeLogEntry({
+      source: 'launcher',
+      level: 'info',
+      message: 'Log session started',
+      detail: gameId ? `game: ${gameId}\ntitle: ${title}` : `title: ${title}`
+    });
+
+    await fsp.appendFile(filePath, `${JSON.stringify(initialEntry)}\n`, 'utf8');
+    res.status(201).json({ sessionId });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/logs/:id', async (req, res, next) => {
+  try {
+    const sessionId = validateLogSessionId(req.params.id);
+    const entries = Array.isArray(req.body && req.body.entries) ? req.body.entries : [];
+
+    if (!entries.length) {
+      res.json({ ok: true, written: 0 });
+      return;
+    }
+
+    if (entries.length > MAX_LOG_BATCH_ENTRIES) {
+      throw Object.assign(new Error(`Log batch too large. Maximum is ${MAX_LOG_BATCH_ENTRIES}.`), { statusCode: 413 });
+    }
+
+    const lines = entries.map((entry) => JSON.stringify(normalizeLogEntry(entry))).join('\n');
+    await fsp.appendFile(logPathFor(sessionId), `${lines}\n`, 'utf8');
+    res.json({ ok: true, written: entries.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/logs/:id/download', async (req, res, next) => {
+  try {
+    const filePath = logPathFor(req.params.id);
+    await fsp.access(filePath, fs.constants.F_OK);
+    res.download(filePath, `${validateLogSessionId(req.params.id)}.ndjson`);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      next(Object.assign(new Error('Log session not found.'), { statusCode: 404 }));
+      return;
+    }
+
+    next(error);
+  }
+});
+
+app.get('/api/logs/:id', async (req, res, next) => {
+  try {
+    const filePath = logPathFor(req.params.id);
+    const result = await readLogChunk(filePath, req.query);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/logs/:id', async (req, res, next) => {
+  try {
+    await fsp.rm(logPathFor(req.params.id), { force: true });
     res.status(204).end();
   } catch (error) {
     next(error);

@@ -271,10 +271,36 @@
 
         <div class="console-toolbar">
           <div class="console-summary" id="consoleSummary">No logs yet</div>
+          <div class="console-controls" aria-label="Console filters">
+            <label class="check-pill">
+              <input type="checkbox" data-console-level="debug" />
+              Debug
+            </label>
+            <label class="check-pill">
+              <input type="checkbox" data-console-level="info" checked />
+              Info
+            </label>
+            <label class="check-pill">
+              <input type="checkbox" data-console-level="warn" checked />
+              Warn
+            </label>
+            <label class="check-pill">
+              <input type="checkbox" data-console-level="error" checked />
+              Error
+            </label>
+            <label class="check-pill">
+              <input id="consoleAutoTailCheckbox" type="checkbox" checked />
+              Tail
+            </label>
+          </div>
           <div class="console-actions">
             <button class="text-button" id="copyConsoleButton" type="button">
               <svg><use href="#icon-note"></use></svg>
               Copy
+            </button>
+            <button class="text-button" id="downloadConsoleButton" type="button">
+              <svg><use href="#icon-external"></use></svg>
+              Download
             </button>
             <button class="text-button" id="clearConsoleButton" type="button">
               <svg><use href="#icon-trash"></use></svg>

@@ -560,6 +560,7 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -574,6 +575,31 @@ h2 {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.console-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.check-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.check-pill input {
+  margin: 0;
+  accent-color: var(--teal);
 }
 
 .console-log {
@@ -911,6 +937,7 @@ h2 {
   }
 
   .console-toolbar,
+  .console-controls,
   .console-actions {
     align-items: stretch;
     flex-direction: column;

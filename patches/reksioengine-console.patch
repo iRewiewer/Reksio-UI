@@ -1,11 +1,17 @@
 diff --git a/src/devPlayer.ts b/src/devPlayer.ts
-index 6e0a5d0..9b62453 100644
+index bd35397..1b6ea84 100644
 --- a/src/devPlayer.ts
 +++ b/src/devPlayer.ts
-@@ -29,6 +29,71 @@ const baseOptions = {
+@@ -26,6 +26,146 @@ const baseOptions = {
      storage: new IndexedDBStorage('reksio'),
  }
  
++const consoleLogQueue: Array<Record<string, unknown>> = []
++let consoleFlushTimer: number | null = null
++let consoleWindowStartedAt = Date.now()
++let consoleWindowCount = 0
++let consoleSuppressedCount = 0
++
 +const serializeConsoleValue = (value: unknown): string => {
 +    if (value instanceof Error) {
 +        return value.stack ?? value.message
@@ -34,24 +40,92 @@ index 6e0a5d0..9b62453 100644
 +    }
 +}
 +
-+const postLauncherConsoleLog = (level: string, args: unknown[]) => {
++const flushLauncherConsoleLogs = () => {
++    if (consoleFlushTimer !== null) {
++        window.clearTimeout(consoleFlushTimer)
++        consoleFlushTimer = null
++    }
++
++    if (consoleSuppressedCount > 0) {
++        consoleLogQueue.push({
++            time: new Date().toISOString(),
++            source: 'engine',
++            level: 'warn',
++            message: `Suppressed ${consoleSuppressedCount} noisy engine logs before forwarding`,
++            detail: '',
++        })
++        consoleSuppressedCount = 0
++    }
++
++    if (!consoleLogQueue.length) {
++        return
++    }
++
 +    postLauncherMessage({
-+        type: 'reksio:console',
-+        source: 'engine',
-+        level: level === 'log' ? 'info' : level,
-+        args: args.map(serializeConsoleValue),
++        type: 'reksio:console-batch',
++        entries: consoleLogQueue.splice(0, consoleLogQueue.length),
 +    })
 +}
++
++const shouldForwardConsoleLog = (level: string) => {
++    if (level === 'warn' || level === 'error') {
++        return true
++    }
++
++    const now = Date.now()
++
++    if (now - consoleWindowStartedAt >= 1000) {
++        consoleWindowStartedAt = now
++        consoleWindowCount = 0
++    }
++
++    consoleWindowCount += 1
++
++    if (consoleWindowCount > 500) {
++        consoleSuppressedCount += 1
++        return false
++    }
++
++    return true
++}
++
++const queueLauncherConsoleLog = (level: string, args: unknown[]) => {
++    const normalizedLevel = level === 'log' ? 'info' : level
++
++    if (!shouldForwardConsoleLog(normalizedLevel)) {
++        return
++    }
++
++    consoleLogQueue.push({
++        time: new Date().toISOString(),
++        source: 'engine',
++        level: normalizedLevel,
++        message: args.map(serializeConsoleValue).join(' '),
++        detail: '',
++    })
++
++    if (consoleLogQueue.length >= 250) {
++        flushLauncherConsoleLogs()
++        return
++    }
++
++    if (consoleFlushTimer === null) {
++        consoleFlushTimer = window.setTimeout(flushLauncherConsoleLogs, 250)
++    }
++}
++
++window.addEventListener('beforeunload', flushLauncherConsoleLogs)
 +
 +for (const level of ['debug', 'info', 'warn', 'error', 'log']) {
 +    const original = (console as any)[level].bind(console)
 +    ;(console as any)[level] = (...args: unknown[]) => {
 +        original(...args)
-+        postLauncherConsoleLog(level, args)
++        queueLauncherConsoleLog(level, args)
 +    }
 +}
 +
 +window.addEventListener('error', (event) => {
++    flushLauncherConsoleLogs()
 +    postLauncherMessage({
 +        type: 'reksio:error',
 +        source: 'engine',
@@ -61,6 +135,7 @@ index 6e0a5d0..9b62453 100644
 +})
 +
 +window.addEventListener('unhandledrejection', (event) => {
++    flushLauncherConsoleLogs()
 +    postLauncherMessage({
 +        type: 'reksio:error',
 +        source: 'engine',
@@ -75,7 +150,7 @@ index 6e0a5d0..9b62453 100644
  const start = () => {
      gameContainer.removeEventListener('click', start)
 diff --git a/src/engine/logging.ts b/src/engine/logging.ts
-index 2df2d3e..db1d118 100644
+index 2df2d3e..534058d 100644
 --- a/src/engine/logging.ts
 +++ b/src/engine/logging.ts
 @@ -57,11 +57,9 @@ export const fmt = (strings: TemplateStringsArray, ...values: any[]): FormatInfo
@@ -93,7 +168,7 @@ index 2df2d3e..db1d118 100644
      }
  
      private appendExtraData(formatting: FormatInfo, extraData?: any) {
-@@ -108,8 +106,8 @@ class Logger {
+@@ -108,9 +106,9 @@ class Logger {
              extraData,
          })
  
@@ -104,24 +179,27 @@ index 2df2d3e..db1d118 100644
 +            this.printToConsole(severity, err)
          }
      }
+ 
 diff --git a/src/filesystem/fileLoader.ts b/src/filesystem/fileLoader.ts
-index a60327d..e806c81 100644
+index a60327d..4d88a3c 100644
 --- a/src/filesystem/fileLoader.ts
 +++ b/src/filesystem/fileLoader.ts
-@@ -16,8 +16,33 @@ export abstract class FileLoader {
+@@ -16,8 +16,35 @@ export abstract class FileLoader {
  }
  
  abstract class SimpleFileLoader extends FileLoader {
 +    protected resolveListedPath(filename: string): string | null {
 +        const normalizedFilename = normalizePath(filename)
 +        const listing = this.getFilesListing()
++        const listingByLowercase = new Map(listing.map((entry) => [entry.toLowerCase(), entry]))
++        const exactMatch = listingByLowercase.get(normalizedFilename)
 +
-+        if (listing.includes(normalizedFilename)) {
-+            return normalizedFilename
++        if (exactMatch) {
++            return exactMatch
 +        }
 +
 +        const suffix = `/${normalizedFilename}`
-+        const matches = listing.filter((entry) => entry.endsWith(suffix))
++        const matches = listing.filter((entry) => entry.toLowerCase().endsWith(suffix))
 +
 +        if (matches.length === 1) {
 +            logger.warn(`Resolved '${normalizedFilename}' from nested path '${matches[0]}'`)
@@ -143,7 +221,7 @@ index a60327d..e806c81 100644
      }
  }
  
-@@ -38,7 +63,8 @@ export abstract class UrlFileLoader extends SimpleFileLoader {
+@@ -38,7 +65,8 @@ export abstract class UrlFileLoader extends SimpleFileLoader {
      async getRawFile(filename: string): Promise<ArrayBuffer> {
          const normalizedFilename = normalizePath(filename)
          logger.debug(`Fetching '${normalizedFilename}'...`)
@@ -153,7 +231,7 @@ index a60327d..e806c81 100644
          if (fileUrl == null) {
              throw new FileNotFoundError(normalizedFilename)
          }
-@@ -115,7 +141,8 @@ export class IsoFileLoader extends SimpleFileLoader {
+@@ -115,7 +143,8 @@ export class IsoFileLoader extends SimpleFileLoader {
      async getRawFile(filename: string): Promise<ArrayBuffer> {
          const normalizedFilename = normalizePath(filename)
          console.debug(`Loading '${normalizedFilename}'...`)
@@ -163,7 +241,7 @@ index a60327d..e806c81 100644
          if (fileResult == null) {
              throw new FileNotFoundError(normalizedFilename)
          }
-@@ -142,7 +169,8 @@ export class RemoteIsoFileLoader extends SimpleFileLoader {
+@@ -142,7 +171,8 @@ export class RemoteIsoFileLoader extends SimpleFileLoader {
      async getRawFile(filename: string): Promise<ArrayBuffer> {
          const normalizedFilename = normalizePath(filename)
          console.debug(`Loading '${normalizedFilename}'...`)

@@ -4,6 +4,16 @@ const state = {
   games: [],
   notes: [],
   logs: [],
+  consoleOffset: 0,
+  consoleSize: 0,
+  consoleTruncated: false,
+  consoleFilters: {
+    debug: false,
+    info: true,
+    warn: true,
+    error: true
+  },
+  consoleAutoTail: true,
   selectedId: null,
   selectedNoteId: null,
   loadedId: null,
@@ -17,8 +27,10 @@ const nodes = {
   closeConsoleDialogButton: document.getElementById('closeConsoleDialogButton'),
   addGameDialog: document.getElementById('addGameDialog'),
   clearConsoleButton: document.getElementById('clearConsoleButton'),
+  consoleAutoTailCheckbox: document.getElementById('consoleAutoTailCheckbox'),
   consoleButton: document.getElementById('consoleButton'),
   consoleDialog: document.getElementById('consoleDialog'),
+  consoleFilterInputs: document.querySelectorAll('[data-console-level]'),
   consoleLog: document.getElementById('consoleLog'),
   consoleSummary: document.getElementById('consoleSummary'),
   copyConsoleButton: document.getElementById('copyConsoleButton'),
@@ -26,6 +38,7 @@ const nodes = {
   detailCover: document.getElementById('detailCover'),
   detailNotes: document.getElementById('detailNotes'),
   detailTitle: document.getElementById('detailTitle'),
+  downloadConsoleButton: document.getElementById('downloadConsoleButton'),
   filterButtons: document.querySelectorAll('.filter-button'),
   fullscreenButton: document.getElementById('fullscreenButton'),
   gameFrame: document.getElementById('gameFrame'),
@@ -65,14 +78,16 @@ const nodes = {
 
 let selectedIsoFile = null;
 let saveSyncTimer = null;
-let consoleRenderScheduled = false;
-let consoleDirty = false;
-let logWindowStartedAt = Date.now();
-let logWindowCount = 0;
-let suppressedLogCount = 0;
-const MAX_LOG_ENTRIES = 1000;
+let logSessionId = null;
+let logSessionPromise = null;
+let logFlushTimer = null;
+let logQueue = [];
+let consolePollTimer = null;
+let consolePollInFlight = false;
 const MAX_RENDERED_LOG_ENTRIES = 180;
-const MAX_NOISY_LOGS_PER_SECOND = 300;
+const MAX_LOG_QUEUE_ENTRIES = 5000;
+const LOG_FLUSH_INTERVAL_MS = 300;
+const CONSOLE_POLL_INTERVAL_MS = 900;
 
 function icon(name) {
   return `<svg><use href="#icon-${name}"></use></svg>`;
@@ -102,81 +117,136 @@ function isConsoleOpen() {
   return Boolean(nodes.consoleDialog.open);
 }
 
-function scheduleConsoleRender(force = false) {
-  consoleDirty = true;
-
-  if (!force && !isConsoleOpen()) {
-    return;
-  }
-
-  if (consoleRenderScheduled) {
-    return;
-  }
-
-  consoleRenderScheduled = true;
-  requestAnimationFrame(() => {
-    consoleRenderScheduled = false;
-
-    if (!consoleDirty || !isConsoleOpen()) {
-      return;
-    }
-
-    consoleDirty = false;
-    renderConsole();
-  });
-}
-
-function shouldSuppressLog(level) {
-  if (level === 'warn' || level === 'error') {
-    return false;
-  }
-
-  const now = Date.now();
-
-  if (now - logWindowStartedAt >= 1000) {
-    const suppressed = suppressedLogCount;
-    logWindowStartedAt = now;
-    logWindowCount = 0;
-    suppressedLogCount = 0;
-
-    if (suppressed > 0) {
-      queueMicrotask(() => addLog('launcher', 'warn', `Suppressed ${suppressed} noisy console logs to keep the UI responsive`));
-    }
-  }
-
-  logWindowCount += 1;
-
-  if (logWindowCount > MAX_NOISY_LOGS_PER_SECOND) {
-    suppressedLogCount += 1;
-    return true;
-  }
-
-  return false;
-}
-
-function addLog(source, level, message, detail = '') {
-  const normalizedLevel = normalizeLogLevel(level);
-
-  if (shouldSuppressLog(normalizedLevel)) {
-    return;
-  }
-
-  const entry = {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    time: new Date().toISOString(),
-    source,
-    level: normalizedLevel,
+function createClientLogEntry(source, level, message, detail = '', time = new Date().toISOString()) {
+  return {
+    time,
+    source: serializeLogValue(source || 'launcher').slice(0, 32),
+    level: normalizeLogLevel(level),
     message: Array.isArray(message) ? message.map(serializeLogValue).join(' ') : serializeLogValue(message),
     detail: detail ? serializeLogValue(detail) : ''
   };
+}
 
-  state.logs.push(entry);
+function createClientLogEntryFromPayload(payload, fallbackSource = 'engine') {
+  return createClientLogEntry(
+    payload && payload.source ? payload.source : fallbackSource,
+    payload && payload.level ? payload.level : 'info',
+    payload && payload.args ? payload.args : payload && payload.message ? payload.message : '',
+    payload && payload.detail ? payload.detail : payload && payload.stack ? payload.stack : '',
+    payload && payload.time ? payload.time : new Date().toISOString()
+  );
+}
 
-  if (state.logs.length > MAX_LOG_ENTRIES) {
-    state.logs.splice(0, state.logs.length - MAX_LOG_ENTRIES);
+function selectedConsoleLevels() {
+  return Object.entries(state.consoleFilters)
+    .filter(([, enabled]) => enabled)
+    .map(([level]) => level);
+}
+
+function consoleLevelsQuery() {
+  const levels = selectedConsoleLevels();
+  return levels.length ? levels.join(',') : 'error';
+}
+
+function ensureLogSession() {
+  if (logSessionId) {
+    return Promise.resolve(logSessionId);
   }
 
-  scheduleConsoleRender();
+  if (!logSessionPromise) {
+    logSessionPromise = fetch('/api/logs/sessions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ title: 'Reksio UI session' })
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Log session failed with ${response.status}`);
+        }
+
+        return response.json();
+      })
+      .then((body) => {
+        logSessionId = body.sessionId;
+        return logSessionId;
+      })
+      .catch((error) => {
+        logSessionPromise = null;
+        console.warn('Failed to create log session', error);
+        throw error;
+      });
+  }
+
+  return logSessionPromise;
+}
+
+function trimLogQueue() {
+  if (logQueue.length <= MAX_LOG_QUEUE_ENTRIES) {
+    return;
+  }
+
+  const dropped = logQueue.length - MAX_LOG_QUEUE_ENTRIES;
+  logQueue.splice(0, dropped);
+  logQueue.unshift(createClientLogEntry('launcher', 'warn', `Dropped ${dropped} queued logs before they reached the server`));
+}
+
+function scheduleLogFlush(delay = LOG_FLUSH_INTERVAL_MS) {
+  if (logFlushTimer) {
+    return;
+  }
+
+  logFlushTimer = setTimeout(() => {
+    logFlushTimer = null;
+    flushLogQueue();
+  }, delay);
+}
+
+async function flushLogQueue() {
+  if (!logQueue.length) {
+    return;
+  }
+
+  const batch = logQueue.splice(0, 1000);
+
+  try {
+    const sessionId = await ensureLogSession();
+    const response = await fetch(`/api/logs/${encodeURIComponent(sessionId)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ entries: batch })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Log append failed with ${response.status}`);
+    }
+
+    if (isConsoleOpen()) {
+      pollConsoleLogs();
+    }
+  } catch (error) {
+    logQueue = batch.concat(logQueue).slice(-MAX_LOG_QUEUE_ENTRIES);
+    console.warn('Failed to flush logs', error);
+    scheduleLogFlush(2000);
+    return;
+  }
+
+  if (logQueue.length) {
+    scheduleLogFlush(0);
+  }
+}
+
+function queueLogEntries(entries) {
+  logQueue.push(...entries);
+  trimLogQueue();
+  scheduleLogFlush();
+}
+
+function addLog(source, level, message, detail = '') {
+  queueLogEntries([createClientLogEntry(source, level, message, detail)]);
 }
 
 function formatLogTime(value) {
@@ -185,6 +255,10 @@ function formatLogTime(value) {
     minute: '2-digit',
     second: '2-digit'
   }).format(new Date(value));
+}
+
+function formatLogBytes(bytes) {
+  return bytes ? formatBytes(bytes) : '0 B';
 }
 
 function renderConsole() {
@@ -199,14 +273,17 @@ function renderConsole() {
   );
 
   nodes.consoleSummary.textContent = state.logs.length
-    ? `${state.logs.length} logs - ${counts.error} errors - ${counts.warn} warnings`
-    : 'No logs yet';
+    ? `${state.logs.length} visible - ${counts.error} errors - ${counts.warn} warnings - ${formatLogBytes(state.consoleSize)} file`
+    : logSessionId
+      ? `No visible logs - ${formatLogBytes(state.consoleSize)} file`
+      : 'Starting log session';
 
   nodes.consoleLog.innerHTML = state.logs.length
     ? [
         truncatedCount > 0
-          ? `<div class="console-truncated">Showing latest ${MAX_RENDERED_LOG_ENTRIES} of ${state.logs.length} retained logs.</div>`
+          ? `<div class="console-truncated">Showing latest ${MAX_RENDERED_LOG_ENTRIES} visible entries from the server log tail.</div>`
           : '',
+        state.consoleTruncated ? '<div class="console-truncated">Earlier matching logs are available in the full log download.</div>' : '',
         ...renderedLogs.map(
           (entry) => `
             <article class="console-entry ${entry.level}">
@@ -225,16 +302,82 @@ function renderConsole() {
   nodes.consoleLog.scrollTop = nodes.consoleLog.scrollHeight;
 }
 
-function openConsoleDialog() {
-  nodes.consoleDialog.showModal();
-  consoleDirty = false;
-  renderConsole();
+async function pollConsoleLogs(reset = false) {
+  if (consolePollInFlight) {
+    return;
+  }
+
+  consolePollInFlight = true;
+
+  try {
+    const sessionId = await ensureLogSession();
+    const params = new URLSearchParams({
+      levels: consoleLevelsQuery(),
+      limit: '500'
+    });
+
+    if (!reset) {
+      params.set('offset', String(state.consoleOffset));
+    }
+
+    const body = await apiFetch(`/api/logs/${encodeURIComponent(sessionId)}?${params.toString()}`);
+
+    if (reset) {
+      state.logs = [];
+    }
+
+    if (body.entries.length) {
+      state.logs.push(...body.entries);
+      state.logs.splice(0, Math.max(0, state.logs.length - 500));
+    }
+
+    state.consoleOffset = body.nextOffset;
+    state.consoleSize = body.size;
+    state.consoleTruncated = body.truncated;
+    renderConsole();
+  } catch (error) {
+    state.logs.push(createClientLogEntry('launcher', 'error', 'Failed to poll server log', error));
+    state.logs.splice(0, Math.max(0, state.logs.length - 500));
+    renderConsole();
+  } finally {
+    consolePollInFlight = false;
+  }
 }
 
-function clearConsole() {
+function startConsoleTail(reset = false) {
+  stopConsoleTail();
+  pollConsoleLogs(reset);
+
+  if (state.consoleAutoTail) {
+    consolePollTimer = setInterval(() => pollConsoleLogs(), CONSOLE_POLL_INTERVAL_MS);
+  }
+}
+
+function stopConsoleTail() {
+  if (consolePollTimer) {
+    clearInterval(consolePollTimer);
+    consolePollTimer = null;
+  }
+}
+
+function openConsoleDialog() {
+  nodes.consoleDialog.showModal();
+  startConsoleTail(true);
+}
+
+async function clearConsole() {
+  await flushLogQueue();
+
+  if (logSessionId) {
+    await fetch(`/api/logs/${encodeURIComponent(logSessionId)}`, { method: 'DELETE' });
+  }
+
   state.logs = [];
-  consoleDirty = false;
+  state.consoleOffset = 0;
+  state.consoleSize = 0;
+  state.consoleTruncated = false;
   renderConsole();
+  addLog('launcher', 'info', 'Console cleared');
 }
 
 function absoluteUrl(value) {
@@ -386,6 +529,11 @@ function handleEngineMessage(event) {
 
   if (!data || typeof data !== 'object') {
     return;
+  }
+
+  if (data.type === 'reksio:console-batch') {
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    queueLogEntries(entries.map((entry) => createClientLogEntryFromPayload(entry)));
   }
 
   if (data.type === 'reksio:console') {
@@ -944,9 +1092,35 @@ function resetSelectedSave() {
 nodes.addGameButton.addEventListener('click', openDialog);
 nodes.closeDialogButton.addEventListener('click', () => nodes.addGameDialog.close());
 nodes.consoleButton.addEventListener('click', openConsoleDialog);
-nodes.closeConsoleDialogButton.addEventListener('click', () => nodes.consoleDialog.close());
-nodes.clearConsoleButton.addEventListener('click', clearConsole);
+nodes.closeConsoleDialogButton.addEventListener('click', () => {
+  nodes.consoleDialog.close();
+  stopConsoleTail();
+});
+nodes.clearConsoleButton.addEventListener('click', () => {
+  clearConsole().catch((error) => addLog('launcher', 'error', 'Failed to clear console', error));
+});
 nodes.copyConsoleButton.addEventListener('click', copyConsole);
+nodes.downloadConsoleButton.addEventListener('click', async () => {
+  const sessionId = await ensureLogSession();
+  window.open(`/api/logs/${encodeURIComponent(sessionId)}/download`, '_blank', 'noopener');
+});
+nodes.consoleAutoTailCheckbox.addEventListener('change', (event) => {
+  state.consoleAutoTail = event.target.checked;
+
+  if (isConsoleOpen()) {
+    startConsoleTail();
+  }
+});
+nodes.consoleFilterInputs.forEach((input) => {
+  state.consoleFilters[input.dataset.consoleLevel] = input.checked;
+  input.addEventListener('change', () => {
+    state.consoleFilters[input.dataset.consoleLevel] = input.checked;
+
+    if (isConsoleOpen()) {
+      startConsoleTail(true);
+    }
+  });
+});
 nodes.notesButton.addEventListener('click', openNotesDialog);
 nodes.closeNotesDialogButton.addEventListener('click', () => nodes.notesDialog.close());
 nodes.newNoteButton.addEventListener('click', startNewNote);
@@ -1013,6 +1187,7 @@ nodes.gameFrame.addEventListener('load', () => {
   syncCurrentSave();
   addLog('launcher', 'info', 'Game iframe loaded', nodes.gameFrame.src);
 });
+nodes.consoleDialog.addEventListener('close', stopConsoleTail);
 window.addEventListener('message', handleEngineMessage);
 window.addEventListener('error', (event) => {
   addLog('launcher', 'error', event.message, `${event.filename}:${event.lineno}:${event.colno}`);
