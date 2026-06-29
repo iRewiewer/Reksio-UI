@@ -336,6 +336,11 @@ svg {
   font-size: 13px;
 }
 
+.text-button[aria-pressed="true"] {
+  border-color: var(--gold);
+  color: #f1d277;
+}
+
 .player-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);

@@ -30,6 +30,13 @@ let consoleFlushTimer: number | null = null
 let consoleWindowStartedAt = Date.now()
 let consoleWindowCount = 0
 let consoleSuppressedCount = 0
+let originalConsoleWindowStartedAt = Date.now()
+let originalConsoleWindowCount = 0
+let originalConsoleSuppressedCount = 0
+const MAX_FORWARDED_CONSOLE_LOGS_PER_SECOND = 120
+const MAX_ORIGINAL_CONSOLE_PRINTS_PER_SECOND = 20
+const MAX_CONSOLE_QUEUE_ENTRIES = 500
+const MAX_CONSOLE_MESSAGE_CHARS = 4000
 
 const serializeConsoleValue = (value: unknown): string => {
     if (value instanceof Error) {
@@ -40,12 +47,28 @@ const serializeConsoleValue = (value: unknown): string => {
         return value
     }
 
-    try {
-        return JSON.stringify(value)
-    } catch {
+    if (value == null || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
         return String(value)
     }
+
+    if (Array.isArray(value)) {
+        return `[Array(${value.length})]`
+    }
+
+    if (typeof value === 'object') {
+        const constructorName = value.constructor && value.constructor.name ? value.constructor.name : 'Object'
+        const keys = Object.keys(value).filter((key) => !key.startsWith('_'))
+        const suffix = keys.length > 12 ? ', ...' : ''
+        return `${constructorName}{${keys.slice(0, 12).join(', ')}${suffix}}`
+    }
+
+    return String(value)
 }
+
+const truncateConsoleText = (text: string) =>
+    text.length > MAX_CONSOLE_MESSAGE_CHARS
+        ? `${text.substring(0, MAX_CONSOLE_MESSAGE_CHARS)}... [truncated ${text.length - MAX_CONSOLE_MESSAGE_CHARS} chars]`
+        : text
 
 const postLauncherMessage = (message: object) => {
     if (window.parent === window) {
@@ -87,10 +110,6 @@ const flushLauncherConsoleLogs = () => {
 }
 
 const shouldForwardConsoleLog = (level: string) => {
-    if (level === 'warn' || level === 'error') {
-        return true
-    }
-
     const now = Date.now()
 
     if (now - consoleWindowStartedAt >= 1000) {
@@ -100,8 +119,30 @@ const shouldForwardConsoleLog = (level: string) => {
 
     consoleWindowCount += 1
 
-    if (consoleWindowCount > 500) {
+    if (consoleWindowCount > MAX_FORWARDED_CONSOLE_LOGS_PER_SECOND) {
         consoleSuppressedCount += 1
+        return false
+    }
+
+    return true
+}
+
+const shouldPrintOriginalConsoleLog = (level: string) => {
+    if (level !== 'warn' && level !== 'error') {
+        return false
+    }
+
+    const now = Date.now()
+
+    if (now - originalConsoleWindowStartedAt >= 1000) {
+        originalConsoleWindowStartedAt = now
+        originalConsoleWindowCount = 0
+    }
+
+    originalConsoleWindowCount += 1
+
+    if (originalConsoleWindowCount > MAX_ORIGINAL_CONSOLE_PRINTS_PER_SECOND) {
+        originalConsoleSuppressedCount += 1
         return false
     }
 
@@ -119,9 +160,15 @@ const queueLauncherConsoleLog = (level: string, args: unknown[]) => {
         time: new Date().toISOString(),
         source: 'engine',
         level: normalizedLevel,
-        message: args.map(serializeConsoleValue).join(' '),
+        message: truncateConsoleText(args.map((arg) => truncateConsoleText(serializeConsoleValue(arg))).join(' ')),
         detail: '',
     })
+
+    if (consoleLogQueue.length > MAX_CONSOLE_QUEUE_ENTRIES) {
+        const dropped = consoleLogQueue.length - MAX_CONSOLE_QUEUE_ENTRIES
+        consoleLogQueue.splice(0, dropped)
+        consoleSuppressedCount += dropped
+    }
 
     if (consoleLogQueue.length >= 250) {
         flushLauncherConsoleLogs()
@@ -138,7 +185,17 @@ window.addEventListener('beforeunload', flushLauncherConsoleLogs)
 for (const level of ['debug', 'info', 'warn', 'error', 'log']) {
     const original = (console as any)[level].bind(console)
     ;(console as any)[level] = (...args: unknown[]) => {
-        original(...args)
+        const printOriginal = shouldPrintOriginalConsoleLog(level)
+
+        if (printOriginal && originalConsoleSuppressedCount > 0) {
+            original(`Suppressed ${originalConsoleSuppressedCount} noisy engine console prints`)
+            originalConsoleSuppressedCount = 0
+        }
+
+        if (printOriginal) {
+            original(...args.map((arg) => truncateConsoleText(serializeConsoleValue(arg))))
+        }
+
         queueLauncherConsoleLog(level, args)
     }
 }

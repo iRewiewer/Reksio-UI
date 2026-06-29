@@ -54,12 +54,21 @@ export const fmt = (strings: TemplateStringsArray, ...values: any[]): FormatInfo
     }
 }
 
+const MAX_RETAINED_LOGS = 500
+const MAX_RETAINED_LOG_TEXT_CHARS = 2000
+
 export const allLogs: any[] = []
 
 class Logger {
     private printToConsole(severity: string, ...args: any[]) {
         const printer = (severity === 'info' ? console.log : (console as any)[severity]).bind(console)
         printer(...args)
+    }
+
+    private trimRetainedText(value: string) {
+        return value.length > MAX_RETAINED_LOG_TEXT_CHARS
+            ? `${value.substring(0, MAX_RETAINED_LOG_TEXT_CHARS)}... [truncated]`
+            : value
     }
 
     private appendExtraData(formatting: FormatInfo, extraData?: any) {
@@ -101,10 +110,14 @@ class Logger {
         const formatInfoWithExtra = this.appendExtraData(formatInfo, extraData)
         allLogs.push({
             type: severity,
-            text: formatInfo.text,
-            error: err,
-            extraData,
+            text: this.trimRetainedText(formatInfo.text),
+            error: err ? this.trimRetainedText(err.message ?? String(err)) : undefined,
+            extraDataKeys: extraData ? Object.keys(extraData).filter((key) => !key.startsWith('_')) : undefined,
         })
+
+        if (allLogs.length > MAX_RETAINED_LOGS) {
+            allLogs.splice(0, allLogs.length - MAX_RETAINED_LOGS)
+        }
 
         this.printToConsole(severity, formatInfoWithExtra.richText, ...formatInfoWithExtra.richArgs)
         if (err) {

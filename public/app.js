@@ -13,7 +13,8 @@ const state = {
     warn: true,
     error: true
   },
-  consoleAutoTail: true,
+  consoleFollow: false,
+  consolePaused: false,
   selectedId: null,
   selectedNoteId: null,
   loadedId: null,
@@ -27,7 +28,7 @@ const nodes = {
   closeConsoleDialogButton: document.getElementById('closeConsoleDialogButton'),
   addGameDialog: document.getElementById('addGameDialog'),
   clearConsoleButton: document.getElementById('clearConsoleButton'),
-  consoleAutoTailCheckbox: document.getElementById('consoleAutoTailCheckbox'),
+  consoleFollowCheckbox: document.getElementById('consoleFollowCheckbox'),
   consoleButton: document.getElementById('consoleButton'),
   consoleDialog: document.getElementById('consoleDialog'),
   consoleFilterInputs: document.querySelectorAll('[data-console-level]'),
@@ -61,6 +62,7 @@ const nodes = {
   notesList: document.getElementById('notesList'),
   notesStatus: document.getElementById('notesStatus'),
   openRawButton: document.getElementById('openRawButton'),
+  pauseConsoleButton: document.getElementById('pauseConsoleButton'),
   playButton: document.getElementById('playButton'),
   refreshButton: document.getElementById('refreshButton'),
   resetSaveButton: document.getElementById('resetSaveButton'),
@@ -82,10 +84,14 @@ let logFlushTimer = null;
 let logQueue = [];
 let consolePollTimer = null;
 let consolePollInFlight = false;
-const MAX_RENDERED_LOG_ENTRIES = 180;
-const MAX_LOG_QUEUE_ENTRIES = 5000;
+const MAX_RENDERED_LOG_ENTRIES = 120;
+const MAX_CLIENT_LOG_ENTRIES = 240;
+const MAX_LOG_QUEUE_ENTRIES = 1000;
+const MAX_LOG_MESSAGE_CHARS = 4000;
+const MAX_LOG_DETAIL_CHARS = 8000;
+const LOG_FLUSH_BATCH_SIZE = 250;
 const LOG_FLUSH_INTERVAL_MS = 300;
-const CONSOLE_POLL_INTERVAL_MS = 900;
+const CONSOLE_POLL_INTERVAL_MS = 1500;
 
 function icon(name) {
   return `<svg><use href="#icon-${name}"></use></svg>`;
@@ -107,6 +113,16 @@ function serializeLogValue(value) {
   }
 }
 
+function truncateLogText(value, maxLength) {
+  const text = serializeLogValue(value);
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength)}... [truncated ${text.length - maxLength} chars]`;
+}
+
 function normalizeLogLevel(level) {
   return ['debug', 'info', 'warn', 'error'].includes(level) ? level : 'info';
 }
@@ -118,10 +134,13 @@ function isConsoleOpen() {
 function createClientLogEntry(source, level, message, detail = '', time = new Date().toISOString()) {
   return {
     time,
-    source: serializeLogValue(source || 'launcher').slice(0, 32),
+    source: truncateLogText(source || 'launcher', 32),
     level: normalizeLogLevel(level),
-    message: Array.isArray(message) ? message.map(serializeLogValue).join(' ') : serializeLogValue(message),
-    detail: detail ? serializeLogValue(detail) : ''
+    message: truncateLogText(
+      Array.isArray(message) ? message.map((entry) => truncateLogText(entry, 1000)).join(' ') : message,
+      MAX_LOG_MESSAGE_CHARS
+    ),
+    detail: detail ? truncateLogText(detail, MAX_LOG_DETAIL_CHARS) : ''
   };
 }
 
@@ -206,7 +225,7 @@ async function flushLogQueue() {
     return;
   }
 
-  const batch = logQueue.splice(0, 1000);
+  const batch = logQueue.splice(0, LOG_FLUSH_BATCH_SIZE);
 
   try {
     const sessionId = await ensureLogSession();
@@ -222,7 +241,7 @@ async function flushLogQueue() {
       throw new Error(`Log append failed with ${response.status}`);
     }
 
-    if (isConsoleOpen()) {
+    if (isConsoleOpen() && !state.consolePaused) {
       pollConsoleLogs();
     }
   } catch (error) {
@@ -260,6 +279,7 @@ function formatLogBytes(bytes) {
 }
 
 function renderConsole() {
+  const previousScrollTop = nodes.consoleLog.scrollTop;
   const renderedLogs = state.logs.slice(-MAX_RENDERED_LOG_ENTRIES);
   const truncatedCount = state.logs.length - renderedLogs.length;
   const counts = state.logs.reduce(
@@ -270,11 +290,14 @@ function renderConsole() {
     { debug: 0, info: 0, warn: 0, error: 0 }
   );
 
+  const statusPrefix = state.consolePaused ? 'Paused - ' : '';
+
   nodes.consoleSummary.textContent = state.logs.length
     ? `${state.logs.length} visible - ${counts.error} errors - ${counts.warn} warnings - ${formatLogBytes(state.consoleSize)} file`
     : logSessionId
       ? `No visible logs - ${formatLogBytes(state.consoleSize)} file`
       : 'Starting log session';
+  nodes.consoleSummary.textContent = `${statusPrefix}${nodes.consoleSummary.textContent}`;
 
   nodes.consoleLog.innerHTML = state.logs.length
     ? [
@@ -297,11 +320,15 @@ function renderConsole() {
       ].join('')
     : '<div class="console-empty">Logs from the launcher and game iframe will appear here.</div>';
 
-  nodes.consoleLog.scrollTop = nodes.consoleLog.scrollHeight;
+  if (state.consoleFollow) {
+    nodes.consoleLog.scrollTop = nodes.consoleLog.scrollHeight;
+  } else {
+    nodes.consoleLog.scrollTop = previousScrollTop;
+  }
 }
 
 async function pollConsoleLogs(reset = false) {
-  if (consolePollInFlight) {
+  if (consolePollInFlight || state.consolePaused) {
     return;
   }
 
@@ -311,7 +338,7 @@ async function pollConsoleLogs(reset = false) {
     const sessionId = await ensureLogSession();
     const params = new URLSearchParams({
       levels: consoleLevelsQuery(),
-      limit: '500'
+      limit: String(MAX_CLIENT_LOG_ENTRIES)
     });
 
     if (!reset) {
@@ -326,7 +353,7 @@ async function pollConsoleLogs(reset = false) {
 
     if (body.entries.length) {
       state.logs.push(...body.entries);
-      state.logs.splice(0, Math.max(0, state.logs.length - 500));
+      state.logs.splice(0, Math.max(0, state.logs.length - MAX_CLIENT_LOG_ENTRIES));
     }
 
     state.consoleOffset = body.nextOffset;
@@ -335,7 +362,7 @@ async function pollConsoleLogs(reset = false) {
     renderConsole();
   } catch (error) {
     state.logs.push(createClientLogEntry('launcher', 'error', 'Failed to poll server log', error));
-    state.logs.splice(0, Math.max(0, state.logs.length - 500));
+    state.logs.splice(0, Math.max(0, state.logs.length - MAX_CLIENT_LOG_ENTRIES));
     renderConsole();
   } finally {
     consolePollInFlight = false;
@@ -346,7 +373,7 @@ function startConsoleTail(reset = false) {
   stopConsoleTail();
   pollConsoleLogs(reset);
 
-  if (state.consoleAutoTail) {
+  if (!state.consolePaused) {
     consolePollTimer = setInterval(() => pollConsoleLogs(), CONSOLE_POLL_INTERVAL_MS);
   }
 }
@@ -361,6 +388,26 @@ function stopConsoleTail() {
 function openConsoleDialog() {
   nodes.consoleDialog.showModal();
   startConsoleTail(true);
+}
+
+function renderConsolePauseButton() {
+  const label = state.consolePaused ? 'Resume' : 'Pause';
+  const iconName = state.consolePaused ? 'play' : 'pause';
+  nodes.pauseConsoleButton.innerHTML = `${icon(iconName)}<span>${label}</span>`;
+  nodes.pauseConsoleButton.setAttribute('aria-pressed', String(state.consolePaused));
+}
+
+function toggleConsolePaused() {
+  state.consolePaused = !state.consolePaused;
+  renderConsolePauseButton();
+
+  if (state.consolePaused) {
+    stopConsoleTail();
+    renderConsole();
+    return;
+  }
+
+  startConsoleTail(false);
 }
 
 async function clearConsole() {
@@ -1064,15 +1111,16 @@ nodes.clearConsoleButton.addEventListener('click', () => {
   clearConsole().catch((error) => addLog('launcher', 'error', 'Failed to clear console', error));
 });
 nodes.copyConsoleButton.addEventListener('click', copyConsole);
+nodes.pauseConsoleButton.addEventListener('click', toggleConsolePaused);
 nodes.downloadConsoleButton.addEventListener('click', async () => {
   const sessionId = await ensureLogSession();
   window.open(`/api/logs/${encodeURIComponent(sessionId)}/download`, '_blank', 'noopener');
 });
-nodes.consoleAutoTailCheckbox.addEventListener('change', (event) => {
-  state.consoleAutoTail = event.target.checked;
+nodes.consoleFollowCheckbox.addEventListener('change', (event) => {
+  state.consoleFollow = event.target.checked;
 
-  if (isConsoleOpen()) {
-    startConsoleTail();
+  if (state.consoleFollow) {
+    nodes.consoleLog.scrollTop = nodes.consoleLog.scrollHeight;
   }
 });
 nodes.consoleFilterInputs.forEach((input) => {
@@ -1080,7 +1128,7 @@ nodes.consoleFilterInputs.forEach((input) => {
   input.addEventListener('change', () => {
     state.consoleFilters[input.dataset.consoleLevel] = input.checked;
 
-    if (isConsoleOpen()) {
+    if (isConsoleOpen() && !state.consolePaused) {
       startConsoleTail(true);
     }
   });
@@ -1161,4 +1209,5 @@ window.addEventListener('unhandledrejection', (event) => {
 window.addEventListener('beforeunload', syncCurrentSave);
 
 addLog('launcher', 'info', 'Launcher ready');
+renderConsolePauseButton();
 loadGames();

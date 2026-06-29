@@ -38,6 +38,9 @@
         <path d="m4 7 5 5-5 5" />
         <path d="M12 19h8" />
       </symbol>
+      <symbol id="icon-pause" viewBox="0 0 24 24">
+        <path d="M8 5v14M16 5v14" />
+      </symbol>
       <symbol id="icon-play" viewBox="0 0 24 24">
         <path d="M8 5v14l11-7Z" />
       </symbol>
@@ -248,11 +251,15 @@
               Error
             </label>
             <label class="check-pill">
-              <input id="consoleAutoTailCheckbox" type="checkbox" checked />
-              Tail
+              <input id="consoleFollowCheckbox" type="checkbox" />
+              Follow
             </label>
           </div>
           <div class="console-actions">
+            <button class="text-button" id="pauseConsoleButton" type="button">
+              <svg><use href="#icon-pause"></use></svg>
+              <span>Pause</span>
+            </button>
             <button class="text-button" id="copyConsoleButton" type="button">
               <svg><use href="#icon-note"></use></svg>
               Copy

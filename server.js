@@ -21,6 +21,8 @@ const MAX_ISO_SIZE_BYTES = Number(process.env.MAX_ISO_SIZE_BYTES || 8 * 1024 * 1
 const MAX_LOG_BATCH_ENTRIES = 1000;
 const MAX_LOG_READ_BYTES = 1024 * 1024;
 const MAX_LOG_TAIL_ENTRIES = 1000;
+const MAX_LOG_FILE_BYTES = Number(process.env.MAX_LOG_FILE_BYTES || 8 * 1024 * 1024);
+const MAX_LOG_FILE_KEEP_BYTES = Math.max(1024, Math.floor(MAX_LOG_FILE_BYTES / 2));
 
 const app = express();
 
@@ -317,6 +319,73 @@ async function readLogChunk(filePath, query) {
   }
 }
 
+async function trimLogFileIfNeeded(filePath) {
+  let stat;
+
+  try {
+    stat = await fsp.stat(filePath);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return;
+    }
+
+    throw error;
+  }
+
+  if (stat.size <= MAX_LOG_FILE_BYTES) {
+    return;
+  }
+
+  const keepBytes = Math.min(MAX_LOG_FILE_KEEP_BYTES, stat.size);
+  const handle = await fsp.open(filePath, 'r');
+  let text;
+
+  try {
+    const buffer = Buffer.alloc(keepBytes);
+    const result = await handle.read(buffer, 0, keepBytes, stat.size - keepBytes);
+    text = buffer.subarray(0, result.bytesRead).toString('utf8');
+  } finally {
+    await handle.close();
+  }
+
+  const firstNewline = text.indexOf('\n');
+
+  if (firstNewline !== -1) {
+    text = text.slice(firstNewline + 1);
+  }
+
+  const trimEntry = normalizeLogEntry({
+    source: 'launcher',
+    level: 'warn',
+    message: `Log file was trimmed after exceeding ${formatBytes(MAX_LOG_FILE_BYTES)}.`,
+    detail: `Kept latest ${formatBytes(keepBytes)} of ${formatBytes(stat.size)}.`
+  });
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.trim`;
+
+  await fsp.writeFile(tmpPath, `${JSON.stringify(trimEntry)}\n${text}`, 'utf8');
+  await fsp.rename(tmpPath, filePath);
+}
+
+async function appendLogEntries(sessionId, entries) {
+  const filePath = logPathFor(sessionId);
+  const lines = entries.map((entry) => JSON.stringify(normalizeLogEntry(entry))).join('\n');
+  await fsp.appendFile(filePath, `${lines}\n`, 'utf8');
+  await trimLogFileIfNeeded(filePath);
+}
+
+function formatBytes(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
 function publicGame(game) {
   const output = {
     id: game.id,
@@ -369,7 +438,8 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     enginePresent: fs.existsSync(path.join(ENGINE_DIR, 'index.html')),
-    maxIsoSizeBytes: MAX_ISO_SIZE_BYTES
+    maxIsoSizeBytes: MAX_ISO_SIZE_BYTES,
+    maxLogFileBytes: MAX_LOG_FILE_BYTES
   });
 });
 
@@ -455,7 +525,6 @@ app.delete('/api/notes/:id', async (req, res, next) => {
 app.post('/api/logs/sessions', async (req, res, next) => {
   try {
     const sessionId = createLogSessionId();
-    const filePath = logPathFor(sessionId);
     const title = boundedString(req.body && req.body.title, 120) || 'Reksio UI session';
     const gameId = boundedString(req.body && req.body.gameId, 120);
     const initialEntry = normalizeLogEntry({
@@ -465,7 +534,7 @@ app.post('/api/logs/sessions', async (req, res, next) => {
       detail: gameId ? `game: ${gameId}\ntitle: ${title}` : `title: ${title}`
     });
 
-    await fsp.appendFile(filePath, `${JSON.stringify(initialEntry)}\n`, 'utf8');
+    await appendLogEntries(sessionId, [initialEntry]);
     res.status(201).json({ sessionId });
   } catch (error) {
     next(error);
@@ -486,8 +555,7 @@ app.post('/api/logs/:id', async (req, res, next) => {
       throw Object.assign(new Error(`Log batch too large. Maximum is ${MAX_LOG_BATCH_ENTRIES}.`), { statusCode: 413 });
     }
 
-    const lines = entries.map((entry) => JSON.stringify(normalizeLogEntry(entry))).join('\n');
-    await fsp.appendFile(logPathFor(sessionId), `${lines}\n`, 'utf8');
+    await appendLogEntries(sessionId, entries);
     res.json({ ok: true, written: entries.length });
   } catch (error) {
     next(error);
