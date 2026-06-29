@@ -1,12 +1,12 @@
 # Reksio UI
 
-Self-hosted browser launcher for a local ReksioEngine checkout.
+Self-hosted browser launcher for a vendored ReksioEngine build.
 
-The app builds the local `./ReksioEngine` web player into the Docker image, serves a launcher UI, and stores user-added ISO games in a persistent data volume. Custom local ISOs for Romanian, English, Turkish, Polish, and other language ports can be uploaded from the browser.
+The app builds the bundled `./ReksioEngine` web player into the Docker image, serves a launcher UI, and stores user-added ISO games in a persistent data volume. Custom local ISOs for Romanian, English, Turkish, Polish, and other language ports can be uploaded from the browser.
 
 ## Run with Docker
 
-Place or clone the engine source at:
+The engine source is included in:
 
 ```text
 ReksioEngine/
@@ -15,7 +15,7 @@ ReksioEngine/
   src/
 ```
 
-Then build and run:
+Build and run:
 
 ```sh
 docker compose up --build
@@ -53,7 +53,9 @@ The server supports HTTP Range requests so the engine can read the ISO without d
 
 ## Local Working Files
 
-`./ReksioEngine` and `./ISOs` are intentionally ignored by the UI repository. The engine checkout is a local development dependency, and the ISO folder is for private disc images used while testing compatibility.
+`./ReksioEngine` is vendored source and is required by the Docker build. Its local `.git`, `.github`, `node_modules`, and `dist` folders are ignored.
+
+`./ISOs` is intentionally ignored by the UI repository. Use it for private disc images while testing compatibility.
 
 Current local ISO focus:
 

@@ -2,7 +2,11 @@ node_modules/
 data/
 ISOs/
 public/engine/
-ReksioEngine/
+ReksioEngine/.git/
+ReksioEngine/.github/
+ReksioEngine/.husky/
+ReksioEngine/node_modules/
+ReksioEngine/dist/
 tmp/
 .env
 npm-debug.log*
