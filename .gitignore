@@ -1,5 +1,8 @@
 node_modules/
 data/
+ISOs/
+public/engine/
+ReksioEngine/
 tmp/
 .env
 npm-debug.log*

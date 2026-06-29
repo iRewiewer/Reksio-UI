@@ -173,25 +173,20 @@
           </button>
         </header>
 
-        <div class="dialog-tabs" role="tablist" aria-label="Import type">
-          <button class="dialog-tab active" type="button" data-tab="iso">ISO upload</button>
-          <button class="dialog-tab" type="button" data-tab="github">GitHub source</button>
-        </div>
-
         <form id="isoForm" class="dialog-pane active">
           <label class="field">
             <span>Title</span>
-            <input name="title" id="isoTitleInput" type="text" placeholder="Reksio Romanian edition" />
+            <input name="title" id="isoTitleInput" type="text" placeholder="Reksio custom edition" />
           </label>
 
           <div class="field-grid">
             <label class="field">
               <span>Language</span>
-              <input name="language" type="text" value="Romanian" />
+              <input name="language" type="text" value="Custom" />
             </label>
             <label class="field">
               <span>Locale</span>
-              <input name="locale" type="text" value="ro" />
+              <input name="locale" type="text" value="custom" />
             </label>
           </div>
 
@@ -203,7 +198,7 @@
 
           <label class="field">
             <span>Notes</span>
-            <textarea name="notes" rows="3" placeholder="Romanian disc, fan translation, version notes"></textarea>
+            <textarea name="notes" rows="3" placeholder="Disc language, version, translation status"></textarea>
           </label>
 
           <div class="progress-track" aria-hidden="true">
@@ -215,42 +210,6 @@
             <button class="tool-button primary" type="submit">
               <svg><use href="#icon-upload"></use></svg>
               Upload ISO
-            </button>
-          </div>
-        </form>
-
-        <form id="githubForm" class="dialog-pane">
-          <label class="field">
-            <span>Title</span>
-            <input name="title" type="text" placeholder="Reksio custom branch" />
-          </label>
-
-          <label class="field">
-            <span>GamesFiles source</span>
-            <input name="source" type="text" placeholder="reksioiskarbpiratow" required />
-          </label>
-
-          <div class="field-grid">
-            <label class="field">
-              <span>Language</span>
-              <input name="language" type="text" value="Polish" />
-            </label>
-            <label class="field">
-              <span>Locale</span>
-              <input name="locale" type="text" value="pl" />
-            </label>
-          </div>
-
-          <label class="field">
-            <span>Notes</span>
-            <textarea name="notes" rows="3" placeholder="Branch, mirror, or asset source details"></textarea>
-          </label>
-
-          <div class="dialog-footer">
-            <span class="form-status" id="githubFormStatus"></span>
-            <button class="tool-button primary" type="submit">
-              <svg><use href="#icon-link"></use></svg>
-              Add Source
             </button>
           </div>
         </form>

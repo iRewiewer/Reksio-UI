@@ -2,8 +2,6 @@ services:
   reksio:
     build:
       context: .
-      args:
-        REKSIOENGINE_REF: master
     image: reksio-ui:local
     container_name: reksio-ui
     restart: unless-stopped

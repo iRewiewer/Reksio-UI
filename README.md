@@ -1,10 +1,21 @@
 # Reksio UI
 
-Self-hosted browser launcher for [ReksioEngine](https://github.com/ReksioEngine/ReksioEngine).
+Self-hosted browser launcher for a local ReksioEngine checkout.
 
-The app builds the current ReksioEngine web player into the Docker image, serves a launcher UI, and stores user-added ISO games in a persistent data volume. Bundled Polish GitHub games remain available, and custom local ISOs for other language ports can be uploaded from the browser.
+The app builds the local `./ReksioEngine` web player into the Docker image, serves a launcher UI, and stores user-added ISO games in a persistent data volume. Custom local ISOs for Romanian, English, Turkish, Polish, and other language ports can be uploaded from the browser.
 
 ## Run with Docker
+
+Place or clone the engine source at:
+
+```text
+ReksioEngine/
+  package.json
+  yarn.lock
+  src/
+```
+
+Then build and run:
 
 ```sh
 docker compose up --build
@@ -19,6 +30,8 @@ data/
   games.json
   games/
     <game-id>/game.iso
+  logs/
+    <session-id>.ndjson
 ```
 
 On startup, the container prepares the mounted data directory so uploaded games can be written by the app.
@@ -27,8 +40,8 @@ On startup, the container prepares the mounted data directory so uploaded games 
 
 1. Open the launcher.
 2. Click the add button in the library header.
-3. Keep `ISO upload` selected.
-4. Choose or drop a `.iso` file, set the title/language, and upload.
+3. Choose or drop a `.iso` file.
+4. Set the title/language fields and upload.
 
 The launcher stores the ISO locally and starts ReksioEngine with:
 
@@ -38,9 +51,25 @@ The launcher stores the ISO locally and starts ReksioEngine with:
 
 The server supports HTTP Range requests so the engine can read the ISO without downloading the entire image up front.
 
-## Add another GitHub source
+## Local Working Files
 
-Use the `GitHub source` tab and enter a source name from `ReksioEngine/GamesFiles`. The launcher starts those games with the engine's existing GitHub loader.
+`./ReksioEngine` and `./ISOs` are intentionally ignored by the UI repository. The engine checkout is a local development dependency, and the ISO folder is for private disc images used while testing compatibility.
+
+Current local ISO focus:
+
+1. `Reksio si Magicienii.iso`
+2. `Reksio si Comoara Piratilor.iso`
+3. `Reksio si OZN-ul.iso`
+4. `Reksio si Masina Timpului.iso`
+5. `Reksio si Capitanul Nemo.iso`
+
+Release order reference:
+
+1. `Piratilor`
+2. `OZN-ul`
+3. `Magicienii`
+4. `Masina Timpului`
+5. `Capitanul Nemo`
 
 ## Configuration
 
@@ -49,22 +78,16 @@ Environment variables:
 | Name | Default | Purpose |
 | --- | --- | --- |
 | `PORT` | `3030` | HTTP port inside the container |
-| `REKSIO_DATA_DIR` | `/data` | Persistent metadata and uploaded ISO directory |
+| `REKSIO_DATA_DIR` | `/data` | Persistent metadata, logs, and uploaded ISO directory |
 | `MAX_ISO_SIZE_BYTES` | `8589934592` | Upload limit, default 8 GB |
 
-Build argument:
+## Local Development
 
-| Name | Default | Purpose |
-| --- | --- | --- |
-| `REKSIOENGINE_REF` | `master` | Git ref used to build `ReksioEngine` |
-
-## Local development
-
-Install dependencies and start the server:
+Install dependencies and start the launcher server:
 
 ```sh
 npm install
 npm start
 ```
 
-Local development serves the launcher and APIs. The `/engine` route is populated by the Docker build from `ReksioEngine`; for full game playback outside Docker, copy or build the engine output into `public/engine`.
+Local development serves the launcher and APIs. The `/engine` route is populated by the Docker build from `./ReksioEngine`; for full game playback outside Docker, build the engine and copy its app output into `public/engine`.

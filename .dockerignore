@@ -1,5 +1,11 @@
 .git
 node_modules
 data
+ISOs
+public/engine
+ReksioEngine/.github
+ReksioEngine/.git
+ReksioEngine/dist
+ReksioEngine/node_modules
 tmp
 npm-debug.log*

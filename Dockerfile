@@ -1,17 +1,8 @@
 FROM node:22-alpine AS engine-build
 
-ARG REKSIOENGINE_REPO=https://github.com/ReksioEngine/ReksioEngine.git
-ARG REKSIOENGINE_REF=master
-
 WORKDIR /engine
 
-RUN apk add --no-cache git
-RUN git clone --depth 1 "${REKSIOENGINE_REPO}" . \
-    && git fetch --depth 1 origin "${REKSIOENGINE_REF}" \
-    && git checkout FETCH_HEAD
-
-COPY patches/reksioengine-console.patch /tmp/reksioengine-console.patch
-RUN git apply /tmp/reksioengine-console.patch
+COPY ReksioEngine ./
 
 ENV HUSKY=0
 

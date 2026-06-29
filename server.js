@@ -22,35 +22,6 @@ const MAX_LOG_BATCH_ENTRIES = 1000;
 const MAX_LOG_READ_BYTES = 1024 * 1024;
 const MAX_LOG_TAIL_ENTRIES = 1000;
 
-const BUILTIN_GAMES = [
-  {
-    id: 'reksio-pirates-pl',
-    title: 'Reksio and the Pirates',
-    originalTitle: 'Reksio i Skarb Piratow',
-    type: 'github',
-    source: 'reksioiskarbpiratow',
-    language: 'Polish',
-    locale: 'pl',
-    notes: 'Bundled GitHub source from ReksioEngine/GamesFiles.',
-    builtin: true,
-    createdAt: null,
-    updatedAt: null
-  },
-  {
-    id: 'reksio-ufo-pl',
-    title: 'Reksio and the UFO',
-    originalTitle: 'Reksio i UFO',
-    type: 'github',
-    source: 'reksioiufo',
-    language: 'Polish',
-    locale: 'pl',
-    notes: 'Bundled GitHub source from ReksioEngine/GamesFiles.',
-    builtin: true,
-    createdAt: null,
-    updatedAt: null
-  }
-];
-
 const app = express();
 
 app.disable('x-powered-by');
@@ -138,7 +109,7 @@ async function readUserGames() {
     throw new Error('Game metadata file is not an array.');
   }
 
-  return parsed.map((game) => ({ ...game, builtin: false }));
+  return parsed.filter((game) => game && game.type === 'iso');
 }
 
 async function writeUserGames(games) {
@@ -171,8 +142,7 @@ async function writeNotes(notes) {
 }
 
 async function getAllGames() {
-  const userGames = await readUserGames();
-  return [...BUILTIN_GAMES, ...userGames];
+  return readUserGames();
 }
 
 function publicNote(note) {
@@ -357,7 +327,6 @@ function publicGame(game) {
     language: game.language || 'Custom',
     locale: game.locale || 'custom',
     notes: game.notes || '',
-    builtin: Boolean(game.builtin),
     createdAt: game.createdAt || null,
     updatedAt: game.updatedAt || null,
     size: game.size || null,
@@ -369,18 +338,6 @@ function publicGame(game) {
   }
 
   return output;
-}
-
-function validateGithubSource(source) {
-  const cleaned = textValue(source);
-
-  if (!cleaned || cleaned.length > 160 || !/^[A-Za-z0-9._/-]+$/.test(cleaned)) {
-    throw Object.assign(new Error('GitHub source must be a ReksioEngine/GamesFiles branch or path name.'), {
-      statusCode: 400
-    });
-  }
-
-  return cleaned;
 }
 
 const upload = multer({
@@ -581,8 +538,8 @@ app.post('/api/games', upload.single('iso'), async (req, res, next) => {
 
     const defaultTitle = path.basename(req.file.originalname, path.extname(req.file.originalname));
     const title = textValue(req.body.title, defaultTitle);
-    const language = textValue(req.body.language, 'Romanian');
-    const locale = normalizeLocale(req.body.locale, language.toLowerCase().startsWith('romanian') ? 'ro' : 'custom');
+    const language = textValue(req.body.language, 'Custom');
+    const locale = normalizeLocale(req.body.locale, 'custom');
     const notes = textValue(req.body.notes);
     const id = createGameId(title);
     const gameDir = path.join(GAMES_DIR, id);
@@ -623,43 +580,9 @@ app.post('/api/games', upload.single('iso'), async (req, res, next) => {
   }
 });
 
-app.post('/api/games/github', async (req, res, next) => {
-  try {
-    const source = validateGithubSource(req.body.source);
-    const title = textValue(req.body.title, source);
-    const language = textValue(req.body.language, 'Polish');
-    const locale = normalizeLocale(req.body.locale, language.toLowerCase().startsWith('polish') ? 'pl' : 'custom');
-    const now = new Date().toISOString();
-    const game = {
-      id: createGameId(title),
-      title,
-      originalTitle: textValue(req.body.originalTitle),
-      type: 'github',
-      source,
-      language,
-      locale,
-      notes: textValue(req.body.notes),
-      createdAt: now,
-      updatedAt: now
-    };
-
-    const games = await readUserGames();
-    games.push(game);
-    await writeUserGames(games);
-
-    res.status(201).json({ game: publicGame(game) });
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.delete('/api/games/:id', async (req, res, next) => {
   try {
     const id = req.params.id;
-
-    if (BUILTIN_GAMES.some((game) => game.id === id)) {
-      throw Object.assign(new Error('Bundled games cannot be removed.'), { statusCode: 403 });
-    }
 
     const games = await readUserGames();
     const index = games.findIndex((game) => game.id === id);

@@ -43,8 +43,6 @@ const nodes = {
   fullscreenButton: document.getElementById('fullscreenButton'),
   gameFrame: document.getElementById('gameFrame'),
   gameList: document.getElementById('gameList'),
-  githubForm: document.getElementById('githubForm'),
-  githubFormStatus: document.getElementById('githubFormStatus'),
   isoDropZone: document.getElementById('isoDropZone'),
   isoFileInput: document.getElementById('isoFileInput'),
   isoFileLabel: document.getElementById('isoFileLabel'),
@@ -475,7 +473,7 @@ function formatBytes(bytes) {
 
 function formatDate(value) {
   if (!value) {
-    return 'Bundled';
+    return 'Unknown';
   }
 
   return new Intl.DateTimeFormat(undefined, {
@@ -499,7 +497,7 @@ function sourceLabel(game) {
     return 'Local ISO';
   }
 
-  return game.builtin ? 'Bundled GitHub' : 'GitHub source';
+  return 'Unsupported source';
 }
 
 function languageCode(game) {
@@ -507,15 +505,13 @@ function languageCode(game) {
 }
 
 function buildLaunchUrl(game) {
-  const params = new URLSearchParams();
-
-  if (game.type === 'iso') {
-    params.set('loader', 'iso-remote');
-    params.set('source', absoluteUrl(game.isoUrl));
-  } else {
-    params.set('loader', 'github');
-    params.set('source', game.source);
+  if (game.type !== 'iso') {
+    throw new Error(`Unsupported game type: ${game.type}`);
   }
+
+  const params = new URLSearchParams();
+  params.set('loader', 'iso-remote');
+  params.set('source', absoluteUrl(game.isoUrl));
 
   return `/engine/?${params.toString()}`;
 }
@@ -731,7 +727,6 @@ function filteredGames() {
       !term ||
       game.title.toLowerCase().includes(term) ||
       (game.originalTitle || '').toLowerCase().includes(term) ||
-      (game.source || '').toLowerCase().includes(term) ||
       game.language.toLowerCase().includes(term);
 
     return matchesFilter && matchesSearch;
@@ -749,8 +744,6 @@ function renderGames() {
   nodes.gameList.innerHTML = games
     .map((game) => {
       const active = game.id === state.selectedId ? ' active' : '';
-      const userTag = game.builtin ? '' : '<span class="mini-tag">Added</span>';
-
       return `
         <button class="game-item${active}" type="button" data-game-id="${game.id}">
           <span class="game-avatar">${initials(game.title)}</span>
@@ -758,7 +751,7 @@ function renderGames() {
             <span class="game-title">${escapeHtml(game.title)}</span>
             <span class="game-meta">${escapeHtml(languageCode(game))} - ${escapeHtml(sourceLabel(game))}</span>
           </span>
-          ${userTag}
+          <span class="mini-tag">ISO</span>
         </button>
       `;
     })
@@ -794,7 +787,7 @@ function renderDetails() {
   nodes.selectedSource.textContent = sourceLabel(game);
   nodes.selectedBadges.innerHTML = `
     <span class="badge">${escapeHtml(languageCode(game))}</span>
-    <span class="badge">${game.type === 'iso' ? 'ISO' : 'GitHub'}</span>
+    <span class="badge">ISO</span>
   `;
   nodes.detailTitle.textContent = game.title;
   nodes.detailNotes.textContent = game.notes || game.originalTitle || sourceLabel(game);
@@ -802,9 +795,9 @@ function renderDetails() {
 
   const rows = [
     ['Source', sourceLabel(game)],
-    ['Stored size', game.type === 'iso' ? formatBytes(game.size) : 'Remote assets'],
+    ['Stored size', formatBytes(game.size)],
     ['Added', formatDate(game.createdAt)],
-    ['Identifier', game.type === 'iso' ? game.originalFilename || game.id : game.source]
+    ['Identifier', game.originalFilename || game.id]
   ];
 
   nodes.metaList.innerHTML = rows
@@ -817,7 +810,7 @@ function renderDetails() {
   nodes.openRawButton.disabled = false;
   nodes.fullscreenButton.disabled = false;
   nodes.resetSaveButton.disabled = false;
-  nodes.deleteGameButton.disabled = game.builtin;
+  nodes.deleteGameButton.disabled = false;
 }
 
 function escapeHtml(value) {
@@ -932,16 +925,12 @@ async function loadGames(preferredId) {
 
 function openDialog() {
   nodes.isoForm.reset();
-  nodes.githubForm.reset();
-  nodes.githubForm.querySelector('[name="language"]').value = 'Polish';
-  nodes.githubForm.querySelector('[name="locale"]').value = 'pl';
-  nodes.isoForm.querySelector('[name="language"]').value = 'Romanian';
-  nodes.isoForm.querySelector('[name="locale"]').value = 'ro';
+  nodes.isoForm.querySelector('[name="language"]').value = 'Custom';
+  nodes.isoForm.querySelector('[name="locale"]').value = 'custom';
   selectedIsoFile = null;
   nodes.isoFileLabel.textContent = 'Select ISO file';
   nodes.uploadProgress.style.width = '0%';
   nodes.isoFormStatus.textContent = '';
-  nodes.githubFormStatus.textContent = '';
   setDialogTab('iso');
   nodes.addGameDialog.showModal();
 }
@@ -1023,35 +1012,10 @@ function uploadIso(event) {
   request.send(formData);
 }
 
-async function addGithubSource(event) {
-  event.preventDefault();
-  nodes.githubFormStatus.textContent = 'Adding';
-
-  try {
-    const formData = new FormData(nodes.githubForm);
-    const body = Object.fromEntries(formData.entries());
-    const result = await apiFetch('/api/games/github', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
-
-    nodes.githubFormStatus.textContent = 'Added';
-    nodes.addGameDialog.close();
-    await loadGames(result.game.id);
-    selectGame(result.game.id, true);
-  } catch (error) {
-    addLog('launcher', 'error', 'Failed to add GitHub source', error);
-    nodes.githubFormStatus.textContent = error.message;
-  }
-}
-
 async function deleteSelectedGame() {
   const game = getSelectedGame();
 
-  if (!game || game.builtin) {
+  if (!game) {
     return;
   }
 
@@ -1164,7 +1128,6 @@ nodes.isoDropZone.addEventListener('drop', (event) => {
 });
 
 nodes.isoForm.addEventListener('submit', uploadIso);
-nodes.githubForm.addEventListener('submit', addGithubSource);
 nodes.playButton.addEventListener('click', loadSelectedGame);
 nodes.openRawButton.addEventListener('click', () => {
   if (nodes.gameFrame.src) {
