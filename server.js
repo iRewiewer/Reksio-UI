@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
@@ -16,18 +17,29 @@ const LOGS_DIR = path.join(DATA_DIR, 'logs');
 const META_PATH = path.join(DATA_DIR, 'games.json');
 const NOTES_PATH = path.join(DATA_DIR, 'notes.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const ENGINE_DIR = path.join(PUBLIC_DIR, 'engine');
+const STATIC_ENGINE_DIR = path.join(PUBLIC_DIR, 'engine');
+const LOCAL_ENGINE_DIR = path.join(__dirname, 'ReksioEngine', 'dist', 'app');
+const ENGINE_DIR = resolveEngineDir();
 const MAX_ISO_SIZE_BYTES = Number(process.env.MAX_ISO_SIZE_BYTES || 8 * 1024 * 1024 * 1024);
 const MAX_LOG_BATCH_ENTRIES = 1000;
 const MAX_LOG_READ_BYTES = 1024 * 1024;
 const MAX_LOG_TAIL_ENTRIES = 1000;
 const MAX_LOG_FILE_BYTES = Number(process.env.MAX_LOG_FILE_BYTES || 8 * 1024 * 1024);
 const MAX_LOG_FILE_KEEP_BYTES = Math.max(1024, Math.floor(MAX_LOG_FILE_BYTES / 2));
+const MAX_SCREENSHOT_BYTES = Number(process.env.MAX_SCREENSHOT_BYTES || 10 * 1024 * 1024);
+const EXTRACTOR_COMMAND = process.env.REKSIO_EXTRACTOR || '7z';
+const EXTRACTED_FILES_DIR_NAME = 'files';
+const EXTRACT_MARKER_FILENAME = '.reksio-extract.json';
 
 const app = express();
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '2mb' }));
+
+const parsePngScreenshot = express.raw({
+  type: 'image/png',
+  limit: MAX_SCREENSHOT_BYTES
+});
 
 function textValue(value, fallback = '') {
   if (typeof value !== 'string') {
@@ -36,6 +48,30 @@ function textValue(value, fallback = '') {
 
   const cleaned = value.replace(/\s+/g, ' ').trim();
   return cleaned || fallback;
+}
+
+function hasEngineBundle(directory) {
+  return fs.existsSync(path.join(directory, 'index.html'));
+}
+
+function resolveEngineDir() {
+  if (process.env.REKSIO_ENGINE_DIR) {
+    return path.resolve(process.env.REKSIO_ENGINE_DIR);
+  }
+
+  if (hasEngineBundle(LOCAL_ENGINE_DIR)) {
+    return LOCAL_ENGINE_DIR;
+  }
+
+  return STATIC_ENGINE_DIR;
+}
+
+function getEngineUpdatedAt() {
+  try {
+    return fs.statSync(path.join(ENGINE_DIR, 'main.js')).mtime.toISOString();
+  } catch {
+    return null;
+  }
 }
 
 function slugify(value) {
@@ -81,6 +117,18 @@ function hasNoteContent(body) {
 
 function isoPathFor(game) {
   return path.join(GAMES_DIR, game.id, game.isoFile || 'game.iso');
+}
+
+function gameDirFor(game) {
+  return path.join(GAMES_DIR, game.id);
+}
+
+function extractedFilesDirFor(game) {
+  return path.join(gameDirFor(game), EXTRACTED_FILES_DIR_NAME);
+}
+
+function extractMarkerPathFor(game) {
+  return path.join(extractedFilesDirFor(game), EXTRACT_MARKER_FILENAME);
 }
 
 async function ensureDataDirs() {
@@ -188,6 +236,169 @@ function logPathFor(sessionId) {
 
   if (!resolvedPath.startsWith(`${resolvedLogsDir}${path.sep}`)) {
     throw Object.assign(new Error('Invalid log session path.'), { statusCode: 400 });
+  }
+
+  return resolvedPath;
+}
+
+function createLogExportId(sessionId) {
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}z$/i, 'z');
+  return `${validateLogSessionId(sessionId)}-export-${timestamp.toLowerCase()}`;
+}
+
+function exportLogPath(value) {
+  const exportId = textValue(value).toLowerCase();
+
+  if (!/^[a-z0-9][a-z0-9-]{2,120}$/.test(exportId)) {
+    throw Object.assign(new Error('Invalid log export id.'), { statusCode: 400 });
+  }
+
+  const resolvedLogsDir = path.resolve(LOGS_DIR);
+  const resolvedPath = path.resolve(resolvedLogsDir, exportId);
+
+  if (!resolvedPath.startsWith(`${resolvedLogsDir}${path.sep}`)) {
+    throw Object.assign(new Error('Invalid log export path.'), { statusCode: 400 });
+  }
+
+  return resolvedPath;
+}
+
+function displayDataPath(filePath) {
+  return path.posix.join('data', path.relative(DATA_DIR, filePath).split(path.sep).join('/'));
+}
+
+function normalizeAssetPath(filePath) {
+  return filePath.split(path.sep).join('/').replace(/^\/+/, '').toLowerCase();
+}
+
+function encodeAssetPath(filePath) {
+  return filePath.split(path.sep).map(encodeURIComponent).join('/');
+}
+
+function runExtractor(isoPath, outputDir) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(EXTRACTOR_COMMAND, ['x', '-y', `-o${outputDir}`, isoPath], {
+      windowsHide: true
+    });
+    let stdout = '';
+    let stderr = '';
+    const appendBounded = (current, chunk) => `${current}${chunk}`.slice(-12000);
+
+    child.stdout.on('data', (chunk) => {
+      stdout = appendBounded(stdout, chunk.toString());
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = appendBounded(stderr, chunk.toString());
+    });
+    child.on('error', (error) => {
+      reject(
+        Object.assign(
+          new Error(
+            `ISO extraction failed because '${EXTRACTOR_COMMAND}' could not be started. Install 7-Zip or set REKSIO_EXTRACTOR.`
+          ),
+          { statusCode: 500, cause: error }
+        )
+      );
+    });
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(
+        Object.assign(new Error(`ISO extraction failed with exit code ${code}.\n${stderr || stdout}`.trim()), {
+          statusCode: 500
+        })
+      );
+    });
+  });
+}
+
+async function hasExtractedGame(game) {
+  const markerPath = extractMarkerPathFor(game);
+
+  try {
+    await fsp.access(markerPath, fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function extractGameAssets(game) {
+  const gameDir = gameDirFor(game);
+  const extractDir = extractedFilesDirFor(game);
+  const tempExtractDir = path.join(gameDir, `${EXTRACTED_FILES_DIR_NAME}.tmp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`);
+  const marker = {
+    extractedAt: new Date().toISOString(),
+    extractor: EXTRACTOR_COMMAND
+  };
+
+  await fsp.rm(tempExtractDir, { recursive: true, force: true });
+  await fsp.mkdir(tempExtractDir, { recursive: true });
+
+  try {
+    await runExtractor(isoPathFor(game), tempExtractDir);
+    await fsp.rm(extractDir, { recursive: true, force: true });
+    await fsp.rename(tempExtractDir, extractDir);
+    await fsp.writeFile(extractMarkerPathFor(game), `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+    return marker;
+  } catch (error) {
+    await fsp.rm(tempExtractDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function requireExtractedGame(game) {
+  if (await hasExtractedGame(game)) {
+    return;
+  }
+
+  throw Object.assign(new Error('Game assets are not extracted. Re-upload this ISO to extract it during upload.'), {
+    statusCode: 409
+  });
+}
+
+async function buildExtractedListing(game) {
+  await requireExtractedGame(game);
+
+  const rootDir = extractedFilesDirFor(game);
+  const listing = {};
+  const walk = async (directory) => {
+    const entries = await fsp.readdir(directory, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (entry.name === EXTRACT_MARKER_FILENAME) {
+        continue;
+      }
+
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const relativePath = path.relative(rootDir, fullPath);
+      const normalizedPath = normalizeAssetPath(relativePath);
+      listing[normalizedPath] = `/api/games/${encodeURIComponent(game.id)}/files/${encodeAssetPath(relativePath)}`;
+    }
+  };
+
+  await walk(rootDir);
+  return listing;
+}
+
+function resolveExtractedAssetPath(game, requestedPath) {
+  const rootDir = path.resolve(extractedFilesDirFor(game));
+  const resolvedPath = path.resolve(rootDir, requestedPath || '');
+
+  if (resolvedPath !== rootDir && !resolvedPath.startsWith(`${rootDir}${path.sep}`)) {
+    throw Object.assign(new Error('Invalid asset path.'), { statusCode: 400 });
   }
 
   return resolvedPath;
@@ -399,11 +610,14 @@ function publicGame(game) {
     createdAt: game.createdAt || null,
     updatedAt: game.updatedAt || null,
     size: game.size || null,
-    originalFilename: game.originalFilename || ''
+    originalFilename: game.originalFilename || '',
+    assetsReady: Boolean(game.assetsReady || game.extractedAt),
+    extractedAt: game.extractedAt || null
   };
 
   if (game.type === 'iso') {
     output.isoUrl = `/api/games/${encodeURIComponent(game.id)}/iso`;
+    output.listingUrl = `/api/games/${encodeURIComponent(game.id)}/listing`;
   }
 
   return output;
@@ -437,7 +651,10 @@ const upload = multer({
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    enginePresent: fs.existsSync(path.join(ENGINE_DIR, 'index.html')),
+    enginePresent: hasEngineBundle(ENGINE_DIR),
+    engineDir: ENGINE_DIR,
+    engineUpdatedAt: getEngineUpdatedAt(),
+    extractorCommand: EXTRACTOR_COMMAND,
     maxIsoSizeBytes: MAX_ISO_SIZE_BYTES,
     maxLogFileBytes: MAX_LOG_FILE_BYTES
   });
@@ -577,6 +794,44 @@ app.get('/api/logs/:id/download', async (req, res, next) => {
   }
 });
 
+app.post('/api/logs/:id/export', parsePngScreenshot, async (req, res, next) => {
+  try {
+    const sessionId = validateLogSessionId(req.params.id);
+    const filePath = logPathFor(sessionId);
+    await fsp.access(filePath, fs.constants.F_OK);
+
+    const exportId = createLogExportId(sessionId);
+    const exportDir = exportLogPath(exportId);
+    const logExportPath = path.join(exportDir, 'console.ndjson');
+    const files = [displayDataPath(logExportPath)];
+
+    await fsp.mkdir(exportDir, { recursive: true });
+    await fsp.copyFile(filePath, logExportPath);
+
+    let screenshotPath = null;
+    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+      screenshotPath = path.join(exportDir, 'screenshot.png');
+      await fsp.writeFile(screenshotPath, req.body);
+      files.push(displayDataPath(screenshotPath));
+    }
+
+    res.status(201).json({
+      ok: true,
+      exportId,
+      exportDir: displayDataPath(exportDir),
+      files,
+      screenshotSaved: Boolean(screenshotPath)
+    });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      next(Object.assign(new Error('Log session not found.'), { statusCode: 404 }));
+      return;
+    }
+
+    next(error);
+  }
+});
+
 app.get('/api/logs/:id', async (req, res, next) => {
   try {
     const filePath = logPathFor(req.params.id);
@@ -598,6 +853,7 @@ app.delete('/api/logs/:id', async (req, res, next) => {
 
 app.post('/api/games', upload.single('iso'), async (req, res, next) => {
   let tempPath = req.file && req.file.path;
+  let gameDirToCleanup = null;
 
   try {
     if (!req.file) {
@@ -612,6 +868,7 @@ app.post('/api/games', upload.single('iso'), async (req, res, next) => {
     const id = createGameId(title);
     const gameDir = path.join(GAMES_DIR, id);
     const targetPath = path.join(gameDir, 'game.iso');
+    gameDirToCleanup = gameDir;
 
     await fsp.mkdir(gameDir, { recursive: true });
     await fsp.rename(req.file.path, targetPath);
@@ -630,18 +887,30 @@ app.post('/api/games', upload.single('iso'), async (req, res, next) => {
       notes,
       originalFilename: req.file.originalname,
       size: stat.size,
+      assetsReady: false,
+      extractedAt: null,
       createdAt: now,
       updatedAt: now
     };
 
+    const extraction = await extractGameAssets(game);
+    game.assetsReady = true;
+    game.extractedAt = extraction.extractedAt;
+    game.updatedAt = new Date().toISOString();
+
     const games = await readUserGames();
     games.push(game);
     await writeUserGames(games);
+    gameDirToCleanup = null;
 
     res.status(201).json({ game: publicGame(game) });
   } catch (error) {
     if (tempPath) {
       fsp.unlink(tempPath).catch(() => {});
+    }
+
+    if (gameDirToCleanup) {
+      fsp.rm(gameDirToCleanup, { recursive: true, force: true }).catch(() => {});
     }
 
     next(error);
@@ -746,12 +1015,70 @@ app.get('/api/games/:id/iso', async (req, res, next) => {
   }
 });
 
+app.get('/api/games/:id/listing', async (req, res, next) => {
+  try {
+    const games = await readUserGames();
+    const game = games.find((entry) => entry.id === req.params.id && entry.type === 'iso');
+
+    if (!game) {
+      throw Object.assign(new Error('ISO game not found.'), { statusCode: 404 });
+    }
+
+    const listing = await buildExtractedListing(game);
+    res.set({
+      'Cache-Control': 'private, max-age=0'
+    });
+    res.json(listing);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/games/:id/files/*', async (req, res, next) => {
+  try {
+    const games = await readUserGames();
+    const game = games.find((entry) => entry.id === req.params.id && entry.type === 'iso');
+
+    if (!game) {
+      throw Object.assign(new Error('ISO game not found.'), { statusCode: 404 });
+    }
+
+    await requireExtractedGame(game);
+
+    const requestedPath = req.params[0] || '';
+    if (path.basename(requestedPath) === EXTRACT_MARKER_FILENAME) {
+      throw Object.assign(new Error('Asset not found.'), { statusCode: 404 });
+    }
+
+    const filePath = resolveExtractedAssetPath(game, requestedPath);
+    const stat = await fsp.stat(filePath);
+
+    if (!stat.isFile()) {
+      throw Object.assign(new Error('Asset not found.'), { statusCode: 404 });
+    }
+
+    res.set({
+      'Cache-Control': 'private, max-age=31536000, immutable'
+    });
+    res.sendFile(filePath);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      next(Object.assign(new Error('Asset not found.'), { statusCode: 404 }));
+      return;
+    }
+
+    next(error);
+  }
+});
+
 app.use('/engine', (req, res, next) => {
-  if (!fs.existsSync(path.join(ENGINE_DIR, 'index.html'))) {
+  if (!hasEngineBundle(ENGINE_DIR)) {
     res
       .status(503)
       .type('text/plain')
-      .send('ReksioEngine bundle is not installed. Build the Docker image or copy the engine output to public/engine.');
+      .send(
+        `ReksioEngine bundle is not installed at ${ENGINE_DIR}. Build the Docker image, run the engine build, or set REKSIO_ENGINE_DIR.`
+      );
     return;
   }
 

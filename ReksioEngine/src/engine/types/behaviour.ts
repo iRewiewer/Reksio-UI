@@ -5,6 +5,7 @@ import { method } from '../../common/types'
 import { assert } from '../../common/errors'
 import { ClassInstance } from './class'
 import { InterruptScriptExecution } from '../../interpreter'
+import { logger } from '../logging'
 
 export class Behaviour extends Type<BehaviourDefinition> {
     async ready() {
@@ -20,6 +21,8 @@ export class Behaviour extends Type<BehaviourDefinition> {
 
     @method()
     async RUN(...args: any[]) {
+        this.engine.diagnostics.behaviour(this, 'RUN')
+
         try {
             await this.executeCallback(args)
         } catch (err) {
@@ -31,7 +34,16 @@ export class Behaviour extends Type<BehaviourDefinition> {
 
     @method()
     async RUNC(...args: any[]) {
-        if (await this.shouldRun()) {
+        const shouldRun = await this.shouldRun()
+        this.engine.diagnostics.behaviour(this, 'RUNC', shouldRun)
+
+        if (this.definition.CONDITION && this.name.toUpperCase().includes('ONCLICK')) {
+            logger.debug(
+                `Click branch '${this.name}' ${shouldRun ? 'matched' : 'skipped'} (${this.definition.CONDITION.objectName})`
+            )
+        }
+
+        if (shouldRun) {
             await this.RUN(...args)
         }
     }

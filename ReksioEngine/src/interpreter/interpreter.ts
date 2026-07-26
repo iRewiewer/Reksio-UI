@@ -97,6 +97,7 @@ export class Interpreter {
     }
 
     async executeStatement(stmt: Statement): Promise<any> {
+        this.context.engine.diagnostics.scriptStatement(this.context.caller, stmt, this.context.script)
         return stmt.type === 'FunctionCall' ? this.executeFunctionCall(stmt) : this.evaluateParameter(stmt)
     }
 
@@ -422,8 +423,11 @@ export class Interpreter {
                 return this.getObject('THIS')
             case 'DirectRef':
                 throw new RuntimeError(`Unsupported ref: ${ref.type}`)
-            case 'Identifier':
-                return this.getObject(ref.name)
+            case 'Identifier': {
+                const object = this.getObject(ref.name)
+                this.context.engine.diagnostics.objectLookup(this.context.caller, ref.name, object !== null)
+                return object
+            }
             case 'IndirectRef':
                 return this.getObject(await this.evaluateParameter(ref.inner))
             default:

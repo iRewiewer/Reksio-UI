@@ -25,7 +25,7 @@ ENV NODE_ENV=production
 ENV PORT=3030
 ENV REKSIO_DATA_DIR=/data
 
-RUN apk add --no-cache su-exec
+RUN apk add --no-cache su-exec 7zip
 
 COPY --from=app-deps /app/node_modules ./node_modules
 COPY package*.json ./

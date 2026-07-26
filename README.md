@@ -30,8 +30,12 @@ data/
   games.json
   games/
     <game-id>/game.iso
+    <game-id>/files/
   logs/
     <session-id>.ndjson
+    <session-id>-export-<timestamp>/
+      console.ndjson
+      screenshot.png
 ```
 
 On startup, the container prepares the mounted data directory so uploaded games can be written by the app.
@@ -43,13 +47,13 @@ On startup, the container prepares the mounted data directory so uploaded games 
 3. Choose or drop a `.iso` file.
 4. Set the title/language fields and upload.
 
-The launcher stores the ISO locally and starts ReksioEngine with:
+The launcher stores the ISO locally, extracts it on the server during upload, and starts ReksioEngine with an extracted asset listing:
 
 ```text
-/engine/?loader=iso-remote&source=/api/games/<game-id>/iso
+/engine/?loader=listingjson&source=/api/games/<game-id>/listing
 ```
 
-The server supports HTTP Range requests so the engine can read the ISO without downloading the entire image up front.
+The raw ISO endpoint is still available at `/api/games/<game-id>/iso` for diagnostics. Docker includes `7zip` for extraction; local development needs `7z` on `PATH`, or `REKSIO_EXTRACTOR` set to a compatible executable. Existing entries uploaded before this behavior should be re-uploaded so their extracted `files/` folder is created.
 
 ## Local Working Files
 
@@ -81,6 +85,8 @@ Environment variables:
 | --- | --- | --- |
 | `PORT` | `3030` | HTTP port inside the container |
 | `REKSIO_DATA_DIR` | `/data` | Persistent metadata, logs, and uploaded ISO directory |
+| `REKSIO_ENGINE_DIR` | auto-detected | Override the directory served at `/engine` |
+| `REKSIO_EXTRACTOR` | `7z` | ISO extraction command used for custom uploaded games |
 | `MAX_ISO_SIZE_BYTES` | `8589934592` | Upload limit, default 8 GB |
 
 ## Local Development
@@ -92,4 +98,15 @@ npm install
 npm start
 ```
 
-Local development serves the launcher and APIs. The `/engine` route is populated by the Docker build from `./ReksioEngine`; for full game playback outside Docker, build the engine and copy its app output into `public/engine`.
+Local development serves the launcher and APIs. The `/engine` route uses `REKSIO_ENGINE_DIR` when set, then `ReksioEngine/dist/app` when it exists, then the Docker/static fallback at `public/engine`.
+
+For local game playback outside Docker, build the engine first:
+
+```sh
+cd ReksioEngine
+corepack yarn build
+cd ..
+npm start
+```
+
+When `ReksioEngine/dist/app` exists, the launcher serves it at `/engine`. Docker still serves the image-built bundle from `public/engine`.

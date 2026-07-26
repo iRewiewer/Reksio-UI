@@ -17,6 +17,7 @@ const keysMapping = new Map([
 
 export class Mouse extends Type<MouseDefinition> {
     private mouseMoveListener: any
+    private globalMouseMoveListener: any
     private mouseClickListener: any
     private mouseReleaseListener: any
 
@@ -26,6 +27,7 @@ export class Mouse extends Type<MouseDefinition> {
     private mousePosition: Point = new Point(0, 0)
     private moved = false
     private signalsDisabled: boolean = false
+    private callbacksRegistered = false
 
     async ready() {
         this.registerCallbacks()
@@ -75,17 +77,25 @@ export class Mouse extends Type<MouseDefinition> {
     }
 
     private registerCallbacks() {
+        if (this.callbacksRegistered) {
+            return
+        }
+
         this.mouseMoveListener = this.onMouseMove.bind(this)
+        this.globalMouseMoveListener = this.onMouseMove.bind(this)
         this.mouseClickListener = this.onMouseClick.bind(this)
         this.mouseReleaseListener = this.onMouseRelease.bind(this)
 
         this.engine.app.stage.addListener('pointermove', this.mouseMoveListener)
+        this.engine.app.stage.addListener('globalpointermove', this.globalMouseMoveListener)
         if (this.callbacks.has('ONCLICK') || this.callbacks.has('ONDBLCLICK')) {
             this.engine.app.stage.addListener('pointerdown', this.mouseClickListener)
         }
         if (this.callbacks.has('ONRELEASE')) {
             this.engine.app.stage.addListener('pointerup', this.mouseReleaseListener)
         }
+
+        this.callbacksRegistered = true
     }
 
     @method()
@@ -105,8 +115,15 @@ export class Mouse extends Type<MouseDefinition> {
     }
 
     private unregisterCallbacks() {
+        if (!this.callbacksRegistered) {
+            return
+        }
+
         this.engine.app.stage.removeListener('pointermove', this.mouseMoveListener)
+        this.engine.app.stage.removeListener('globalpointermove', this.globalMouseMoveListener)
         this.engine.app.stage.removeListener('pointerdown', this.mouseClickListener)
+        this.engine.app.stage.removeListener('pointerup', this.mouseReleaseListener)
+        this.callbacksRegistered = false
     }
 
     @method()
@@ -121,11 +138,13 @@ export class Mouse extends Type<MouseDefinition> {
 
     @method()
     GETPOSX() {
+        this.engine.diagnostics.mousePosition(this, 'GETPOSX', this.mousePosition)
         return this.mousePosition.x
     }
 
     @method()
     GETPOSY() {
+        this.engine.diagnostics.mousePosition(this, 'GETPOSY', this.mousePosition)
         return this.mousePosition.y
     }
 
@@ -138,6 +157,7 @@ export class Mouse extends Type<MouseDefinition> {
     private onMouseMove(event: FederatedPointerEvent) {
         this.moved = true
         this.mousePosition = this.getMousePosition(event)
+        this.engine.diagnostics.mousePosition(this, 'move', this.mousePosition)
     }
 
     private onMouseClick(event: FederatedPointerEvent) {

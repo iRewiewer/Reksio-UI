@@ -202,6 +202,7 @@ export class ValueType<DefinitionType extends ValueTypeDefinition, TypeOfValue> 
 
         const oldValue = this.value
         this.value = newValue
+        this.engine.diagnostics.valueChanged(this, oldValue, newValue)
         await this.valueChanged(oldValue, newValue)
 
         if (this.autoSave && this.definition.TOINI) {

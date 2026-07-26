@@ -15,10 +15,14 @@ const controls = document.getElementById('controls')!
 
 const savesEnabledEntry: string | null = localStorage.getItem('savesEnabled')
 const areSavesEnabled = savesEnabledEntry == 'true' || savesEnabledEntry === null
+const traceEnabled = urlParams.has('trace') && urlParams.get('trace') !== 'false'
+const traceScene = urlParams.get('traceScene') ?? 'CIEMNOSC'
 
 const baseOptions = {
     startScene: urlParams.get('scene') ?? undefined,
     debug: urlParams.has('debug') ? urlParams.get('debug') == 'true' : BUILD_VARS.debug,
+    trace: traceEnabled,
+    traceScene,
     debugContainer: debugContainer,
     onExit: () => document.exitFullscreen(),
     saveFile: areSavesEnabled ? SaveFileManager.fromLocalStorage() : undefined,
@@ -220,7 +224,13 @@ window.addEventListener('unhandledrejection', (event) => {
     })
 })
 
-console.info('ReksioEngine player booting', { loader: urlParams.get('loader'), source: urlParams.get('source') })
+console.info('ReksioEngine player booting', {
+    loader: urlParams.get('loader'),
+    source: urlParams.get('source'),
+    buildTime: BUILD_VARS.buildTime,
+    trace: traceEnabled,
+    traceScene: traceEnabled ? traceScene : null,
+})
 
 let config = {}
 const start = () => {

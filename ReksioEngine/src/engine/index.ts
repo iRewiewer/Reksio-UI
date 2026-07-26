@@ -17,9 +17,11 @@ import Filesystem, { pathJoin } from '../filesystem'
 import { globalAudio, SoundInstance } from './audio'
 import { logger } from './logging'
 import { setFormatsLogger } from '../fileFormats/logger'
+import { EngineDiagnostics } from './diagnostics'
 
 export class Engine {
     public debug: Debugging
+    public diagnostics: EngineDiagnostics
     public speed: number = 1
 
     public scopeManager: ScopeManager
@@ -41,8 +43,9 @@ export class Engine {
     ) {
         setFormatsLogger(logger)
         this.rendering = new RenderingManager(app)
-        this.scripting = new ScriptingManager(this)
         this.scopeManager = new ScopeManager()
+        this.diagnostics = new EngineDiagnostics(this, this.options.trace ?? false, this.options.traceScene)
+        this.scripting = new ScriptingManager(this)
         this.debug = new Debugging(this, this.options.debug ?? false, options.debugContainer ?? null)
         this.filesystem = new Filesystem(this.options.fileLoader, this.options.storage)
         this.saveFile = this.options.saveFile ?? SaveFileManager.empty(undefined)
@@ -147,13 +150,11 @@ export class Engine {
 
     async changeScene(sceneName: string) {
         this.options.onSceneChange?.(sceneName, this.currentScene?.name)
+        this.diagnostics.sceneChanging(sceneName, this.currentScene?.name)
         this.app.ticker.stop()
         this.music?.pause()
 
         this.rendering.onSceneChange()
-
-        this.app.stage.addChild(this.rendering.loadingOverlay)
-        this.app.renderer.render(this.app.stage)
 
         const loadingFreezeOverlay = Sprite.from(
             await this.app.renderer.extract.image(
@@ -181,10 +182,7 @@ export class Engine {
             // Alert when rendering stage wasn't completely cleared after all destroys.
             // For debugging purposes.
             const leakedObjects = this.app.stage.children.filter(
-                (obj) =>
-                    ![loadingFreezeOverlay, this.rendering.loadingOverlay, this.rendering.canvasBackground].includes(
-                        obj as any
-                    )
+                (obj) => ![loadingFreezeOverlay, this.rendering.canvasBackground].includes(obj as any)
             )
             if (leakedObjects.length > 0) {
                 logger.error('Display objects leak detected', {
@@ -254,10 +252,10 @@ export class Engine {
 
             if (newScope) {
                 await doReady(newScope)
+                await this.diagnostics.sceneReady()
             }
         } finally {
             this.app.stage.removeChild(loadingFreezeOverlay)
-            this.app.stage.removeChild(this.rendering.loadingOverlay)
 
             this.app.ticker.start()
             this.debug.updateCurrentScene()

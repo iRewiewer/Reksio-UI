@@ -72,6 +72,8 @@ export class Condition extends Type<ConditionDefinition> {
         }
 
         if (shouldSignal) {
+            this.engine.diagnostics.condition(this, operand1, this.definition.OPERATOR, operand2, Boolean(result))
+
             if (result) {
                 await this.callbacks.run('ONRUNTIMESUCCESS', null, null)
             } else {

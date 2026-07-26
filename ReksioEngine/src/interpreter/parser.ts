@@ -483,19 +483,22 @@ function _splitObjectMethod(text: string, offset: number): [ObjectRef | null, st
         return [null, method]
     }
 
-    const objCode = text.slice(0, firstCaret)
+    const rawObjCode = text.slice(0, firstCaret)
+    const optionalPrefixLength = rawObjCode.match(/^!+/)?.[0].length ?? 0
+    const objCode = rawObjCode.slice(optionalPrefixLength)
+    const objOffset = offset + optionalPrefixLength
     const method = text.slice(lastCaret + 1)
 
     if (objCode.startsWith('#') && objCode.length >= 2) {
         const idByte = objCode.length >= 3 ? objCode.charCodeAt(2) & 0x7f : objCode.charCodeAt(1) & 0x7f
-        return [{ type: 'DirectRef', idByte, start: offset, end: offset + objCode.length }, method]
+        return [{ type: 'DirectRef', idByte, start: objOffset, end: objOffset + objCode.length }, method]
     }
 
     if (objCode === 'THIS') {
-        return [{ type: 'ThisRef', start: offset, end: offset + objCode.length }, method]
+        return [{ type: 'ThisRef', start: objOffset, end: objOffset + objCode.length }, method]
     }
 
-    return [{ type: 'Identifier', name: objCode, start: offset, end: offset + objCode.length }, method]
+    return [{ type: 'Identifier', name: objCode, start: objOffset, end: objOffset + objCode.length }, method]
 }
 
 function _refToParam(ref: ObjectRef): Parameter {

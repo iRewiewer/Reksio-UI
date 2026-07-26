@@ -65,6 +65,8 @@ export class CallbacksComponent {
             return
         }
 
+        this.engine.diagnostics.callback(this.object, type, param)
+
         const stackFrame = StackFrame.builder()
             .type('callback')
             .object(this.object)

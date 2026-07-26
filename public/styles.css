@@ -418,6 +418,11 @@ h2 {
   color: #fff;
 }
 
+.tool-button[aria-pressed="true"] {
+  border-color: var(--gold);
+  color: #f1d277;
+}
+
 .tool-button.primary:hover {
   border-color: var(--red-dark);
   background: var(--red-dark);
@@ -857,6 +862,44 @@ h2 {
   border-radius: inherit;
   background: var(--teal);
   transition: width 150ms ease;
+}
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 20;
+  display: grid;
+  gap: 4px;
+  width: min(360px, calc(100vw - 36px));
+  padding: 12px 14px;
+  border: 1px solid rgba(112, 208, 198, 0.42);
+  border-radius: 8px;
+  background: rgba(27, 29, 25, 0.97);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(10px);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toast strong {
+  font-size: 14px;
+}
+
+.toast span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 1180px) {

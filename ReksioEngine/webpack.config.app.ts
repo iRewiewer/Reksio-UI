@@ -26,6 +26,7 @@ module.exports = (env: any) => ({
         new webpack.DefinePlugin({
             'process.env.debug': env.debug === true,
             'process.env.manualTick': env.manualTick,
+            'process.env.buildTime': JSON.stringify(new Date().toISOString()),
         }),
     ],
     module: {

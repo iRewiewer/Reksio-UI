@@ -67,11 +67,12 @@ export class Animo extends DisplayType<AnimoDefinition> {
                 object.definition.FILENAME === this.definition.FILENAME &&
                 object.sprite != null
         )
-        if (existingObjectWithFilename != null) {
-            this.sprite = existingObjectWithFilename.sprite
-        } else {
-            await this.initSprite()
+        if (existingObjectWithFilename != null && existingObjectWithFilename.annFile != null) {
+            this.annFile = existingObjectWithFilename.annFile
+            this.textures = existingObjectWithFilename.textures
+            this.hitmaps = existingObjectWithFilename.hitmaps
         }
+        await this.initSprite()
     }
 
     async ready() {
@@ -312,10 +313,9 @@ export class Animo extends DisplayType<AnimoDefinition> {
 
         this.positionOffsetX = annImage.positionX + eventFrame.positionX
         this.positionOffsetY = annImage.positionY + eventFrame.positionY
-        this.syncPosition()
-
         this.sprite.width = annImage.width
         this.sprite.height = annImage.height
+        this.syncPosition()
 
         if (this.buttonInteractArea !== null) {
             this.buttonInteractArea.hitArea = this.sprite.getBounds()
@@ -343,10 +343,9 @@ export class Animo extends DisplayType<AnimoDefinition> {
 
         this.positionOffsetX = annImage.positionX
         this.positionOffsetY = annImage.positionY
-        this.syncPosition()
-
         this.sprite.width = annImage.width
         this.sprite.height = annImage.height
+        this.syncPosition()
 
         if (this.buttonInteractArea !== null) {
             this.buttonInteractArea.hitArea = this.sprite.getBounds()
@@ -365,7 +364,10 @@ export class Animo extends DisplayType<AnimoDefinition> {
     }
 
     async playEvent(name: string) {
-        if (!this.hasEvent(name.toString())) {
+        const eventExists = this.hasEvent(name.toString())
+        this.engine.diagnostics.animoPlay(this, name, eventExists)
+
+        if (!eventExists) {
             return
         }
 
@@ -389,6 +391,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
         // Tick animation so that it's not signaling twice for 0 frame
         // + it has to call ONSTARTED instantly
         await this.tickAnimation()
+        this.engine.diagnostics.displayState(this, `PLAY:${name}`)
     }
 
     private async forceRender() {
@@ -399,6 +402,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
     private async ONFINISHED() {
         assert(this.currentEvent !== null)
         const index = this.currentEvent.name.toUpperCase()
+        this.engine.diagnostics.animoFinished(this, index)
         await this.callbacks.run('ONFINISHED', index)
         await this.events?.trigger('ONFINISHED', index)
     }
@@ -500,12 +504,14 @@ export class Animo extends DisplayType<AnimoDefinition> {
     SHOW() {
         assert(this.sprite !== null)
         this.sprite.visible = true
+        this.engine.diagnostics.displayState(this, 'SHOW')
     }
 
     @method()
     HIDE() {
         assert(this.sprite !== null)
         this.sprite.visible = false
+        this.engine.diagnostics.displayState(this, 'HIDE')
     }
 
     @method()
@@ -531,6 +537,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
         this.positionX = Math.floor(x)
         this.positionY = Math.floor(y)
         this.syncPosition()
+        this.engine.diagnostics.displayState(this, 'SETPOSITION')
         await this.onMove()
     }
 
@@ -736,8 +743,13 @@ export class Animo extends DisplayType<AnimoDefinition> {
     }
 
     @method()
-    MONITORCOLLISION(newState: boolean) {
+    MONITORCOLLISION(newState?: boolean) {
         this.collisions.enabled = true
+    }
+
+    @method()
+    MONITORCOLLISIONS(newState?: boolean) {
+        this.MONITORCOLLISION(newState ?? true)
     }
 
     @method()

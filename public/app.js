@@ -1,5 +1,7 @@
 'use strict';
 
+const launcherParams = new URLSearchParams(window.location.search);
+
 const state = {
   games: [],
   notes: [],
@@ -18,6 +20,10 @@ const state = {
   selectedId: null,
   selectedNoteId: null,
   loadedId: null,
+  traceEnabled:
+    launcherParams.get('trace') === '1' ||
+    launcherParams.get('trace') === 'true' ||
+    localStorage.getItem('reksioLauncher.traceEnabled') === 'true',
   filter: 'all',
   search: ''
 };
@@ -73,6 +79,8 @@ const nodes = {
   serverStatus: document.getElementById('serverStatus'),
   stageEmpty: document.getElementById('stageEmpty'),
   tabs: document.querySelectorAll('.dialog-tab'),
+  toast: document.getElementById('toast'),
+  traceButton: document.getElementById('traceButton'),
   uploadProgress: document.getElementById('uploadProgress')
 };
 
@@ -84,6 +92,7 @@ let logFlushTimer = null;
 let logQueue = [];
 let consolePollTimer = null;
 let consolePollInFlight = false;
+let toastTimer = null;
 const MAX_RENDERED_LOG_ENTRIES = 120;
 const MAX_CLIENT_LOG_ENTRIES = 240;
 const MAX_LOG_QUEUE_ENTRIES = 1000;
@@ -125,6 +134,29 @@ function truncateLogText(value, maxLength) {
 
 function normalizeLogLevel(level) {
   return ['debug', 'info', 'warn', 'error'].includes(level) ? level : 'info';
+}
+
+function showToast(title, detail = '') {
+  clearTimeout(toastTimer);
+  nodes.toast.innerHTML = `
+    <strong>${escapeHtml(title)}</strong>
+    ${detail ? `<span>${escapeHtml(detail)}</span>` : ''}
+  `;
+  nodes.toast.hidden = false;
+  nodes.toast.classList.add('visible');
+
+  toastTimer = setTimeout(() => {
+    nodes.toast.classList.remove('visible');
+    nodes.toast.addEventListener(
+      'transitionend',
+      () => {
+        if (!nodes.toast.classList.contains('visible')) {
+          nodes.toast.hidden = true;
+        }
+      },
+      { once: true }
+    );
+  }, 4200);
 }
 
 function isConsoleOpen() {
@@ -304,7 +336,7 @@ function renderConsole() {
         truncatedCount > 0
           ? `<div class="console-truncated">Showing latest ${MAX_RENDERED_LOG_ENTRIES} visible entries from the server log tail.</div>`
           : '',
-        state.consoleTruncated ? '<div class="console-truncated">Earlier matching logs are available in the full log download.</div>' : '',
+        state.consoleTruncated ? '<div class="console-truncated">Earlier matching logs are available in the saved log export.</div>' : '',
         ...renderedLogs.map(
           (entry) => `
             <article class="console-entry ${entry.level}">
@@ -397,6 +429,23 @@ function renderConsolePauseButton() {
   nodes.pauseConsoleButton.setAttribute('aria-pressed', String(state.consolePaused));
 }
 
+function renderTraceButton() {
+  nodes.traceButton.setAttribute('aria-pressed', String(state.traceEnabled));
+  nodes.traceButton.title = state.traceEnabled ? 'Engine trace enabled' : 'Enable engine trace';
+}
+
+function toggleTrace() {
+  state.traceEnabled = !state.traceEnabled;
+  localStorage.setItem('reksioLauncher.traceEnabled', String(state.traceEnabled));
+  renderTraceButton();
+  addLog(
+    'launcher',
+    'info',
+    state.traceEnabled ? 'Engine trace enabled' : 'Engine trace disabled',
+    state.traceEnabled ? 'Next launch will include targeted engine trace logs.' : 'Next launch will use normal engine logging.'
+  );
+}
+
 function toggleConsolePaused() {
   state.consolePaused = !state.consolePaused;
   renderConsolePauseButton();
@@ -447,27 +496,133 @@ function copyTextFallback(text) {
   }
 }
 
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      /* Use the legacy fallback for non-secure hosts and older browsers. */
+    }
+  }
+
+  if (!copyTextFallback(text)) {
+    throw new Error('Clipboard API is unavailable in this browser context.');
+  }
+}
+
 async function copyConsole() {
   const text = state.logs
     .map((entry) => `[${entry.time}] [${entry.source}] [${entry.level}] ${entry.message}${entry.detail ? `\n${entry.detail}` : ''}`)
     .join('\n');
 
   try {
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      try {
-        await navigator.clipboard.writeText(text);
-      } catch (error) {
-        if (!copyTextFallback(text)) {
-          throw error;
-        }
-      }
-    } else if (!copyTextFallback(text)) {
-      throw new Error('Clipboard API is unavailable in this browser context.');
-    }
-
+    await copyTextToClipboard(text);
     addLog('launcher', 'info', 'Console copied to clipboard');
   } catch (error) {
     addLog('launcher', 'error', 'Failed to copy console', error);
+  }
+}
+
+async function captureGameScreenshot() {
+  if (!nodes.gameFrame.src || nodes.gameFrame.hidden) {
+    throw new Error('No game is currently loaded.');
+  }
+
+  let canvases;
+
+  try {
+    canvases = Array.from(nodes.gameFrame.contentDocument.querySelectorAll('canvas'));
+  } catch {
+    throw new Error('Game iframe is not accessible for screenshot capture.');
+  }
+
+  const canvas = canvases
+    .filter((entry) => entry.width > 0 && entry.height > 0)
+    .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+
+  if (!canvas) {
+    throw new Error('No game canvas was found for screenshot capture.');
+  }
+
+  return new Promise((resolve, reject) => {
+    try {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+
+        reject(new Error('Game canvas screenshot could not be encoded.'));
+      }, 'image/png');
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function saveConsoleExport() {
+  const previousHtml = nodes.downloadConsoleButton.innerHTML;
+  nodes.downloadConsoleButton.disabled = true;
+  nodes.downloadConsoleButton.innerHTML = `${icon('archive')}<span>Saving</span>`;
+
+  try {
+    const sessionId = await ensureLogSession();
+    await flushLogQueue();
+
+    let screenshotBlob = new Blob([], { type: 'image/png' });
+
+    try {
+      screenshotBlob = await captureGameScreenshot();
+    } catch (error) {
+      addLog('launcher', 'warn', 'Game screenshot unavailable', error);
+      await flushLogQueue();
+    }
+
+    const response = await fetch(`/api/logs/${encodeURIComponent(sessionId)}/export`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'image/png'
+      },
+      body: screenshotBlob
+    });
+
+    if (!response.ok) {
+      throw new Error(`Log export failed with ${response.status}`);
+    }
+
+    const body = await response.json();
+    const exportPath = body.exportDir || (body.files || [])[0] || '';
+    let clipboardCopied = false;
+
+    if (exportPath) {
+      try {
+        await copyTextToClipboard(exportPath);
+        clipboardCopied = true;
+      } catch (error) {
+        addLog('launcher', 'warn', 'Console export path could not be copied', error);
+      }
+    }
+
+    addLog(
+      'launcher',
+      'info',
+      'Console log export saved',
+      `${body.exportDir}\n${(body.files || []).join('\n')}${body.screenshotSaved ? '' : '\nScreenshot not included.'}${clipboardCopied ? '\nPath copied to clipboard.' : ''}`
+    );
+    showToast(
+      'Console saved',
+      clipboardCopied
+        ? `${exportPath} copied`
+        : body.screenshotSaved
+          ? body.exportDir
+          : `${body.exportDir} - screenshot unavailable`
+    );
+  } catch (error) {
+    addLog('launcher', 'error', 'Failed to save console log export', error);
+  } finally {
+    nodes.downloadConsoleButton.disabled = false;
+    nodes.downloadConsoleButton.innerHTML = previousHtml;
   }
 }
 
@@ -557,8 +712,18 @@ function buildLaunchUrl(game) {
   }
 
   const params = new URLSearchParams();
-  params.set('loader', 'iso-remote');
-  params.set('source', absoluteUrl(game.isoUrl));
+  if (game.listingUrl) {
+    params.set('loader', 'listingjson');
+    params.set('source', absoluteUrl(game.listingUrl));
+  } else {
+    params.set('loader', 'iso-remote');
+    params.set('source', absoluteUrl(game.isoUrl));
+  }
+
+  if (state.traceEnabled) {
+    params.set('trace', '1');
+    params.set('traceScene', '*');
+  }
 
   return `/engine/?${params.toString()}`;
 }
@@ -824,6 +989,7 @@ function renderDetails() {
     nodes.gameFrame.hidden = true;
     nodes.playButton.disabled = true;
     nodes.openRawButton.disabled = true;
+    nodes.traceButton.disabled = true;
     nodes.fullscreenButton.disabled = true;
     nodes.resetSaveButton.disabled = true;
     nodes.deleteGameButton.disabled = true;
@@ -855,6 +1021,7 @@ function renderDetails() {
   nodes.gameFrame.hidden = false;
   nodes.playButton.disabled = false;
   nodes.openRawButton.disabled = false;
+  nodes.traceButton.disabled = false;
   nodes.fullscreenButton.disabled = false;
   nodes.resetSaveButton.disabled = false;
   nodes.deleteGameButton.disabled = false;
@@ -970,6 +1137,25 @@ async function loadGames(preferredId) {
   }
 }
 
+async function logServerHealth() {
+  try {
+    const body = await apiFetch('/api/health');
+    addLog(
+      'launcher',
+      body.enginePresent ? 'info' : 'warn',
+      'Server health',
+      [
+        `Engine directory: ${body.engineDir || 'unknown'}`,
+        `Engine present: ${body.enginePresent ? 'yes' : 'no'}`,
+        `Engine updated: ${body.engineUpdatedAt || 'unknown'}`,
+        `Extractor: ${body.extractorCommand || 'unknown'}`
+      ].join('\n')
+    );
+  } catch (error) {
+    addLog('launcher', 'warn', 'Failed to read server health', error);
+  }
+}
+
 function openDialog() {
   nodes.isoForm.reset();
   nodes.isoForm.querySelector('[name="language"]').value = 'Custom';
@@ -1027,7 +1213,7 @@ function uploadIso(event) {
     if (progressEvent.lengthComputable) {
       const percent = Math.round((progressEvent.loaded / progressEvent.total) * 100);
       nodes.uploadProgress.style.width = `${percent}%`;
-      nodes.isoFormStatus.textContent = `Uploading ${percent}%`;
+      nodes.isoFormStatus.textContent = percent >= 100 ? 'Extracting ISO' : `Uploading ${percent}%`;
     }
   });
 
@@ -1045,7 +1231,7 @@ function uploadIso(event) {
       return;
     }
 
-    nodes.isoFormStatus.textContent = 'Uploaded';
+    nodes.isoFormStatus.textContent = 'Uploaded and extracted';
     nodes.addGameDialog.close();
     await loadGames(body.game && body.game.id);
     selectGame(body.game.id, true);
@@ -1112,10 +1298,7 @@ nodes.clearConsoleButton.addEventListener('click', () => {
 });
 nodes.copyConsoleButton.addEventListener('click', copyConsole);
 nodes.pauseConsoleButton.addEventListener('click', toggleConsolePaused);
-nodes.downloadConsoleButton.addEventListener('click', async () => {
-  const sessionId = await ensureLogSession();
-  window.open(`/api/logs/${encodeURIComponent(sessionId)}/download`, '_blank', 'noopener');
-});
+nodes.downloadConsoleButton.addEventListener('click', saveConsoleExport);
 nodes.consoleFollowCheckbox.addEventListener('change', (event) => {
   state.consoleFollow = event.target.checked;
 
@@ -1177,6 +1360,7 @@ nodes.isoDropZone.addEventListener('drop', (event) => {
 
 nodes.isoForm.addEventListener('submit', uploadIso);
 nodes.playButton.addEventListener('click', loadSelectedGame);
+nodes.traceButton.addEventListener('click', toggleTrace);
 nodes.openRawButton.addEventListener('click', () => {
   if (nodes.gameFrame.src) {
     window.open(nodes.gameFrame.src, '_blank', 'noopener');
@@ -1199,6 +1383,16 @@ nodes.gameFrame.addEventListener('load', () => {
   addLog('launcher', 'info', 'Game iframe loaded', nodes.gameFrame.src);
 });
 nodes.consoleDialog.addEventListener('close', stopConsoleTail);
+nodes.consoleDialog.addEventListener('click', (event) => {
+  const rect = nodes.consoleDialog.getBoundingClientRect();
+  const clickedOutside =
+    event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
+
+  if (clickedOutside) {
+    nodes.consoleDialog.close();
+    stopConsoleTail();
+  }
+});
 window.addEventListener('message', handleEngineMessage);
 window.addEventListener('error', (event) => {
   addLog('launcher', 'error', event.message, `${event.filename}:${event.lineno}:${event.colno}`);
@@ -1210,4 +1404,6 @@ window.addEventListener('beforeunload', syncCurrentSave);
 
 addLog('launcher', 'info', 'Launcher ready');
 renderConsolePauseButton();
+renderTraceButton();
+logServerHealth();
 loadGames();

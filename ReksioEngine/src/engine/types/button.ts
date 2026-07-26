@@ -5,9 +5,11 @@ import { Image } from './image'
 import { FederatedPointerEvent, Graphics, Point, Rectangle } from 'pixi.js'
 import { ButtonLogicComponent, Event, State } from '../components/button'
 import { Animo } from './animo'
+import { Sound as SoundType } from './sound'
 import { assert, NotImplementedError } from '../../common/errors'
 import { reference } from '../../fileFormats/common'
 import { method } from '../../common/types'
+import { logger } from '../logging'
 
 export class Button extends Type<ButtonDefinition> {
     private logic: ButtonLogicComponent
@@ -23,6 +25,7 @@ export class Button extends Type<ButtonDefinition> {
     private gfxStandard: Image | Animo | null = null
     private gfxOnClick: Image | Animo | null = null
     private gfxOnMove: Image | Animo | null = null
+    private sndOnMove: SoundType | null = null
 
     private interactArea: Graphics | null = null
     private rect: Rectangle | null = null
@@ -43,6 +46,17 @@ export class Button extends Type<ButtonDefinition> {
         }
         if (this.definition.GFXONMOVE) {
             this.gfxOnMove = this.getObject(this.definition.GFXONMOVE)
+        }
+        if (this.definition.SNDONMOVE) {
+            const sndOnMove: SoundType | null = this.getObject(this.definition.SNDONMOVE)
+            if (sndOnMove instanceof SoundType) {
+                this.sndOnMove = sndOnMove
+            } else {
+                logger.warn(`Button '${this.name}' references a missing or invalid SNDONMOVE sound`, {
+                    button: this,
+                    sndOnMove: this.definition.SNDONMOVE,
+                })
+            }
         }
     }
 
@@ -131,6 +145,8 @@ export class Button extends Type<ButtonDefinition> {
     }
 
     private async onStateChange(prevState: State, event: Event, state: State) {
+        this.engine.diagnostics.buttonState(this, event, prevState, state)
+
         if (this.draggingActive) {
             return
         }
@@ -205,6 +221,12 @@ export class Button extends Type<ButtonDefinition> {
                 this.logic.unregisterInteractive(this.interactArea)
             }
         } else if (event == Event.DOWN) {
+            const gfxStandard = this.definition.GFXSTANDARD?.objectName ?? 'null'
+            const bounds = this.getInteractionDebugBounds()
+            const boundsText = bounds
+                ? `x=${bounds.x}, y=${bounds.y}, width=${bounds.width}, height=${bounds.height}`
+                : 'null'
+            logger.debug(`Button '${this.name}' pressed (gfxStandard=${gfxStandard}, bounds=${boundsText})`)
             await this.callbacks.run('ONCLICKED')
 
             if (this.definition.DRAGGABLE) {
@@ -220,12 +242,34 @@ export class Button extends Type<ButtonDefinition> {
                 }
             }
         } else if (event == Event.UP) {
+            const actionName = this.definition.ONACTION?.behaviourReference
+            logger.debug(`Button '${this.name}' action${actionName ? ` -> ${actionName}` : ''}`)
             await this.callbacks.run('ONRELEASED')
             await this.callbacks.run('ONACTION')
         } else if (event == Event.OVER) {
+            this.playSoundOnMove()
             await this.callbacks.run('ONFOCUSON')
         } else if (event == Event.OUT) {
             await this.callbacks.run('ONFOCUSOFF')
+        }
+    }
+
+    private playSoundOnMove() {
+        if (!this.sndOnMove) {
+            return
+        }
+
+        try {
+            this.sndOnMove.PLAY()
+        } catch (err) {
+            logger.warn(
+                `Failed to play SNDONMOVE for button '${this.name}'`,
+                {
+                    button: this,
+                    sound: this.sndOnMove,
+                },
+                err
+            )
         }
     }
 
@@ -244,7 +288,7 @@ export class Button extends Type<ButtonDefinition> {
             this.draggingEnded = true
             this.draggingPosition = null
             this.engine.app.stage.off('pointermove', this.onPointerMoveHandler)
-            this.engine.app.stage.off('pointerup', this.onPointerMoveHandler)
+            this.engine.app.stage.off('pointerup', this.onPointerUpHandler)
             this.gfxStandard?.SETPRIORITY(this.originalPriority)
         }
     }
@@ -262,6 +306,11 @@ export class Button extends Type<ButtonDefinition> {
     @method()
     async DISABLEBUTVISIBLE() {
         await this.logic.disableButVisible()
+    }
+
+    @method()
+    async DISABLEBUTVISIBE() {
+        await this.DISABLEBUTVISIBLE()
     }
 
     @method()
@@ -311,6 +360,20 @@ export class Button extends Type<ButtonDefinition> {
             if (renderObject) {
                 renderObject.alpha = alpha
             }
+        }
+    }
+
+    private getInteractionDebugBounds() {
+        const bounds = this.rect ?? this.gfxStandard?.getRenderObject()?.getBounds()
+        if (!bounds) {
+            return null
+        }
+
+        return {
+            x: Math.round(bounds.x),
+            y: Math.round(bounds.y),
+            width: Math.round(bounds.width),
+            height: Math.round(bounds.height),
         }
     }
 

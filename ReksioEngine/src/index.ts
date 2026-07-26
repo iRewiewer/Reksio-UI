@@ -10,6 +10,7 @@ export { FileStorage, IndexedDBStorage } from './filesystem/fileStorage'
 export const BUILD_VARS = {
     manualTick: process.env.manualTick as unknown as boolean,
     debug: process.env.debug as unknown as boolean,
+    buildTime: process.env.buildTime as unknown as string,
 }
 
 export type GamePlayerOptions = {
@@ -18,6 +19,8 @@ export type GamePlayerOptions = {
     startScene?: string
     saveFile?: SaveFile
     debug?: boolean
+    trace?: boolean
+    traceScene?: string
     debugContainer?: HTMLElement | null
     onExit?: () => void
     onSceneChange?: (next: string, previous?: string) => void

@@ -122,6 +122,10 @@
               <svg><use href="#icon-external"></use></svg>
               Raw
             </button>
+            <button class="tool-button" id="traceButton" type="button" aria-pressed="false">
+              <svg><use href="#icon-terminal"></use></svg>
+              Trace
+            </button>
             <button class="tool-button icon-only" id="fullscreenButton" type="button" title="Fullscreen" aria-label="Fullscreen">
               <svg><use href="#icon-fullscreen"></use></svg>
             </button>
@@ -265,8 +269,8 @@
               Copy
             </button>
             <button class="text-button" id="downloadConsoleButton" type="button">
-              <svg><use href="#icon-external"></use></svg>
-              Download
+              <svg><use href="#icon-archive"></use></svg>
+              Save
             </button>
             <button class="text-button" id="clearConsoleButton" type="button">
               <svg><use href="#icon-trash"></use></svg>
@@ -328,6 +332,8 @@
         </div>
       </div>
     </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
     <script src="/app.js" defer></script>
   </body>

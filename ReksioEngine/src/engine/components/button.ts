@@ -30,6 +30,7 @@ export class ButtonLogicComponent {
     private readonly onMouseOutCallback
     private readonly onMouseDownCallback
     private readonly onMouseUpCallback
+    private readonly onMouseCancelCallback
 
     private eventsQueue: Event[] = []
 
@@ -40,6 +41,7 @@ export class ButtonLogicComponent {
         this.onMouseOutCallback = this.onMouseOut.bind(this)
         this.onMouseDownCallback = this.onMouseDown.bind(this)
         this.onMouseUpCallback = this.onMouseUp.bind(this)
+        this.onMouseCancelCallback = this.onMouseCancel.bind(this)
 
         const transitions = [
             t(State.INIT, Event.DISABLE, State.DISABLED),
@@ -47,6 +49,7 @@ export class ButtonLogicComponent {
             t(State.INIT, Event.ENABLE, State.STANDARD),
 
             t(State.STANDARD, Event.OVER, State.HOVERED),
+            t(State.STANDARD, Event.DOWN, State.PRESSED),
             t(State.STANDARD, Event.DISABLE, State.DISABLED),
             t(State.STANDARD, Event.DISABLE_BUT_VISIBLE, State.DISABLED_BUT_VISIBLE),
 
@@ -77,6 +80,8 @@ export class ButtonLogicComponent {
         sprite.addListener('pointerout', this.onMouseOutCallback)
         sprite.addListener('pointerdown', this.onMouseDownCallback)
         sprite.addListener('pointerup', this.onMouseUpCallback)
+        sprite.addListener('pointerupoutside', this.onMouseUpCallback)
+        sprite.addListener('pointercancel', this.onMouseCancelCallback)
     }
 
     unregisterInteractive(sprite: DisplayObject) {
@@ -87,6 +92,8 @@ export class ButtonLogicComponent {
         sprite.removeListener('pointerout', this.onMouseOutCallback)
         sprite.removeListener('pointerdown', this.onMouseDownCallback)
         sprite.removeListener('pointerup', this.onMouseUpCallback)
+        sprite.removeListener('pointerupoutside', this.onMouseUpCallback)
+        sprite.removeListener('pointercancel', this.onMouseCancelCallback)
     }
 
     async disable() {
@@ -139,5 +146,9 @@ export class ButtonLogicComponent {
 
     private onMouseDown() {
         this.eventsQueue.push(Event.DOWN)
+    }
+
+    private onMouseCancel() {
+        this.eventsQueue.push(Event.OUT)
     }
 }

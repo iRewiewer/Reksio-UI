@@ -75,11 +75,13 @@ export class Timer extends Type<TimerDefinition> {
     @method()
     DISABLE() {
         this.enabled = false
+        this.engine.diagnostics.timerState(this, 'DISABLE', this.enabled, this.currentTick)
     }
 
     @method()
     ENABLE() {
         this.enabled = true
         this.collectedTime = 0
+        this.engine.diagnostics.timerState(this, 'ENABLE', this.enabled, this.currentTick)
     }
 }

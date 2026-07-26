@@ -10,6 +10,7 @@ import { StackFrame, stackTrace } from '../interpreter/stacktrace'
 
 export class ScriptingManager {
     private readonly engine: Engine
+    private readonly missingBehaviourWarnings = new Set<string>()
 
     constructor(engine: Engine) {
         this.engine = engine
@@ -38,10 +39,16 @@ export class ScriptingManager {
                 return await runCode(this.engine, caller, callback.code, args ?? [], callback.isSingleStatement)
             } else if (callback.behaviourReference) {
                 if (!this.engine.getObject(callback.behaviourReference, caller?.parentScope)) {
-                    logger.error(`Trying to execute behaviour "${callback.behaviourReference}" that doesn't exist!`, {
-                        callback,
-                        thisRef,
-                    })
+                    const warningKey = `${callback.behaviourReference}:${thisRef?.name ?? ''}`
+
+                    if (!this.missingBehaviourWarnings.has(warningKey)) {
+                        this.missingBehaviourWarnings.add(warningKey)
+                        logger.warn(`Trying to execute behaviour "${callback.behaviourReference}" that doesn't exist!`, {
+                            callback,
+                            thisRef,
+                        })
+                    }
+
                     return
                 }
 

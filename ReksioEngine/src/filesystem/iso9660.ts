@@ -27,6 +27,7 @@ export type FileEntry = {
 export abstract class Iso9660Reader {
     private filesMapping: Map<string, FileEntry> = new Map()
     private seenDirectories: Set<string> = new Set()
+    private filePathCollisions: Map<string, number> = new Map()
     private decoder = new TextDecoder('utf-16le')
 
     protected abstract readAt(offset: number, length: number): Promise<ArrayBuffer>
@@ -77,6 +78,37 @@ export abstract class Iso9660Reader {
         const rawIdentifier = directory.read(identifierLength)
         const name = encoding === 'joliet' ? this.decodeUTF16BE(rawIdentifier) : this.decodeASCII(rawIdentifier)
         return this.stripVersion(name)
+    }
+
+    private toCollisionAliasPath(path: string, ordinal: number): string {
+        const separatorIndex = path.lastIndexOf('/')
+        const directoryPrefix = separatorIndex > -1 ? `${path.slice(0, separatorIndex)}/` : ''
+        const filename = separatorIndex > -1 ? path.slice(separatorIndex + 1) : path
+        const extensionIndex = filename.lastIndexOf('.')
+        const stem = extensionIndex > -1 ? filename.slice(0, extensionIndex) : filename
+        const extension = extensionIndex > -1 ? filename.slice(extensionIndex) : ''
+        const suffix = String(ordinal)
+        const aliasStem = `${stem.slice(0, Math.max(0, 8 - suffix.length))}${suffix}`
+
+        return `${directoryPrefix}${aliasStem}${extension}`
+    }
+
+    private toUniqueFilePath(path: string): string {
+        const nextCollisionOrdinal = (this.filePathCollisions.get(path) ?? 0) + 1
+        this.filePathCollisions.set(path, nextCollisionOrdinal)
+
+        if (nextCollisionOrdinal === 1 && !this.filesMapping.has(path)) {
+            return path
+        }
+
+        for (let ordinal = nextCollisionOrdinal; ordinal < 1000; ordinal += 1) {
+            const candidate = this.toCollisionAliasPath(path, ordinal)
+            if (candidate !== path && !this.filesMapping.has(candidate)) {
+                return candidate
+            }
+        }
+
+        throw new Error(`Too many ISO9660 filename collisions for '${path}'`)
     }
 
     private async processDirectory(
@@ -148,10 +180,11 @@ export abstract class Iso9660Reader {
             if (isDirectory) {
                 await this.processDirectory(locationOfExtent, dataLength, fullPathParts, encoding)
             } else {
-                this.filesMapping.set(fullPath, {
+                const uniquePath = this.toUniqueFilePath(fullPath)
+                this.filesMapping.set(uniquePath, {
                     location: locationOfExtent * SECTOR_SIZE,
                     size: dataLength,
-                    name: fullPath,
+                    name: uniquePath,
                     flags,
                 })
             }
@@ -237,6 +270,7 @@ export abstract class Iso9660Reader {
     async load() {
         this.filesMapping.clear()
         this.seenDirectories.clear()
+        this.filePathCollisions.clear()
 
         const descriptors = await this.readVolumeDescriptors()
         const descriptor = this.selectVolumeDescriptor(descriptors)
