@@ -241,15 +241,15 @@ function logPathFor(sessionId) {
   return resolvedPath;
 }
 
-function createLogExportId(sessionId) {
+function createLogExportId(sessionId, traceEnabled = false) {
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}z$/i, 'z');
-  return `${validateLogSessionId(sessionId)}-export-${timestamp.toLowerCase()}`;
+  return `${validateLogSessionId(sessionId)}${traceEnabled ? '_trace' : ''}-export-${timestamp.toLowerCase()}`;
 }
 
 function exportLogPath(value) {
   const exportId = textValue(value).toLowerCase();
 
-  if (!/^[a-z0-9][a-z0-9-]{2,120}$/.test(exportId)) {
+  if (!/^[a-z0-9][a-z0-9_-]{2,120}$/.test(exportId)) {
     throw Object.assign(new Error('Invalid log export id.'), { statusCode: 400 });
   }
 
@@ -797,12 +797,13 @@ app.get('/api/logs/:id/download', async (req, res, next) => {
 app.post('/api/logs/:id/export', parsePngScreenshot, async (req, res, next) => {
   try {
     const sessionId = validateLogSessionId(req.params.id);
+    const traceEnabled = req.query.trace === '1' || req.query.trace === 'true';
     const filePath = logPathFor(sessionId);
     await fsp.access(filePath, fs.constants.F_OK);
 
-    const exportId = createLogExportId(sessionId);
+    const exportId = createLogExportId(sessionId, traceEnabled);
     const exportDir = exportLogPath(exportId);
-    const logExportPath = path.join(exportDir, 'console.ndjson');
+    const logExportPath = path.join(exportDir, traceEnabled ? 'console_trace.ndjson' : 'console.ndjson');
     const files = [displayDataPath(logExportPath)];
 
     await fsp.mkdir(exportDir, { recursive: true });

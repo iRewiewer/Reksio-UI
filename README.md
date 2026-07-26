@@ -55,6 +55,12 @@ The launcher stores the ISO locally, extracts it on the server during upload, an
 
 The raw ISO endpoint is still available at `/api/games/<game-id>/iso` for diagnostics. Docker includes `7zip` for extraction; local development needs `7z` on `PATH`, or `REKSIO_EXTRACTOR` set to a compatible executable. Existing entries uploaded before this behavior should be re-uploaded so their extracted `files/` folder is created.
 
+## Snapshots
+
+The launcher can create named per-game snapshots from the browser UI. A snapshot captures the current ReksioEngine save JSON plus the engine IndexedDB filesystem, then restores by writing those values back and relaunching the selected game.
+
+Snapshots are stored in the browser's IndexedDB under the current host/origin. They survive Docker rebuilds and app restarts, but they are local to the browser profile.
+
 ## Local Working Files
 
 `./ReksioEngine` is vendored source and is required by the Docker build. Its local `.git`, `.github`, `node_modules`, and `dist` folders are ignored.

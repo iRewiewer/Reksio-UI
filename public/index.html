@@ -70,9 +70,6 @@
             </div>
           </div>
           <div class="brand-actions">
-            <button class="icon-button" id="consoleButton" type="button" title="Console" aria-label="Console">
-              <svg><use href="#icon-terminal"></use></svg>
-            </button>
             <button class="icon-button" id="notesButton" type="button" title="Notes" aria-label="Notes">
               <svg><use href="#icon-note"></use></svg>
             </button>
@@ -114,13 +111,13 @@
           </div>
 
           <div class="toolbar-actions">
-            <button class="tool-button primary" id="playButton" type="button">
-              <svg><use href="#icon-play"></use></svg>
-              Play
+            <button class="tool-button primary" id="saveLogsButton" type="button">
+              <svg><use href="#icon-archive"></use></svg>
+              Save Logs
             </button>
-            <button class="tool-button" id="openRawButton" type="button">
-              <svg><use href="#icon-external"></use></svg>
-              Raw
+            <button class="tool-button" id="clearLogsButton" type="button">
+              <svg><use href="#icon-trash"></use></svg>
+              Clear Logs
             </button>
             <button class="tool-button" id="traceButton" type="button" aria-pressed="false">
               <svg><use href="#icon-terminal"></use></svg>
@@ -156,6 +153,10 @@
         </section>
 
         <section class="detail-section detail-actions">
+          <button class="wide-button" id="snapshotsButton" type="button">
+            <svg><use href="#icon-archive"></use></svg>
+            Snapshots
+          </button>
           <button class="wide-button" id="resetSaveButton" type="button">
             <svg><use href="#icon-refresh"></use></svg>
             Reset Save
@@ -223,63 +224,27 @@
       </div>
     </dialog>
 
-    <dialog class="add-dialog console-dialog" id="consoleDialog">
+    <dialog class="add-dialog snapshots-dialog" id="snapshotsDialog">
       <div class="dialog-shell">
         <header class="dialog-header">
           <div>
-            <div class="eyebrow">Debug</div>
-            <h2>Console</h2>
+            <div class="eyebrow">Saves</div>
+            <h2>Snapshots</h2>
           </div>
-          <button class="icon-button" id="closeConsoleDialogButton" type="button" title="Close" aria-label="Close">
+          <button class="icon-button" id="closeSnapshotsDialogButton" type="button" title="Close" aria-label="Close">
             <svg><use href="#icon-close"></use></svg>
           </button>
         </header>
 
-        <div class="console-toolbar">
-          <div class="console-summary" id="consoleSummary">No logs yet</div>
-          <div class="console-controls" aria-label="Console filters">
-            <label class="check-pill">
-              <input type="checkbox" data-console-level="debug" />
-              Debug
-            </label>
-            <label class="check-pill">
-              <input type="checkbox" data-console-level="info" checked />
-              Info
-            </label>
-            <label class="check-pill">
-              <input type="checkbox" data-console-level="warn" checked />
-              Warn
-            </label>
-            <label class="check-pill">
-              <input type="checkbox" data-console-level="error" checked />
-              Error
-            </label>
-            <label class="check-pill">
-              <input id="consoleFollowCheckbox" type="checkbox" />
-              Follow
-            </label>
-          </div>
-          <div class="console-actions">
-            <button class="text-button" id="pauseConsoleButton" type="button">
-              <svg><use href="#icon-pause"></use></svg>
-              <span>Pause</span>
-            </button>
-            <button class="text-button" id="copyConsoleButton" type="button">
-              <svg><use href="#icon-note"></use></svg>
-              Copy
-            </button>
-            <button class="text-button" id="downloadConsoleButton" type="button">
-              <svg><use href="#icon-archive"></use></svg>
-              Save
-            </button>
-            <button class="text-button" id="clearConsoleButton" type="button">
-              <svg><use href="#icon-trash"></use></svg>
-              Clear
-            </button>
-          </div>
+        <div class="snapshot-toolbar">
+          <div class="snapshot-summary" id="snapshotSummary">No game selected</div>
+          <button class="tool-button primary" id="createSnapshotButton" type="button">
+            <svg><use href="#icon-add"></use></svg>
+            Create Snapshot
+          </button>
         </div>
 
-        <div class="console-log" id="consoleLog" aria-live="polite"></div>
+        <div class="snapshot-list" id="snapshotList" aria-live="polite"></div>
       </div>
     </dialog>
 

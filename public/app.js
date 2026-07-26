@@ -5,18 +5,7 @@ const launcherParams = new URLSearchParams(window.location.search);
 const state = {
   games: [],
   notes: [],
-  logs: [],
-  consoleOffset: 0,
-  consoleSize: 0,
-  consoleTruncated: false,
-  consoleFilters: {
-    debug: false,
-    info: true,
-    warn: true,
-    error: true
-  },
-  consoleFollow: false,
-  consolePaused: false,
+  snapshots: [],
   selectedId: null,
   selectedNoteId: null,
   loadedId: null,
@@ -31,21 +20,14 @@ const state = {
 const nodes = {
   addGameButton: document.getElementById('addGameButton'),
   closeDialogButton: document.getElementById('closeDialogButton'),
-  closeConsoleDialogButton: document.getElementById('closeConsoleDialogButton'),
+  closeSnapshotsDialogButton: document.getElementById('closeSnapshotsDialogButton'),
   addGameDialog: document.getElementById('addGameDialog'),
-  clearConsoleButton: document.getElementById('clearConsoleButton'),
-  consoleFollowCheckbox: document.getElementById('consoleFollowCheckbox'),
-  consoleButton: document.getElementById('consoleButton'),
-  consoleDialog: document.getElementById('consoleDialog'),
-  consoleFilterInputs: document.querySelectorAll('[data-console-level]'),
-  consoleLog: document.getElementById('consoleLog'),
-  consoleSummary: document.getElementById('consoleSummary'),
-  copyConsoleButton: document.getElementById('copyConsoleButton'),
+  clearLogsButton: document.getElementById('clearLogsButton'),
+  createSnapshotButton: document.getElementById('createSnapshotButton'),
   deleteGameButton: document.getElementById('deleteGameButton'),
   detailCover: document.getElementById('detailCover'),
   detailNotes: document.getElementById('detailNotes'),
   detailTitle: document.getElementById('detailTitle'),
-  downloadConsoleButton: document.getElementById('downloadConsoleButton'),
   filterButtons: document.querySelectorAll('.filter-button'),
   fullscreenButton: document.getElementById('fullscreenButton'),
   gameFrame: document.getElementById('gameFrame'),
@@ -67,16 +49,18 @@ const nodes = {
   notesForm: document.getElementById('notesForm'),
   notesList: document.getElementById('notesList'),
   notesStatus: document.getElementById('notesStatus'),
-  openRawButton: document.getElementById('openRawButton'),
-  pauseConsoleButton: document.getElementById('pauseConsoleButton'),
-  playButton: document.getElementById('playButton'),
   refreshButton: document.getElementById('refreshButton'),
   resetSaveButton: document.getElementById('resetSaveButton'),
+  saveLogsButton: document.getElementById('saveLogsButton'),
   searchInput: document.getElementById('searchInput'),
   selectedBadges: document.getElementById('selectedBadges'),
   selectedSource: document.getElementById('selectedSource'),
   selectedTitle: document.getElementById('selectedTitle'),
   serverStatus: document.getElementById('serverStatus'),
+  snapshotList: document.getElementById('snapshotList'),
+  snapshotSummary: document.getElementById('snapshotSummary'),
+  snapshotsButton: document.getElementById('snapshotsButton'),
+  snapshotsDialog: document.getElementById('snapshotsDialog'),
   stageEmpty: document.getElementById('stageEmpty'),
   tabs: document.querySelectorAll('.dialog-tab'),
   toast: document.getElementById('toast'),
@@ -90,20 +74,237 @@ let logSessionId = null;
 let logSessionPromise = null;
 let logFlushTimer = null;
 let logQueue = [];
-let consolePollTimer = null;
-let consolePollInFlight = false;
 let toastTimer = null;
-const MAX_RENDERED_LOG_ENTRIES = 120;
-const MAX_CLIENT_LOG_ENTRIES = 240;
+let snapshotDbPromise = null;
 const MAX_LOG_QUEUE_ENTRIES = 1000;
 const MAX_LOG_MESSAGE_CHARS = 4000;
 const MAX_LOG_DETAIL_CHARS = 8000;
 const LOG_FLUSH_BATCH_SIZE = 250;
 const LOG_FLUSH_INTERVAL_MS = 300;
-const CONSOLE_POLL_INTERVAL_MS = 1500;
+const SNAPSHOT_DB_NAME = 'reksio-launcher';
+const SNAPSHOT_DB_VERSION = 1;
+const SNAPSHOT_STORE_NAME = 'snapshots';
+const SNAPSHOT_GAME_INDEX = 'gameId';
+const ENGINE_DB_NAME = 'reksio';
+const ENGINE_FILESYSTEM_STORE_NAME = 'filesystem';
 
 function icon(name) {
   return `<svg><use href="#icon-${name}"></use></svg>`;
+}
+
+function requireIndexedDb() {
+  if (!window.indexedDB) {
+    throw new Error('IndexedDB is not available in this browser.');
+  }
+}
+
+function openDatabase(name, version, upgradeCallback) {
+  requireIndexedDb();
+
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, version);
+
+    request.onupgradeneeded = (event) => {
+      if (upgradeCallback) {
+        upgradeCallback(request.result, event);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error(`Failed to open IndexedDB database ${name}.`));
+    request.onblocked = () => reject(new Error(`IndexedDB database ${name} is blocked by another tab.`));
+  });
+}
+
+function transactionDone(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error('IndexedDB transaction failed.'));
+    transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted.'));
+  });
+}
+
+function getSnapshotDb() {
+  if (!snapshotDbPromise) {
+    snapshotDbPromise = openDatabase(SNAPSHOT_DB_NAME, SNAPSHOT_DB_VERSION, (db, event) => {
+      let store;
+
+      if (!db.objectStoreNames.contains(SNAPSHOT_STORE_NAME)) {
+        store = db.createObjectStore(SNAPSHOT_STORE_NAME, { keyPath: 'id' });
+      } else {
+        store = event.target.transaction.objectStore(SNAPSHOT_STORE_NAME);
+      }
+
+      if (!store.indexNames.contains(SNAPSHOT_GAME_INDEX)) {
+        store.createIndex(SNAPSHOT_GAME_INDEX, SNAPSHOT_GAME_INDEX, { unique: false });
+      }
+    }).catch((error) => {
+      snapshotDbPromise = null;
+      throw error;
+    });
+  }
+
+  return snapshotDbPromise;
+}
+
+function openEngineFilesystemDb() {
+  return openDatabase(ENGINE_DB_NAME, 1, (db) => {
+    if (!db.objectStoreNames.contains(ENGINE_FILESYSTEM_STORE_NAME)) {
+      db.createObjectStore(ENGINE_FILESYSTEM_STORE_NAME);
+    }
+  });
+}
+
+async function getSnapshotsForGame(gameId) {
+  const db = await getSnapshotDb();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(SNAPSHOT_STORE_NAME, 'readonly');
+    const index = transaction.objectStore(SNAPSHOT_STORE_NAME).index(SNAPSHOT_GAME_INDEX);
+    const request = index.getAll(gameId);
+
+    request.onsuccess = () => {
+      resolve(
+        request.result
+          .slice()
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      );
+    };
+    request.onerror = () => reject(request.error || new Error('Failed to load snapshots.'));
+  });
+}
+
+async function getSnapshot(snapshotId) {
+  const db = await getSnapshotDb();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(SNAPSHOT_STORE_NAME, 'readonly');
+    const request = transaction.objectStore(SNAPSHOT_STORE_NAME).get(snapshotId);
+
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error('Failed to load snapshot.'));
+  });
+}
+
+async function putSnapshot(snapshot) {
+  const db = await getSnapshotDb();
+  const transaction = db.transaction(SNAPSHOT_STORE_NAME, 'readwrite');
+
+  transaction.objectStore(SNAPSHOT_STORE_NAME).put(snapshot);
+  await transactionDone(transaction);
+}
+
+async function deleteSnapshotById(snapshotId) {
+  const db = await getSnapshotDb();
+  const transaction = db.transaction(SNAPSHOT_STORE_NAME, 'readwrite');
+
+  transaction.objectStore(SNAPSHOT_STORE_NAME).delete(snapshotId);
+  await transactionDone(transaction);
+}
+
+async function deleteSnapshotsForGame(gameId) {
+  const snapshots = await getSnapshotsForGame(gameId);
+
+  if (!snapshots.length) {
+    return;
+  }
+
+  const db = await getSnapshotDb();
+  const transaction = db.transaction(SNAPSHOT_STORE_NAME, 'readwrite');
+  const store = transaction.objectStore(SNAPSHOT_STORE_NAME);
+
+  snapshots.forEach((snapshot) => store.delete(snapshot.id));
+  await transactionDone(transaction);
+}
+
+async function dumpEngineFilesystem() {
+  const db = await openEngineFilesystemDb();
+
+  try {
+    if (!db.objectStoreNames.contains(ENGINE_FILESYSTEM_STORE_NAME)) {
+      return [];
+    }
+
+    return await new Promise((resolve, reject) => {
+      const entries = [];
+      const transaction = db.transaction(ENGINE_FILESYSTEM_STORE_NAME, 'readonly');
+      const request = transaction.objectStore(ENGINE_FILESYSTEM_STORE_NAME).openCursor();
+
+      request.onsuccess = () => {
+        const cursor = request.result;
+
+        if (!cursor) {
+          resolve(entries);
+          return;
+        }
+
+        entries.push({
+          key: cursor.key,
+          value: cursor.value
+        });
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error || new Error('Failed to read engine filesystem.'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function replaceEngineFilesystem(entries) {
+  const db = await openEngineFilesystemDb();
+
+  try {
+    const transaction = db.transaction(ENGINE_FILESYSTEM_STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(ENGINE_FILESYSTEM_STORE_NAME);
+
+    store.clear();
+    entries.forEach((entry) => store.put(entry.value, entry.key));
+    await transactionDone(transaction);
+  } finally {
+    db.close();
+  }
+}
+
+function createSnapshotId() {
+  const randomPart =
+    window.crypto && typeof window.crypto.randomUUID === 'function'
+      ? window.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+  return `snapshot-${randomPart}`;
+}
+
+function storedValueSize(value) {
+  if (value instanceof ArrayBuffer) {
+    return value.byteLength;
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    return value.byteLength;
+  }
+
+  if (value instanceof Blob) {
+    return value.size;
+  }
+
+  if (typeof value === 'string') {
+    return new Blob([value]).size;
+  }
+
+  if (value == null) {
+    return 0;
+  }
+
+  try {
+    return new Blob([JSON.stringify(value)]).size;
+  } catch {
+    return 0;
+  }
+}
+
+function estimateSnapshotSize(snapshot) {
+  const filesystemBytes = (snapshot.filesystemEntries || []).reduce((total, entry) => total + storedValueSize(entry.value), 0);
+  return filesystemBytes + storedValueSize(snapshot.saveContent || '');
 }
 
 function serializeLogValue(value) {
@@ -159,10 +360,6 @@ function showToast(title, detail = '') {
   }, 4200);
 }
 
-function isConsoleOpen() {
-  return Boolean(nodes.consoleDialog.open);
-}
-
 function createClientLogEntry(source, level, message, detail = '', time = new Date().toISOString()) {
   return {
     time,
@@ -184,17 +381,6 @@ function createClientLogEntryFromPayload(payload, fallbackSource = 'engine') {
     payload && payload.detail ? payload.detail : payload && payload.stack ? payload.stack : '',
     payload && payload.time ? payload.time : new Date().toISOString()
   );
-}
-
-function selectedConsoleLevels() {
-  return Object.entries(state.consoleFilters)
-    .filter(([, enabled]) => enabled)
-    .map(([level]) => level);
-}
-
-function consoleLevelsQuery() {
-  const levels = selectedConsoleLevels();
-  return levels.length ? levels.join(',') : 'error';
 }
 
 function ensureLogSession() {
@@ -272,10 +458,6 @@ async function flushLogQueue() {
     if (!response.ok) {
       throw new Error(`Log append failed with ${response.status}`);
     }
-
-    if (isConsoleOpen() && !state.consolePaused) {
-      pollConsoleLogs();
-    }
   } catch (error) {
     logQueue = batch.concat(logQueue).slice(-MAX_LOG_QUEUE_ENTRIES);
     console.warn('Failed to flush logs', error);
@@ -298,137 +480,6 @@ function addLog(source, level, message, detail = '') {
   queueLogEntries([createClientLogEntry(source, level, message, detail)]);
 }
 
-function formatLogTime(value) {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  }).format(new Date(value));
-}
-
-function formatLogBytes(bytes) {
-  return bytes ? formatBytes(bytes) : '0 B';
-}
-
-function renderConsole() {
-  const previousScrollTop = nodes.consoleLog.scrollTop;
-  const renderedLogs = state.logs.slice(-MAX_RENDERED_LOG_ENTRIES);
-  const truncatedCount = state.logs.length - renderedLogs.length;
-  const counts = state.logs.reduce(
-    (totals, entry) => {
-      totals[entry.level] += 1;
-      return totals;
-    },
-    { debug: 0, info: 0, warn: 0, error: 0 }
-  );
-
-  const statusPrefix = state.consolePaused ? 'Paused - ' : '';
-
-  nodes.consoleSummary.textContent = state.logs.length
-    ? `${state.logs.length} visible - ${counts.error} errors - ${counts.warn} warnings - ${formatLogBytes(state.consoleSize)} file`
-    : logSessionId
-      ? `No visible logs - ${formatLogBytes(state.consoleSize)} file`
-      : 'Starting log session';
-  nodes.consoleSummary.textContent = `${statusPrefix}${nodes.consoleSummary.textContent}`;
-
-  nodes.consoleLog.innerHTML = state.logs.length
-    ? [
-        truncatedCount > 0
-          ? `<div class="console-truncated">Showing latest ${MAX_RENDERED_LOG_ENTRIES} visible entries from the server log tail.</div>`
-          : '',
-        state.consoleTruncated ? '<div class="console-truncated">Earlier matching logs are available in the saved log export.</div>' : '',
-        ...renderedLogs.map(
-          (entry) => `
-            <article class="console-entry ${entry.level}">
-              <div class="console-entry-meta">
-                <span>${escapeHtml(formatLogTime(entry.time))}</span>
-                <span>${escapeHtml(entry.source)}</span>
-                <span>${escapeHtml(entry.level.toUpperCase())}</span>
-              </div>
-              <pre>${escapeHtml(entry.message)}${entry.detail ? `\n${escapeHtml(entry.detail)}` : ''}</pre>
-            </article>
-          `
-        )
-      ].join('')
-    : '<div class="console-empty">Logs from the launcher and game iframe will appear here.</div>';
-
-  if (state.consoleFollow) {
-    nodes.consoleLog.scrollTop = nodes.consoleLog.scrollHeight;
-  } else {
-    nodes.consoleLog.scrollTop = previousScrollTop;
-  }
-}
-
-async function pollConsoleLogs(reset = false) {
-  if (consolePollInFlight || state.consolePaused) {
-    return;
-  }
-
-  consolePollInFlight = true;
-
-  try {
-    const sessionId = await ensureLogSession();
-    const params = new URLSearchParams({
-      levels: consoleLevelsQuery(),
-      limit: String(MAX_CLIENT_LOG_ENTRIES)
-    });
-
-    if (!reset) {
-      params.set('offset', String(state.consoleOffset));
-    }
-
-    const body = await apiFetch(`/api/logs/${encodeURIComponent(sessionId)}?${params.toString()}`);
-
-    if (reset) {
-      state.logs = [];
-    }
-
-    if (body.entries.length) {
-      state.logs.push(...body.entries);
-      state.logs.splice(0, Math.max(0, state.logs.length - MAX_CLIENT_LOG_ENTRIES));
-    }
-
-    state.consoleOffset = body.nextOffset;
-    state.consoleSize = body.size;
-    state.consoleTruncated = body.truncated;
-    renderConsole();
-  } catch (error) {
-    state.logs.push(createClientLogEntry('launcher', 'error', 'Failed to poll server log', error));
-    state.logs.splice(0, Math.max(0, state.logs.length - MAX_CLIENT_LOG_ENTRIES));
-    renderConsole();
-  } finally {
-    consolePollInFlight = false;
-  }
-}
-
-function startConsoleTail(reset = false) {
-  stopConsoleTail();
-  pollConsoleLogs(reset);
-
-  if (!state.consolePaused) {
-    consolePollTimer = setInterval(() => pollConsoleLogs(), CONSOLE_POLL_INTERVAL_MS);
-  }
-}
-
-function stopConsoleTail() {
-  if (consolePollTimer) {
-    clearInterval(consolePollTimer);
-    consolePollTimer = null;
-  }
-}
-
-function openConsoleDialog() {
-  nodes.consoleDialog.showModal();
-  startConsoleTail(true);
-}
-
-function renderConsolePauseButton() {
-  const label = state.consolePaused ? 'Resume' : 'Pause';
-  const iconName = state.consolePaused ? 'play' : 'pause';
-  nodes.pauseConsoleButton.innerHTML = `${icon(iconName)}<span>${label}</span>`;
-  nodes.pauseConsoleButton.setAttribute('aria-pressed', String(state.consolePaused));
-}
-
 function renderTraceButton() {
   nodes.traceButton.setAttribute('aria-pressed', String(state.traceEnabled));
   nodes.traceButton.title = state.traceEnabled ? 'Engine trace enabled' : 'Enable engine trace';
@@ -446,19 +497,6 @@ function toggleTrace() {
   );
 }
 
-function toggleConsolePaused() {
-  state.consolePaused = !state.consolePaused;
-  renderConsolePauseButton();
-
-  if (state.consolePaused) {
-    stopConsoleTail();
-    renderConsole();
-    return;
-  }
-
-  startConsoleTail(false);
-}
-
 async function clearConsole() {
   await flushLogQueue();
 
@@ -466,12 +504,8 @@ async function clearConsole() {
     await fetch(`/api/logs/${encodeURIComponent(logSessionId)}`, { method: 'DELETE' });
   }
 
-  state.logs = [];
-  state.consoleOffset = 0;
-  state.consoleSize = 0;
-  state.consoleTruncated = false;
-  renderConsole();
-  addLog('launcher', 'info', 'Console cleared');
+  showToast('Logs cleared');
+  addLog('launcher', 'info', 'Logs cleared');
 }
 
 function absoluteUrl(value) {
@@ -508,19 +542,6 @@ async function copyTextToClipboard(text) {
 
   if (!copyTextFallback(text)) {
     throw new Error('Clipboard API is unavailable in this browser context.');
-  }
-}
-
-async function copyConsole() {
-  const text = state.logs
-    .map((entry) => `[${entry.time}] [${entry.source}] [${entry.level}] ${entry.message}${entry.detail ? `\n${entry.detail}` : ''}`)
-    .join('\n');
-
-  try {
-    await copyTextToClipboard(text);
-    addLog('launcher', 'info', 'Console copied to clipboard');
-  } catch (error) {
-    addLog('launcher', 'error', 'Failed to copy console', error);
   }
 }
 
@@ -562,9 +583,9 @@ async function captureGameScreenshot() {
 }
 
 async function saveConsoleExport() {
-  const previousHtml = nodes.downloadConsoleButton.innerHTML;
-  nodes.downloadConsoleButton.disabled = true;
-  nodes.downloadConsoleButton.innerHTML = `${icon('archive')}<span>Saving</span>`;
+  const previousHtml = nodes.saveLogsButton.innerHTML;
+  nodes.saveLogsButton.disabled = true;
+  nodes.saveLogsButton.innerHTML = `${icon('archive')}<span>Saving</span>`;
 
   try {
     const sessionId = await ensureLogSession();
@@ -579,7 +600,14 @@ async function saveConsoleExport() {
       await flushLogQueue();
     }
 
-    const response = await fetch(`/api/logs/${encodeURIComponent(sessionId)}/export`, {
+    const exportParams = new URLSearchParams();
+    if (state.traceEnabled) {
+      exportParams.set('trace', '1');
+    }
+    const exportQuery = exportParams.toString();
+    const exportUrl = `/api/logs/${encodeURIComponent(sessionId)}/export${exportQuery ? `?${exportQuery}` : ''}`;
+
+    const response = await fetch(exportUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'image/png'
@@ -607,11 +635,11 @@ async function saveConsoleExport() {
     addLog(
       'launcher',
       'info',
-      'Console log export saved',
+      'Log export saved',
       `${body.exportDir}\n${(body.files || []).join('\n')}${body.screenshotSaved ? '' : '\nScreenshot not included.'}${clipboardCopied ? '\nPath copied to clipboard.' : ''}`
     );
     showToast(
-      'Console saved',
+      'Logs saved',
       clipboardCopied
         ? `${exportPath} copied`
         : body.screenshotSaved
@@ -619,10 +647,10 @@ async function saveConsoleExport() {
           : `${body.exportDir} - screenshot unavailable`
     );
   } catch (error) {
-    addLog('launcher', 'error', 'Failed to save console log export', error);
+    addLog('launcher', 'error', 'Failed to save log export', error);
   } finally {
-    nodes.downloadConsoleButton.disabled = false;
-    nodes.downloadConsoleButton.innerHTML = previousHtml;
+    nodes.saveLogsButton.disabled = false;
+    nodes.saveLogsButton.innerHTML = previousHtml;
   }
 }
 
@@ -632,6 +660,31 @@ function getSelectedGame() {
 
 function saveSlotKey(gameId) {
   return `reksioLauncher.save.${gameId}`;
+}
+
+function getSaveContentForGame(gameId) {
+  if (state.loadedId === gameId) {
+    syncCurrentSave();
+    return localStorage.getItem('saveFile') || localStorage.getItem(saveSlotKey(gameId)) || '';
+  }
+
+  return localStorage.getItem(saveSlotKey(gameId)) || '';
+}
+
+function setSaveContentForGame(gameId, content) {
+  if (content) {
+    localStorage.setItem(saveSlotKey(gameId), content);
+  } else {
+    localStorage.removeItem(saveSlotKey(gameId));
+  }
+
+  if (state.loadedId === gameId || state.selectedId === gameId) {
+    if (content) {
+      localStorage.setItem('saveFile', content);
+    } else {
+      localStorage.removeItem('saveFile');
+    }
+  }
 }
 
 function syncCurrentSave() {
@@ -654,6 +707,276 @@ function prepareSaveSlot(gameId) {
   } else {
     localStorage.removeItem('saveFile');
   }
+}
+
+function stopLoadedGame() {
+  clearInterval(saveSyncTimer);
+  saveSyncTimer = null;
+  state.loadedId = null;
+  nodes.gameFrame.src = 'about:blank';
+}
+
+function defaultSnapshotName(game) {
+  return `${game.title} - ${new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date())}`;
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return 'Unknown';
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value));
+}
+
+function setSnapshotStatus(message) {
+  nodes.snapshotSummary.textContent = message;
+}
+
+function renderSnapshots() {
+  const game = getSelectedGame();
+
+  if (!game) {
+    setSnapshotStatus('No game selected');
+    nodes.snapshotList.innerHTML = '<div class="snapshot-empty">No game selected</div>';
+    nodes.createSnapshotButton.disabled = true;
+    return;
+  }
+
+  nodes.createSnapshotButton.disabled = false;
+  setSnapshotStatus(`${state.snapshots.length} snapshot${state.snapshots.length === 1 ? '' : 's'} for ${game.title}`);
+
+  if (!state.snapshots.length) {
+    nodes.snapshotList.innerHTML = '<div class="snapshot-empty">No snapshots yet</div>';
+    return;
+  }
+
+  nodes.snapshotList.innerHTML = state.snapshots
+    .map(
+      (snapshot) => `
+        <article class="snapshot-item">
+          <div class="snapshot-copy">
+            <div class="snapshot-title">${escapeHtml(snapshot.name)}</div>
+            <div class="snapshot-meta">
+              ${escapeHtml(formatDateTime(snapshot.createdAt))} - ${escapeHtml(formatBytes(snapshot.sizeBytes || 0))} - ${escapeHtml(String(snapshot.filesystemEntryCount || 0))} files
+            </div>
+          </div>
+          <div class="snapshot-actions">
+            <button class="text-button" type="button" data-snapshot-action="restore" data-snapshot-id="${escapeHtml(snapshot.id)}">
+              ${icon('refresh')}
+              Restore
+            </button>
+            <button class="text-button" type="button" data-snapshot-action="rename" data-snapshot-id="${escapeHtml(snapshot.id)}">
+              ${icon('note')}
+              Rename
+            </button>
+            <button class="text-button danger" type="button" data-snapshot-action="delete" data-snapshot-id="${escapeHtml(snapshot.id)}">
+              ${icon('trash')}
+              Delete
+            </button>
+          </div>
+        </article>
+      `
+    )
+    .join('');
+}
+
+async function loadSnapshotsForSelectedGame() {
+  const game = getSelectedGame();
+
+  if (!game) {
+    state.snapshots = [];
+    renderSnapshots();
+    return;
+  }
+
+  setSnapshotStatus('Loading snapshots');
+  state.snapshots = await getSnapshotsForGame(game.id);
+  renderSnapshots();
+}
+
+async function openSnapshotsDialog() {
+  const game = getSelectedGame();
+
+  if (!game) {
+    return;
+  }
+
+  if (!nodes.snapshotsDialog.open) {
+    nodes.snapshotsDialog.showModal();
+  }
+
+  try {
+    await loadSnapshotsForSelectedGame();
+  } catch (error) {
+    addLog('launcher', 'error', 'Failed to open snapshots', error);
+    setSnapshotStatus(error.message);
+  }
+}
+
+async function createCurrentSnapshot() {
+  const game = getSelectedGame();
+
+  if (!game) {
+    return;
+  }
+
+  syncCurrentSave();
+
+  const fallbackName = defaultSnapshotName(game);
+  const requestedName = window.prompt('Snapshot name', fallbackName);
+
+  if (requestedName === null) {
+    return;
+  }
+
+  const name = (requestedName.trim() || fallbackName).slice(0, 120);
+  const previousHtml = nodes.createSnapshotButton.innerHTML;
+  nodes.createSnapshotButton.disabled = true;
+  nodes.createSnapshotButton.innerHTML = `${icon('archive')}<span>Saving</span>`;
+  setSnapshotStatus('Saving snapshot');
+
+  try {
+    const filesystemEntries = await dumpEngineFilesystem();
+    const saveContent = getSaveContentForGame(game.id);
+    const snapshot = {
+      id: createSnapshotId(),
+      gameId: game.id,
+      gameTitle: game.title,
+      name,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      saveContent,
+      filesystemEntries,
+      filesystemEntryCount: filesystemEntries.length,
+      sizeBytes: 0
+    };
+
+    snapshot.sizeBytes = estimateSnapshotSize(snapshot);
+    await putSnapshot(snapshot);
+    await loadSnapshotsForSelectedGame();
+    showToast('Snapshot saved', name);
+    addLog('launcher', 'info', 'Snapshot saved', `${name}\n${snapshot.filesystemEntryCount} filesystem entries`);
+  } catch (error) {
+    addLog('launcher', 'error', 'Failed to save snapshot', error);
+    setSnapshotStatus(error.message);
+  } finally {
+    nodes.createSnapshotButton.disabled = false;
+    nodes.createSnapshotButton.innerHTML = previousHtml;
+  }
+}
+
+async function restoreSnapshot(snapshotId) {
+  const snapshot = await getSnapshot(snapshotId);
+
+  if (!snapshot) {
+    throw new Error('Snapshot not found.');
+  }
+
+  const confirmed = window.confirm(`Restore "${snapshot.name}"? Current progress for this game will be overwritten.`);
+
+  if (!confirmed) {
+    return;
+  }
+
+  setSnapshotStatus('Restoring snapshot');
+
+  if (state.loadedId) {
+    syncCurrentSave();
+    stopLoadedGame();
+  } else {
+    syncCurrentSave();
+  }
+
+  setSaveContentForGame(snapshot.gameId, snapshot.saveContent || '');
+  await replaceEngineFilesystem(snapshot.filesystemEntries || []);
+  showToast('Snapshot restored', snapshot.name);
+  addLog('launcher', 'info', 'Snapshot restored', snapshot.name);
+
+  if (state.games.some((game) => game.id === snapshot.gameId)) {
+    selectGame(snapshot.gameId, true);
+  } else {
+    await loadSnapshotsForSelectedGame();
+  }
+}
+
+async function renameSnapshot(snapshotId) {
+  const snapshot = await getSnapshot(snapshotId);
+
+  if (!snapshot) {
+    throw new Error('Snapshot not found.');
+  }
+
+  const nextName = window.prompt('Snapshot name', snapshot.name);
+
+  if (nextName === null) {
+    return;
+  }
+
+  const name = nextName.trim();
+
+  if (!name) {
+    return;
+  }
+
+  snapshot.name = name.slice(0, 120);
+  snapshot.updatedAt = new Date().toISOString();
+  await putSnapshot(snapshot);
+  await loadSnapshotsForSelectedGame();
+  showToast('Snapshot renamed', snapshot.name);
+}
+
+async function deleteSnapshot(snapshotId) {
+  const snapshot = await getSnapshot(snapshotId);
+
+  if (!snapshot) {
+    throw new Error('Snapshot not found.');
+  }
+
+  const confirmed = window.confirm(`Delete "${snapshot.name}"?`);
+
+  if (!confirmed) {
+    return;
+  }
+
+  await deleteSnapshotById(snapshotId);
+  await loadSnapshotsForSelectedGame();
+  showToast('Snapshot deleted', snapshot.name);
+}
+
+function handleSnapshotListClick(event) {
+  const button = event.target.closest && event.target.closest('[data-snapshot-action]');
+
+  if (!button) {
+    return;
+  }
+
+  const action = button.dataset.snapshotAction;
+  const snapshotId = button.dataset.snapshotId;
+  const handlers = {
+    restore: restoreSnapshot,
+    rename: renameSnapshot,
+    delete: deleteSnapshot
+  };
+
+  if (!handlers[action] || !snapshotId) {
+    return;
+  }
+
+  handlers[action](snapshotId).catch((error) => {
+    addLog('launcher', 'error', `Snapshot ${action} failed`, error);
+    setSnapshotStatus(error.message);
+  });
 }
 
 function formatBytes(bytes) {
@@ -987,10 +1310,9 @@ function renderDetails() {
     nodes.metaList.innerHTML = '';
     nodes.stageEmpty.hidden = false;
     nodes.gameFrame.hidden = true;
-    nodes.playButton.disabled = true;
-    nodes.openRawButton.disabled = true;
     nodes.traceButton.disabled = true;
     nodes.fullscreenButton.disabled = true;
+    nodes.snapshotsButton.disabled = true;
     nodes.resetSaveButton.disabled = true;
     nodes.deleteGameButton.disabled = true;
     return;
@@ -1019,10 +1341,9 @@ function renderDetails() {
 
   nodes.stageEmpty.hidden = true;
   nodes.gameFrame.hidden = false;
-  nodes.playButton.disabled = false;
-  nodes.openRawButton.disabled = false;
   nodes.traceButton.disabled = false;
   nodes.fullscreenButton.disabled = false;
+  nodes.snapshotsButton.disabled = false;
   nodes.resetSaveButton.disabled = false;
   nodes.deleteGameButton.disabled = false;
 }
@@ -1260,6 +1581,7 @@ async function deleteSelectedGame() {
 
   await apiFetch(`/api/games/${encodeURIComponent(game.id)}`, { method: 'DELETE' });
   localStorage.removeItem(saveSlotKey(game.id));
+  await deleteSnapshotsForGame(game.id).catch((error) => addLog('launcher', 'warn', 'Failed to delete game snapshots', error));
   state.selectedId = null;
   state.loadedId = state.loadedId === game.id ? null : state.loadedId;
   await loadGames();
@@ -1288,39 +1610,19 @@ function resetSelectedSave() {
 
 nodes.addGameButton.addEventListener('click', openDialog);
 nodes.closeDialogButton.addEventListener('click', () => nodes.addGameDialog.close());
-nodes.consoleButton.addEventListener('click', openConsoleDialog);
-nodes.closeConsoleDialogButton.addEventListener('click', () => {
-  nodes.consoleDialog.close();
-  stopConsoleTail();
+nodes.clearLogsButton.addEventListener('click', () => {
+  clearConsole().catch((error) => addLog('launcher', 'error', 'Failed to clear logs', error));
 });
-nodes.clearConsoleButton.addEventListener('click', () => {
-  clearConsole().catch((error) => addLog('launcher', 'error', 'Failed to clear console', error));
-});
-nodes.copyConsoleButton.addEventListener('click', copyConsole);
-nodes.pauseConsoleButton.addEventListener('click', toggleConsolePaused);
-nodes.downloadConsoleButton.addEventListener('click', saveConsoleExport);
-nodes.consoleFollowCheckbox.addEventListener('change', (event) => {
-  state.consoleFollow = event.target.checked;
-
-  if (state.consoleFollow) {
-    nodes.consoleLog.scrollTop = nodes.consoleLog.scrollHeight;
-  }
-});
-nodes.consoleFilterInputs.forEach((input) => {
-  state.consoleFilters[input.dataset.consoleLevel] = input.checked;
-  input.addEventListener('change', () => {
-    state.consoleFilters[input.dataset.consoleLevel] = input.checked;
-
-    if (isConsoleOpen() && !state.consolePaused) {
-      startConsoleTail(true);
-    }
-  });
-});
+nodes.saveLogsButton.addEventListener('click', saveConsoleExport);
 nodes.notesButton.addEventListener('click', openNotesDialog);
 nodes.closeNotesDialogButton.addEventListener('click', () => nodes.notesDialog.close());
 nodes.newNoteButton.addEventListener('click', startNewNote);
 nodes.notesForm.addEventListener('submit', saveCurrentNote);
 nodes.deleteNoteButton.addEventListener('click', deleteCurrentNote);
+nodes.snapshotsButton.addEventListener('click', openSnapshotsDialog);
+nodes.closeSnapshotsDialogButton.addEventListener('click', () => nodes.snapshotsDialog.close());
+nodes.createSnapshotButton.addEventListener('click', createCurrentSnapshot);
+nodes.snapshotList.addEventListener('click', handleSnapshotListClick);
 nodes.refreshButton.addEventListener('click', () => loadGames());
 nodes.searchInput.addEventListener('input', (event) => {
   state.search = event.target.value;
@@ -1359,13 +1661,7 @@ nodes.isoDropZone.addEventListener('drop', (event) => {
 });
 
 nodes.isoForm.addEventListener('submit', uploadIso);
-nodes.playButton.addEventListener('click', loadSelectedGame);
 nodes.traceButton.addEventListener('click', toggleTrace);
-nodes.openRawButton.addEventListener('click', () => {
-  if (nodes.gameFrame.src) {
-    window.open(nodes.gameFrame.src, '_blank', 'noopener');
-  }
-});
 nodes.fullscreenButton.addEventListener('click', () => {
   if (nodes.gameFrame.requestFullscreen) {
     nodes.gameFrame.requestFullscreen();
@@ -1382,17 +1678,6 @@ nodes.gameFrame.addEventListener('load', () => {
   syncCurrentSave();
   addLog('launcher', 'info', 'Game iframe loaded', nodes.gameFrame.src);
 });
-nodes.consoleDialog.addEventListener('close', stopConsoleTail);
-nodes.consoleDialog.addEventListener('click', (event) => {
-  const rect = nodes.consoleDialog.getBoundingClientRect();
-  const clickedOutside =
-    event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
-
-  if (clickedOutside) {
-    nodes.consoleDialog.close();
-    stopConsoleTail();
-  }
-});
 window.addEventListener('message', handleEngineMessage);
 window.addEventListener('error', (event) => {
   addLog('launcher', 'error', event.message, `${event.filename}:${event.lineno}:${event.colno}`);
@@ -1403,7 +1688,6 @@ window.addEventListener('unhandledrejection', (event) => {
 window.addEventListener('beforeunload', syncCurrentSave);
 
 addLog('launcher', 'info', 'Launcher ready');
-renderConsolePauseButton();
 renderTraceButton();
 logServerHealth();
 loadGames();
