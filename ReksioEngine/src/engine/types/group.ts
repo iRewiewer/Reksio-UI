@@ -29,6 +29,18 @@ export class Group extends Type<GroupDefinition> {
         this.objects = this.objects.filter((object) => !objectsNames.includes(object.name))
     }
 
+    @method()
+    GETSIZE() {
+        if (!this.engine.compat.groupCollections) return this.__call('GETSIZE', [])
+        return this.objects.length
+    }
+
+    @method()
+    REMOVEALL() {
+        if (!this.engine.compat.groupCollections) return this.__call('REMOVEALL', [])
+        this.removeAll()
+    }
+
     async __call(methodName: string, args: any[]) {
         for (const object of this.objects) {
             if (methodName in object) {

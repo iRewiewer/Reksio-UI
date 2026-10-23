@@ -1,6 +1,14 @@
 import type { Engine } from '../index'
 import type { SequenceFile } from '../../fileFormats/seq'
 
+export function patchMagicieniiSource(filename: string, source: string): string {
+    if (filename !== 'dane/game/przygoda/magic/magic.cnv') return source
+    // The wand's drawing event is CZARUJE (event 1), not the absent PLAY alias.
+    return source
+        .replaceAll('ANNWAND0^SETFRAME("PLAY",VARIDEBUG)', 'ANNWAND0^SETFRAME("CZARUJE",VARIDEBUG)')
+        .replaceAll('ANNWAND0^GETNOFINEVENT(1)', 'ANNWAND0^GETNOFINEVENT("CZARUJE")')
+}
+
 export function patchMagicieniiArray(filename: string, entries: any[]): any[] {
     if (filename !== 'dane/game/przygoda/arcade/telep_podworko/idle_kogut.arr') return entries
     return entries.map((entry) => entry === 'KUGUT_U103' ? 'KOGUT_U103' : entry)

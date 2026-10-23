@@ -13,7 +13,7 @@ import { loadJpegBackground } from '../engine/compatAssets'
 import { patchTimeMachineDefinitions } from '../engine/patches/timpului'
 import { patchOznSource } from '../engine/patches/ozn'
 import { patchNemoDefinitions } from '../engine/patches/nemo'
-import { patchMagicieniiArray, patchMagicieniiSequence } from '../engine/patches/magicienii'
+import { patchMagicieniiArray, patchMagicieniiSequence, patchMagicieniiSource } from '../engine/patches/magicienii'
 
 const PIRATES_RIVER_THREE_PATH = 'dane/intro/mainmenu/09rzekac/rzeka3.cnv'
 const PIRATES_WIOSKA_PATH = 'dane/intro/mainmenu/10wioska/wioska10.cnv'
@@ -314,6 +314,7 @@ export default class Filesystem {
         const data = await this.getFile(filename)
         let text = this.repairKnownDefinition(filename, decryptCNV(data))
         if (this.compat.oznDefinitions) text = patchOznSource(filename, text)
+        if (this.compat.magicieniiAssets) text = patchMagicieniiSource(filename, text)
         this.fileLoader.registerLogicalFilenames(this.getDirectoryPath(filename), text)
         console.debug(filename)
         console.debug(text)

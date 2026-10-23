@@ -127,8 +127,12 @@ export class CanvasObserver extends Type<CanvasObserverDefinition> {
                 positionX: 0,
                 positionY: 0,
                 compressionType: 0,
-                width: Math.floor(this.engine.app.view.width * scaleX),
-                height: Math.floor(this.engine.app.view.height * scaleY),
+                width: this.engine.compat.croppedCanvasSaves
+                    ? scaledCanvas.width
+                    : Math.floor(this.engine.app.view.width * scaleX),
+                height: this.engine.compat.croppedCanvasSaves
+                    ? scaledCanvas.height
+                    : Math.floor(this.engine.app.view.height * scaleY),
                 imageLen: -1,
                 alphaLen: -1,
             },

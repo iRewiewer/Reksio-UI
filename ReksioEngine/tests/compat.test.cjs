@@ -29,6 +29,47 @@ const decorator = { method: () => (method) => method };
 class FakeType {
     constructor(engine) { this.engine = engine; }
 }
+const { Group } = loadModule('engine/types/group.ts', {
+    './index': { Type: FakeType }, '../../common/types': decorator,
+    '../logging': { logger: { warn() {} } },
+});
+
+test('Magicienii group collection methods do not forward to actors or destroy them', async () => {
+    const group = new Group({ compat: createEngineCompat('magicienii') });
+    const calls = [];
+    const actor = (name) => ({ name, GETSIZE: () => calls.push([name, 'size']),
+        REMOVEALL: () => calls.push([name, 'clear']), HIDE: () => calls.push([name, 'hide']) });
+    const rex = actor('REX'), dummy = actor('DUMMY');
+    const objects = { REX: rex, DUMMY: dummy };
+    group.getObject = (name) => objects[name] ?? null;
+    assert.equal(await group.GETSIZE(), 0);
+    group.ADD('REX', 'DUMMY');
+    assert.equal(await group.GETSIZE(), 2);
+    await group.__call('HIDE', []);
+    assert.deepEqual(calls, [['REX', 'hide'], ['DUMMY', 'hide']]);
+    group.REMOVE('DUMMY');
+    assert.equal(await group.GETSIZE(), 1);
+    await group.REMOVEALL();
+    assert.equal(await group.GETSIZE(), 0);
+    await group.__call('HIDE', []);
+    assert.deepEqual(calls, [['REX', 'hide'], ['DUMMY', 'hide']]);
+    group.add(rex);
+    assert.equal(await group.GETSIZE(), 1);
+});
+
+test('Other profiles retain group collection call forwarding', async () => {
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        const group = new Group({ compat: createEngineCompat(profile) });
+        const calls = [];
+        group.add({ GETSIZE: () => calls.push('size'), REMOVEALL: () => calls.push('clear'),
+            HIDE: () => calls.push('hide') });
+        assert.equal(await group.GETSIZE(), undefined);
+        await group.REMOVEALL();
+        await group.__call('HIDE', []);
+        assert.deepEqual(calls, ['size', 'clear', 'hide']);
+    }
+});
+
 const { Database } = loadModule('engine/types/database.ts', {
     './index': { Type: FakeType },
     '../../common/types': decorator,
@@ -69,6 +110,59 @@ const { Mouse } = loadModule('engine/types/mouse.ts', {
 const pointer = (x, y) => ({ button: 0, screen: { x, y } });
 const mouseFor = (profile) => new Mouse({ compat: createEngineCompat(profile),
     diagnostics: { mousePosition() {} } });
+
+test('Magicienii cursor warps use physical deltas once, including queued clicks', async () => {
+    const mouse = mouseFor('magicienii'), moves = [], clicks = [];
+    mouse.onMouseMove(pointer(450, 350));
+    mouse.SETPOSITION(400, 300);
+    mouse.callbacks = { run: async (type) => {
+        const position = [mouse.GETPOSX(), mouse.GETPOSY()];
+        if (type === 'ONMOVE') {
+            moves.push(position);
+            mouse.SETPOSITION(400, 300);
+        } else clicks.push([type, ...position]);
+    } };
+    mouse.onMouseMove(pointer(460, 360));
+    mouse.onMouseMove(pointer(460, 360)); // PIXI emits both local and global pointer moves.
+    await mouse.tick(16);
+    mouse.handleClickEvent(pointer(470, 360), 'click');
+    mouse.handleClickEvent(pointer(470, 360), 'release');
+    await mouse.tick(16);
+    await mouse.tick(16);
+    assert.deepEqual(moves, [[410, 310], [410, 300]]);
+    assert.deepEqual(clicks, [['ONCLICK', 410, 300], ['ONRELEASE', 410, 300]]);
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [400, 300]);
+});
+
+test('Magicienii anchors a scene-entry cursor warp on its first real pointer event', () => {
+    const mouse = mouseFor('magicienii');
+    mouse.engine.app = { renderer: { events: { pointer: pointer(450, 350) } } };
+    mouse.SETPOSITION(400, 300);
+    mouse.onMouseMove(pointer(460, 360));
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [400, 300]);
+    mouse.onMouseMove(pointer(470, 370));
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [410, 310]);
+    for (const profile of ['ozn', 'nemo', 'timpului']) {
+        const other = mouseFor(profile);
+        other.onMouseMove(pointer(450, 350));
+        other.SETPOSITION(400, 300);
+        other.onMouseMove(pointer(460, 360));
+        assert.deepEqual([other.GETPOSX(), other.GETPOSY()], [460, 360]);
+    }
+});
+
+test('Magicienii warped cursors ignore launcher controls and rebase on canvas re-entry', () => {
+    const mouse = mouseFor('magicienii');
+    mouse.engine.app = { screen: { contains: (x, y) => x >= 0 && y >= 0 && x < 800 && y < 600 } };
+    mouse.onMouseMove(pointer(450, 350));
+    mouse.SETPOSITION(400, 300);
+    mouse.onMouseMove(pointer(900, 350));
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [400, 300]);
+    mouse.onMouseMove(pointer(600, 350));
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [400, 300]);
+    mouse.onMouseMove(pointer(610, 360));
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [410, 310]);
+});
 
 test('Magicienii queued clicks retain coordinates across later moves and asynchronous script callbacks', async () => {
     for (const profile of ['magicienii', 'default', 'ozn', 'nemo', 'timpului']) {
@@ -124,11 +218,11 @@ test('Magicienii event positions support scripted cursor writes and are released
     mouse.handleClickEvent(pointer(10, 20), 'click');
     await assert.rejects(mouse.tick(16), /callback failed/);
     mouse.onMouseMove(pointer(50, 60));
-    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [50, 60]);
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [47, 48]);
     mouse.handleClickEvent(pointer(70, 80), 'release');
     mouse.DISABLESIGNAL();
     await mouse.tick(16);
-    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [70, 80]);
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [67, 68]);
 });
 
 function matrixFromRows(rows) {
@@ -182,6 +276,17 @@ test('live trace updates the options used by player restarts and checkpoint rest
     await player.setTrace(false);
     assert.equal(engine.options.trace, false);
     assert.deepEqual(calls.pop(), [false, '*']);
+});
+
+test('Magicienii repairs only the spell lesson drawing wand event references', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const source = 'ANNWAND0^SETFRAME("PLAY",VARIDEBUG);ANNWAND0^GETNOFINEVENT(1);OTHER^SETFRAME("PLAY",0);';
+    const file = 'dane/game/przygoda/magic/magic.cnv';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.equal(repaired, 'ANNWAND0^SETFRAME("CZARUJE",VARIDEBUG);ANNWAND0^GETNOFINEVENT("CZARUJE");OTHER^SETFRAME("PLAY",0);');
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    assert.equal(patchMagicieniiSource('dane/game/przygoda/magic/magic2.cnv', source), source);
+    assert.equal(patchMagicieniiSource('other/magic.cnv', source), source);
 });
 
 test('Magicienii checkpoint restore clears transient page overlays without emitting completion callbacks', () => {
@@ -441,6 +546,39 @@ test('Nemo refreshes invisible hotspot transforms without changing Pirates hit t
     engine.compat = createEngineCompat('nemo');
     assert.equal(observer.GETGRAPHICSAT(260, 87, true, 399, 399), 'KRET');
     stage.destroy({ children: true, texture: true, baseTexture: true });
+});
+
+test('Magicienii cropped canvas saves describe the actual scaled pixel dimensions', async () => {
+    const pixi = require('pixi.js');
+    const { CanvasObserver } = loadModule('engine/types/canvasObserver.ts', {
+        './index': { Type: FakeType }, '../../filesystem/assetsLoader': {},
+        'pixi.js': pixi, '../../common/types': decorator, '../rendering': {},
+        '../../common/errors': { assert: assert.ok },
+        '../../fileFormats/img': { buildImage: (header, pixels) => ({ header, length: pixels.length }) },
+        '../logging': { logger: { debug() {} } }, './class': {},
+    });
+    const previous = global.document;
+    global.document = { createElement: () => ({ width: 0, height: 0,
+        getContext: () => ({ scale() {}, drawImage() {},
+            getImageData: (x, y, width, height) => ({ data: new Uint8ClampedArray(width * height * 4) }) }) }) };
+    try {
+        for (const profile of ['magicienii', 'default', 'ozn', 'nemo', 'timpului']) {
+            let saved;
+            const engine = { compat: createEngineCompat(profile),
+                currentScene: { getRelativePath: async (name) => name },
+                filesystem: { saveFile: async (name, content) => { saved = content; } },
+                app: { view: { width: 800, height: 600 }, stage: {}, renderer: { extract: {
+                    image: async (stage, format, quality, frame) => {
+                        assert.deepEqual([frame.x, frame.y, frame.width, frame.height], [20, 30, 4, 3]);
+                        return { width: frame.width, height: frame.height };
+                    },
+                } } } };
+            await new CanvasObserver(engine).SAVE('ZOOM.IMG', 2, 2, 20, 30, 24, 33);
+            assert.equal(saved.length, 8 * 6 * 4);
+            assert.deepEqual([saved.header.width, saved.header.height],
+                profile === 'magicienii' ? [8, 6] : [1600, 1200]);
+        }
+    } finally { global.document = previous; }
 });
 
 test('Magicienii refreshes moved visible inventory hitmaps before their next render', () => {

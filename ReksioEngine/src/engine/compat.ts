@@ -26,6 +26,9 @@ export type EngineCompat = {
     dynamicHotspotTransforms: boolean
     resetDatabaseCursor: boolean
     databaseFindSelectsRow: boolean
+    groupCollections: boolean
+    croppedCanvasSaves: boolean
+    relativeScriptedCursor: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -69,5 +72,8 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         dynamicHotspotTransforms: name === 'magicienii',
         resetDatabaseCursor: name === 'magicienii',
         databaseFindSelectsRow: name === 'magicienii',
+        groupCollections: name === 'magicienii',
+        croppedCanvasSaves: name === 'magicienii',
+        relativeScriptedCursor: name === 'magicienii',
     }
 }

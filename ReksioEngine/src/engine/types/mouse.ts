@@ -26,6 +26,8 @@ export class Mouse extends Type<MouseDefinition> {
     private lastClicksTime: Record<string, number> = {}
 
     private mousePosition: Point = new Point(0, 0)
+    private physicalPosition: Point | null = null
+    private cursorWarped = false
     private eventPosition: Point | null = null
     private moved = false
     private signalsDisabled: boolean = false
@@ -160,6 +162,9 @@ export class Mouse extends Type<MouseDefinition> {
     @method()
     SETPOSITION(x: number, y: number) {
         if (this.engine.compat.scriptedCursor) {
+            if (this.engine.compat.relativeScriptedCursor) {
+                this.cursorWarped = true
+            }
             this.mousePosition.set(x, y)
             this.eventPosition?.set(x, y)
             this.moved = true
@@ -171,7 +176,8 @@ export class Mouse extends Type<MouseDefinition> {
 
     private onMouseMove(event: FederatedPointerEvent) {
         this.moved = true
-        this.mousePosition = this.getMousePosition(event)
+        this.mousePosition = this.getLogicalMousePosition(event)
+        this.physicalPosition = this.getMousePosition(event)
         this.engine.diagnostics.mousePosition(this, 'move', this.mousePosition)
     }
 
@@ -190,7 +196,7 @@ export class Mouse extends Type<MouseDefinition> {
 
         const key = keysMapping.get(event.button)!
         // Script callbacks may run after several pointer events have been queued.
-        const position = this.engine.compat.queuedMouseCoordinates ? this.getMousePosition(event) : undefined
+        const position = this.engine.compat.queuedMouseCoordinates ? this.getLogicalMousePosition(event) : undefined
         const clickEvent = { type, key, position }
 
         this.clicksQueue.push(clickEvent)
@@ -214,5 +220,21 @@ export class Mouse extends Type<MouseDefinition> {
 
     private getMousePosition(event: FederatedPointerEvent) {
         return new Point(Math.floor(event.screen.x), Math.floor(event.screen.y))
+    }
+
+    private getLogicalMousePosition(event: FederatedPointerEvent) {
+        const position = this.getMousePosition(event)
+        if (this.engine.compat.relativeScriptedCursor && this.cursorWarped) {
+            if (this.physicalPosition === null) return this.mousePosition.clone()
+            const screen = this.engine.app?.screen
+            const outside = (point: Point) => screen && !screen.contains(point.x, point.y)
+            if (outside(position) || outside(this.physicalPosition)) return this.mousePosition.clone()
+            // A browser cannot warp the OS pointer. Keep subsequent physical deltas in script space.
+            position.set(
+                this.mousePosition.x + position.x - this.physicalPosition.x,
+                this.mousePosition.y + position.y - this.physicalPosition.y
+            )
+        }
+        return position
     }
 }
