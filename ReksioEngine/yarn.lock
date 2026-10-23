@@ -4253,6 +4253,23 @@ neo-async@^2.6.2:
   resolved "https://registry.yarnpkg.com/neo-async/-/neo-async-2.6.2.tgz#b4aafb93e3aeb2d8174ca53cf163ab7d7308305f"
   integrity sha512-Yd3UES5mWCSqR+qNT93S3UoYUkqAZ9lLg8a7g9rimsWmYGK8cVToA4/sF3RrshdyV3sAGMXVUmpMYOw+dLpOuw==
 
+ngraph.events@^1.4.0:
+  version "1.4.0"
+  resolved "https://registry.yarnpkg.com/ngraph.events/-/ngraph.events-1.4.0.tgz#3153c0a5760172c744f7b2dbc5a3d8a72703e357"
+  integrity sha512-NeDGI4DSyjBNBRtA86222JoYietsmCXbs8CEB0dZ51Xeh4lhVl1y3wpWLumczvnha8sFQIW4E0vvVWwgmX2mGw==
+
+ngraph.graph@20.1.2:
+  version "20.1.2"
+  resolved "https://registry.yarnpkg.com/ngraph.graph/-/ngraph.graph-20.1.2.tgz#903389a5370a864cb1a47c522f54994b38cb3923"
+  integrity sha512-W/G3GBR3Y5UxMLHTUCPP9v+pbtpzwuAEIqP5oZV+9IwgxAIEZwh+Foc60iPc1idlnK7Zxu0p3puxAyNmDvBd0Q==
+  dependencies:
+    ngraph.events "^1.4.0"
+
+ngraph.path@1.6.1:
+  version "1.6.1"
+  resolved "https://registry.yarnpkg.com/ngraph.path/-/ngraph.path-1.6.1.tgz#aef6eafe29bf878a98d0d5f0314aacac4218a9b0"
+  integrity sha512-NiA52wAoRo/t36/1dBAZkXPeX+rQ1mn82bc9LSfnfywGY9TxH/jXw3x3fZ1mOCblyln26lHtfHHEzssjjyX+aw==
+
 no-case@^3.0.4:
   version "3.0.4"
   resolved "https://registry.yarnpkg.com/no-case/-/no-case-3.0.4.tgz#d361fd5c9800f558551a8369fc0dcd4662b6124d"

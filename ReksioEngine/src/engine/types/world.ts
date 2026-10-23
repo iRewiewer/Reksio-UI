@@ -2,6 +2,8 @@ import { Type } from './index'
 import { WorldDefinition } from '../../fileFormats/cnv/types'
 import { method } from '../../common/types'
 import { NotImplementedError } from '../../common/errors'
+import { readSekWorld, SekPoint } from '../../fileFormats/sek'
+import { SekaiNavigation } from '../compat/sekaiNavigation'
 
 type WorldBody = {
     x: number
@@ -19,6 +21,7 @@ type WorldBody = {
     linkedAnimoName: string | null
     atGoalSignaled: boolean
     speed: number
+    remainingPath: SekPoint[]
 }
 
 export class World extends Type<WorldDefinition> {
@@ -29,6 +32,7 @@ export class World extends Type<WorldDefinition> {
     private backgroundY = 0
     private refObjectId: number | null = null
     private loadedFilename = ''
+    private paths = new Map<number, SekaiNavigation>()
 
     private ensurePathingEnabled() {
         if (!this.engine.compat.simpleWorldPathing) {
@@ -55,6 +59,7 @@ export class World extends Type<WorldDefinition> {
                 linkedAnimoName: null,
                 atGoalSignaled: false,
                 speed: 0,
+                remainingPath: [],
             }
             this.bodies.set(id, body)
         }
@@ -66,10 +71,29 @@ export class World extends Type<WorldDefinition> {
     }
 
     @method()
-    LOAD(filename: string) {
+    async LOAD(filename: string) {
         this.ensurePathingEnabled()
+        const scene = this.engine.currentScene
+        if (!scene) throw new Error('WORLD requires a current scene')
+        const path = await scene.getRelativePath(filename)
+        const world = readSekWorld(await this.engine.filesystem.getFile(path))
+        this.paths = new Map(world.paths.map((path) => [path.id, new SekaiNavigation(path)]))
+        for (const { id, position } of world.bodies) {
+            const body = this.getBody(id)
+            body.x = position.x + 400
+            body.y = 300 - position.y
+            body.z = position.z
+        }
+        for (const body of this.bodies.values()) {
+            body.remainingPath = []
+            body.moving = false
+            body.movedDistance = 0
+        }
         this.loadedFilename = filename
-        this.engine.diagnostics.worldState(this, 'LOAD', null, { filename })
+        this.engine.diagnostics.worldState(this, 'LOAD', null, {
+            filename,
+            paths: world.paths.map(({ id, nodes, edges }) => ({ id, nodes: nodes.length, edges: edges.length })),
+        })
     }
 
     @method()
@@ -130,6 +154,7 @@ export class World extends Type<WorldDefinition> {
         body.targetY = y
         body.targetZ = z
         body.moving = false
+        body.remainingPath = []
         body.movedDistance = 0
         body.atGoalSignaled = true
         await this.syncLinkedAnimo(body)
@@ -175,6 +200,9 @@ export class World extends Type<WorldDefinition> {
     @method()
     SETACTIVE(pathId: number, pointId?: number | boolean, active?: boolean | number) {
         this.ensurePathingEnabled()
+        if (typeof pointId === 'number' && active !== undefined) {
+            this.paths.get(pathId)?.setActive(pointId, !!active)
+        }
     }
 
     @method()
@@ -206,18 +234,39 @@ export class World extends Type<WorldDefinition> {
     }
 
     @method()
-    FINDPATH(id: number, pathId: number, targetX: number, targetY: number, targetZ: number, force?: boolean, signal?: boolean) {
+    FINDPATH(
+        id: number,
+        pathId: number,
+        targetX: number,
+        targetY: number,
+        targetZ: number,
+        force?: boolean,
+        signal?: boolean
+    ) {
         this.ensurePathingEnabled()
         const body = this.getBody(id)
-        body.targetX = targetX
-        body.targetY = targetY
-        body.targetZ = targetZ
+        const target = { x: targetX, y: targetY, z: targetZ }
+        let route: SekPoint[] | null = [target]
+        if (this.loadedFilename) {
+            const toWorld = ({ x, y, z }: SekPoint) => ({ x: x - 400, y: 300 - y, z })
+            route = this.paths.get(pathId)?.find(toWorld(body), toWorld(target), !!force) ?? null
+            route = route?.map(({ x, y, z }) => ({ x: x + 400, y: 300 - y, z })) ?? null
+        }
+        body.remainingPath = route ?? []
+        body.movedDistance = 0
+        if (!route) {
+            body.moving = false
+            this.engine.diagnostics.worldState(this, 'NO_PATH', id, { pathId, ...target })
+            return false
+        }
+        this.setTarget(body, body.remainingPath.shift() ?? body)
         body.moving = true
         body.atGoalSignaled = false
         body.movedDistance = this.distanceToTarget(body)
         body.angle = this.angleToTarget(body)
         this.engine.diagnostics.worldState(this, 'FINDPATH', id, {
             pathId,
+            waypoints: body.remainingPath.length + 1,
             ...this.snapshotBody(body),
         })
         return true
@@ -233,27 +282,34 @@ export class World extends Type<WorldDefinition> {
             return 0
         }
 
-        const distance = this.distanceToTarget(body)
-        if (distance <= 0.5) {
-            await this.finishPath(body)
-            return 0
-        }
-
         const velocity = maxVelocity && maxVelocity > 0 ? maxVelocity : body.speed || 300
-        const step = Math.max(1, (velocity * this.elapsedMS) / 1000)
-        const moveBy = Math.min(step, distance)
-        const dx = body.targetX - body.x
-        const dy = body.targetY - body.y
-
-        body.angle = this.angleToTarget(body)
-        body.x += (dx / distance) * moveBy
-        body.y += (dy / distance) * moveBy
-        body.movedDistance = moveBy
-        await this.syncLinkedAnimo(body)
-
-        if (moveBy >= distance - 0.5) {
-            await this.finishPath(body)
+        let budget = Math.max(1, (velocity * this.elapsedMS) / 1000)
+        body.movedDistance = 0
+        while (body.moving) {
+            const distance = this.distanceToTarget(body)
+            if (distance <= budget) {
+                body.x = body.targetX
+                body.y = body.targetY
+                body.z = body.targetZ
+                body.movedDistance += distance
+                budget -= distance
+                const next = body.remainingPath.shift()
+                if (!next) {
+                    await this.finishPath(body)
+                    break
+                }
+                this.setTarget(body, next)
+                if (budget <= 0) break
+            } else {
+                body.angle = this.angleToTarget(body)
+                body.x += ((body.targetX - body.x) / distance) * budget
+                body.y += ((body.targetY - body.y) / distance) * budget
+                body.z += ((body.targetZ - body.z) / distance) * budget
+                body.movedDistance += budget
+                break
+            }
         }
+        if (body.moving) await this.syncLinkedAnimo(body)
 
         return body.movedDistance
     }
@@ -283,7 +339,14 @@ export class World extends Type<WorldDefinition> {
     }
 
     private distanceToTarget(body: WorldBody) {
-        return Math.hypot(body.targetX - body.x, body.targetY - body.y)
+        return Math.hypot(body.targetX - body.x, body.targetY - body.y, body.targetZ - body.z)
+    }
+
+    private setTarget(body: WorldBody, point: SekPoint) {
+        body.targetX = point.x
+        body.targetY = point.y
+        body.targetZ = point.z
+        if (this.distanceToTarget(body) > 0) body.angle = this.angleToTarget(body)
     }
 
     private angleToTarget(body: WorldBody) {
@@ -351,6 +414,7 @@ export class World extends Type<WorldDefinition> {
             targetX: Math.round(body.targetX),
             targetY: Math.round(body.targetY),
             moving: body.moving,
+            remainingWaypoints: body.remainingPath.length,
             movedDistance: Math.round(body.movedDistance * 100) / 100,
             angle: Math.round(body.angle * 100) / 100,
             linkedAnimoName: body.linkedAnimoName,

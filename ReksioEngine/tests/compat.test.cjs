@@ -20,6 +20,10 @@ function loadModule(file, dependencies = {}) {
 
 const { createEngineCompat, normalizeCompatProfile } = loadModule('engine/compat.ts');
 const { OznMatrixSimulation } = loadModule('engine/compat/oznMatrix.ts');
+const { readSekWorld } = loadModule('fileFormats/sek/index.ts');
+const { SekaiNavigation } = loadModule('engine/compat/sekaiNavigation.ts', {
+    'ngraph.graph': { default: require('ngraph.graph') }, 'ngraph.path': require('ngraph.path'),
+});
 const { readSoundArchive } = loadModule('fileFormats/archive/sound.ts');
 const decorator = { method: () => (method) => method };
 class FakeType {
@@ -570,6 +574,101 @@ const { World } = loadModule('engine/types/world.ts', {
     './index': { Type: FakeType },
     '../../common/types': decorator,
     '../../common/errors': { NotImplementedError: Error },
+    '../../fileFormats/sek': { readSekWorld },
+    '../compat/sekaiNavigation': { SekaiNavigation },
+});
+
+function sekFixture() {
+    const parts = [];
+    const uint = (value) => { const b = Buffer.alloc(4); b.writeUInt32LE(value); parts.push(b); };
+    const float = (value) => { const b = Buffer.alloc(4); b.writeFloatLE(value); parts.push(b); };
+    const string = (value) => parts.push(Buffer.from(`${value}\0`));
+    const entity = (id) => {
+        uint(id); uint(0);
+        for (let i = 0; i < 9; i++) float(0);
+        uint(1); string('entityName'); uint(2); string('Fixture');
+    };
+    parts.push(Buffer.from('SEKAI81080701915004'));
+    uint(3);
+    uint(1); uint(1); entity(100); uint(0); uint(1); string('Default'); parts.push(Buffer.alloc(108));
+    uint(99); uint(3); parts.push(Buffer.from([1, 2, 3]));
+    uint(4); uint(1); entity(9000); uint(4); uint(3);
+    for (const [x, y, group] of [[0, 0, 0], [0, 100, 1], [100, 100, 0], [100, 0, 0]]) {
+        float(x); float(y); float(0); uint(group);
+    }
+    for (const [from, to, flags] of [[0, 1, 3], [1, 2, 3], [2, 3, 3]]) {
+        uint(from); uint(to); uint(flags);
+    }
+    const b = Buffer.concat(parts);
+    return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+}
+
+test('SEKAI v4 reads entity records, navigation groups and links despite incorrect section sizes', () => {
+    const world = readSekWorld(sekFixture());
+    assert.deepEqual(world.bodies, [{ id: 100, position: { x: 0, y: 0, z: 0 } }]);
+    assert.equal(world.paths[0].id, 9000);
+    assert.equal(world.paths[0].nodes.length, 4);
+    assert.deepEqual(world.paths[0].nodes[1], { x: 0, y: 100, z: 0, group: 1 });
+    assert.deepEqual(world.paths[0].edges[2], { from: 2, to: 3, flags: 3 });
+    const truncated = sekFixture().slice(0, -1);
+    assert.throws(() => readSekWorld(truncated), /Truncated/);
+    const unsupported = sekFixture();
+    new Uint8Array(unsupported)[18] = 51;
+    assert.throws(() => readSekWorld(unsupported), /version/);
+});
+
+test('SEKAI navigation follows graph links around obstacles and can disable waypoint groups', () => {
+    const nav = new SekaiNavigation(readSekWorld(sekFixture()).paths[0]);
+    const start = { x: 0, y: 0, z: 0 }, target = { x: 100, y: 0, z: 0 };
+    assert.deepEqual(nav.find(start, target, false), [start, { x: 0, y: 100, z: 0 }, { x: 100, y: 100, z: 0 }, target]);
+    nav.setActive(1, false);
+    assert.equal(nav.find(start, target, false), null);
+    nav.setActive(1, true);
+    assert.equal(nav.find(start, target, false).length, 4);
+});
+
+test('SEKAI navigation honors directional edge flags and native exact endpoint behavior', () => {
+    const nodes = [{ x: 0, y: 0, z: 0, group: 0 }, { x: 100, y: 0, z: 0, group: 0 }];
+    const forward = new SekaiNavigation({ id: 1, nodes, edges: [{ from: 0, to: 1, flags: 2 }] });
+    const end = { x: 110, y: 0, z: 0 };
+    assert.deepEqual(forward.find(nodes[0], end, false), [{ x: 100, y: 0, z: 0 }]);
+    assert.deepEqual(forward.find(nodes[0], end, true), [{ x: 100, y: 0, z: 0 }, end]);
+    assert.equal(forward.find(nodes[1], nodes[0], false), null);
+    assert.deepEqual(forward.find(nodes[0], { x: 1, y: 0, z: 0 }, true), []);
+    const reverse = new SekaiNavigation({ id: 1, nodes, edges: [{ from: 0, to: 1, flags: 1 }] });
+    assert.equal(reverse.find(nodes[0], nodes[1], false), null);
+    assert.deepEqual(reverse.find(nodes[1], nodes[0], false), [{ x: 0, y: 0, z: 0 }]);
+});
+
+test('WORLD loads SEKAI scene-relative paths and follows converted waypoints without cutting corners', async () => {
+    const positions = [], signals = [], files = [];
+    const actor = { SETPOSITION: (x, y) => positions.push([x, y]), SIGNAL: (signal) => signals.push(signal) };
+    const world = new World({ compat: createEngineCompat('timpului'),
+        currentScene: { getRelativePath: async (file) => `scene/${file}` },
+        filesystem: { getFile: async (file) => { files.push(file); return sekFixture(); } },
+        getObject: () => actor, diagnostics: { worldState() {} } });
+    await world.LOAD('mask.sek');
+    assert.deepEqual(files, ['scene/mask.sek']);
+    world.LINK(100, 'ANNREX');
+    world.START();
+    assert.equal(world.FINDPATH(100, 9000, 500, 300, 0, false), true);
+    world.tick(1000);
+    await world.FOLLOWPATH(100, 20, 0.5, 150);
+    assert.deepEqual(positions.at(-1), [450, 200]);
+    await world.FOLLOWPATH(100, 20, 0.5, 150);
+    assert.deepEqual(positions.at(-1), [500, 300]);
+    assert.deepEqual(signals, ['ATGOAL']);
+    await world.FOLLOWPATH(100);
+    assert.deepEqual(signals, ['ATGOAL']);
+    world.SETACTIVE(9000, 1, false);
+    assert.equal(world.FINDPATH(100, 9000, 400, 300, 0, false), false);
+    await world.FOLLOWPATH(100);
+    assert.deepEqual(signals, ['ATGOAL']);
+    await world.LOAD('mask.sek');
+    assert.equal(world.FINDPATH(100, 9000, 500, 300, 0, false), true);
+    await world.SETPOSITION(100, 425, 325, 0);
+    await world.FOLLOWPATH(100);
+    assert.deepEqual(positions.at(-1), [425, 325]);
 });
 
 test('Magicienii path movement reaches its target and signals it only once', async () => {

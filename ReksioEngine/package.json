@@ -19,6 +19,8 @@
         "idb": "^8.0.3",
         "ini": "^5.0.0",
         "lzo-ts": "^0.2.3",
+        "ngraph.graph": "20.1.2",
+        "ngraph.path": "1.6.1",
         "pixi.js": "^7.3.3"
     },
     "devDependencies": {
