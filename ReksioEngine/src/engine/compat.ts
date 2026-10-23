@@ -22,6 +22,8 @@ export type EngineCompat = {
     manualAnimationFrames: boolean
     imageCloneRendering: boolean
     displayOpacity: boolean
+    queuedMouseCoordinates: boolean
+    dynamicHotspotTransforms: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -61,5 +63,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         manualAnimationFrames: name === 'nemo',
         imageCloneRendering: name === 'ozn',
         displayOpacity: name === 'magicienii',
+        queuedMouseCoordinates: name === 'magicienii',
+        dynamicHotspotTransforms: name === 'magicienii',
     }
 }

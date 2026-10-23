@@ -58,8 +58,11 @@ export class CanvasObserver extends Type<CanvasObserverDefinition> {
                 continue
             }
 
-            if (this.engine.compat.hiddenHotspotTransforms && !renderObject.visible) {
-                // Invisible masks are not rendered, so PIXI leaves their world matrix stale.
+            if (
+                this.engine.compat.dynamicHotspotTransforms ||
+                (this.engine.compat.hiddenHotspotTransforms && !renderObject.visible)
+            ) {
+                // Scripted movement and hidden masks can both leave the last-rendered matrix stale.
                 renderObject.toGlobal(new Point(0, 0))
             }
 
@@ -70,10 +73,14 @@ export class CanvasObserver extends Type<CanvasObserverDefinition> {
 
             const containsPoint = renderObject.containsPoint(point, !ignoreAlpha)
             if (containsPoint && renderObject.zIndex >= minZ && renderObject.zIndex <= maxZ) {
-                const ownsSprite = (obj: Type<any>) => obj instanceof DisplayType && obj.getRenderObject() === renderObject
+                const ownsSprite = (obj: Type<any>) =>
+                    obj instanceof DisplayType && obj.getRenderObject() === renderObject
                 const object: Type<any> | null = this.engine.scopeManager.find(
-                    (key: string, obj) => ownsSprite(obj) ||
-                        (this.engine.compat.classHotspotOwners && obj instanceof ClassInstance && obj.scope.objects.some(ownsSprite))
+                    (key: string, obj) =>
+                        ownsSprite(obj) ||
+                        (this.engine.compat.classHotspotOwners &&
+                            obj instanceof ClassInstance &&
+                            obj.scope.objects.some(ownsSprite))
                 )
                 if (object === null) {
                     continue

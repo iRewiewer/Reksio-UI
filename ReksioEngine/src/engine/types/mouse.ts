@@ -7,6 +7,7 @@ import { method } from '../../common/types'
 type MouseEvent = {
     type: string
     key: string
+    position?: Point
 }
 
 const keysMapping = new Map([
@@ -25,6 +26,7 @@ export class Mouse extends Type<MouseDefinition> {
     private lastClicksTime: Record<string, number> = {}
 
     private mousePosition: Point = new Point(0, 0)
+    private eventPosition: Point | null = null
     private moved = false
     private signalsDisabled: boolean = false
     private callbacksRegistered = false
@@ -46,16 +48,21 @@ export class Mouse extends Type<MouseDefinition> {
                 continue
             }
 
-            switch (event.type) {
-                case 'click':
-                    await this.callbacks.run('ONCLICK', event.key)
-                    break
-                case 'dblclick':
-                    await this.callbacks.run('ONDBLCLICK', event.key)
-                    break
-                case 'release':
-                    await this.callbacks.run('ONRELEASE', event.key)
-                    break
+            this.eventPosition = event.position?.clone() ?? null
+            try {
+                switch (event.type) {
+                    case 'click':
+                        await this.callbacks.run('ONCLICK', event.key)
+                        break
+                    case 'dblclick':
+                        await this.callbacks.run('ONDBLCLICK', event.key)
+                        break
+                    case 'release':
+                        await this.callbacks.run('ONRELEASE', event.key)
+                        break
+                }
+            } finally {
+                this.eventPosition = null
             }
         }
 
@@ -138,20 +145,23 @@ export class Mouse extends Type<MouseDefinition> {
 
     @method()
     GETPOSX() {
-        this.engine.diagnostics.mousePosition(this, 'GETPOSX', this.mousePosition)
-        return this.mousePosition.x
+        const position = this.eventPosition ?? this.mousePosition
+        this.engine.diagnostics.mousePosition(this, 'GETPOSX', position)
+        return position.x
     }
 
     @method()
     GETPOSY() {
-        this.engine.diagnostics.mousePosition(this, 'GETPOSY', this.mousePosition)
-        return this.mousePosition.y
+        const position = this.eventPosition ?? this.mousePosition
+        this.engine.diagnostics.mousePosition(this, 'GETPOSY', position)
+        return position.y
     }
 
     @method()
     SETPOSITION(x: number, y: number) {
         if (this.engine.compat.scriptedCursor) {
             this.mousePosition.set(x, y)
+            this.eventPosition?.set(x, y)
             this.moved = true
             return
         }
@@ -179,7 +189,9 @@ export class Mouse extends Type<MouseDefinition> {
         }
 
         const key = keysMapping.get(event.button)!
-        const clickEvent = { type, key }
+        // Script callbacks may run after several pointer events have been queued.
+        const position = this.engine.compat.queuedMouseCoordinates ? this.getMousePosition(event) : undefined
+        const clickEvent = { type, key, position }
 
         this.clicksQueue.push(clickEvent)
         if (type === 'click') {
@@ -189,6 +201,7 @@ export class Mouse extends Type<MouseDefinition> {
                 this.clicksQueue.push({
                     type: 'dblclick',
                     key,
+                    position,
                 })
                 delete this.lastClicksTime[key]
             } else {

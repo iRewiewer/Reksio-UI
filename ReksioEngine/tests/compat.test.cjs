@@ -57,6 +57,80 @@ test('Pirates and unknown profiles retain all baseline compatibility flags', () 
     assert.equal(createEngineCompat('timpului').packedSounds, false);
 });
 
+class MousePoint {
+    constructor(x = 0, y = 0) { this.x = x; this.y = y; }
+    set(x, y) { this.x = x; this.y = y; }
+    clone() { return new MousePoint(this.x, this.y); }
+}
+const { Mouse } = loadModule('engine/types/mouse.ts', {
+    './index': { Type: FakeType }, 'pixi.js': { Point: MousePoint },
+    '../../common/types': decorator, '../../common/errors': { NotImplementedError: Error },
+});
+const pointer = (x, y) => ({ button: 0, screen: { x, y } });
+const mouseFor = (profile) => new Mouse({ compat: createEngineCompat(profile),
+    diagnostics: { mousePosition() {} } });
+
+test('Magicienii queued clicks retain coordinates across later moves and asynchronous script callbacks', async () => {
+    for (const profile of ['magicienii', 'default', 'ozn', 'nemo', 'timpului']) {
+        const mouse = mouseFor(profile), events = [];
+        let resume;
+        const position = () => [mouse.GETPOSX(), mouse.GETPOSY()];
+        mouse.callbacks = { run: async (type) => {
+            if (type === 'ONCLICK') {
+                events.push([type, 'before', ...position()]);
+                await new Promise((resolve) => { resume = resolve; });
+                events.push([type, 'after', ...position()]);
+            } else events.push([type, ...position()]);
+        } };
+        mouse.handleClickEvent(pointer(10.8, 20.9), 'click');
+        mouse.handleClickEvent(pointer(30.2, 40.7), 'release');
+        mouse.onMouseMove(pointer(90, 100));
+        const ticking = mouse.tick(16);
+        mouse.onMouseMove(pointer(80, 95));
+        resume();
+        await ticking;
+        assert.deepEqual(events, profile === 'magicienii' ? [
+            ['ONCLICK', 'before', 10, 20], ['ONCLICK', 'after', 10, 20],
+            ['ONRELEASE', 30, 40], ['ONMOVE', 80, 95],
+        ] : [
+            ['ONCLICK', 'before', 90, 100], ['ONCLICK', 'after', 80, 95],
+            ['ONRELEASE', 80, 95], ['ONMOVE', 80, 95],
+        ]);
+        assert.deepEqual(position(), [80, 95]);
+    }
+});
+
+test('Magicienii synthetic double-clicks use the second click position without replacing live movement', async () => {
+    const mouse = mouseFor('magicienii'), events = [];
+    mouse.callbacks = { run: async (type) => events.push([type, mouse.GETPOSX(), mouse.GETPOSY()]) };
+    mouse.handleClickEvent(pointer(10, 20), 'click');
+    mouse.lastClicksTime.LEFT = Date.now();
+    mouse.handleClickEvent(pointer(30, 40), 'click');
+    mouse.onMouseMove(pointer(90, 100));
+    await mouse.tick(16);
+    assert.deepEqual(events, [
+        ['ONCLICK', 10, 20], ['ONCLICK', 30, 40], ['ONDBLCLICK', 30, 40], ['ONMOVE', 90, 100],
+    ]);
+});
+
+test('Magicienii event positions support scripted cursor writes and are released after callback errors', async () => {
+    const mouse = mouseFor('magicienii');
+    mouse.callbacks = { run: async (type) => {
+        if (type !== 'ONCLICK') return;
+        mouse.SETPOSITION(7, 8);
+        assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [7, 8]);
+        throw new Error('callback failed');
+    } };
+    mouse.handleClickEvent(pointer(10, 20), 'click');
+    await assert.rejects(mouse.tick(16), /callback failed/);
+    mouse.onMouseMove(pointer(50, 60));
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [50, 60]);
+    mouse.handleClickEvent(pointer(70, 80), 'release');
+    mouse.DISABLESIGNAL();
+    await mouse.tick(16);
+    assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [70, 80]);
+});
+
 function matrixFromRows(rows) {
     const model = new OznMatrixSimulation(rows[0].length, rows.length);
     rows.forEach((row, y) => model.setRow(y, row));
@@ -366,6 +440,50 @@ test('Nemo refreshes invisible hotspot transforms without changing Pirates hit t
     assert.equal(observer.GETGRAPHICSAT(260, 87, true, 399, 399), null);
     engine.compat = createEngineCompat('nemo');
     assert.equal(observer.GETGRAPHICSAT(260, 87, true, 399, 399), 'KRET');
+    stage.destroy({ children: true, texture: true, baseTexture: true });
+});
+
+test('Magicienii refreshes moved visible inventory hitmaps before their next render', () => {
+    const pixi = require('pixi.js');
+    const { AdvancedSprite } = loadModule('engine/rendering.ts', {
+        'pixi.js': pixi, '../common/errors': { assert: assert.ok },
+    });
+    class Display extends FakeType {}
+    const { CanvasObserver } = loadModule('engine/types/canvasObserver.ts', {
+        './index': { Type: FakeType, DisplayType: Display }, '../../filesystem/assetsLoader': {},
+        'pixi.js': pixi, '../../common/types': decorator, '../rendering': { AdvancedSprite },
+        '../../common/errors': {}, '../../fileFormats/img': {}, '../logging': {}, './class': {},
+    });
+    const stage = new pixi.Container();
+    const sprite = new AdvancedSprite(new pixi.Texture(new pixi.BaseTexture(null, { width: 36, height: 85 })));
+    sprite.visible = true;
+    sprite.zIndex = 2998;
+    sprite.hitmap = new Uint8Array(36 * 85).fill(255);
+    sprite.position.set(140, 44);
+    stage.addChild(sprite);
+    const object = new Display();
+    object.name = 'ANNITEM0';
+    object.getRenderObject = () => sprite;
+    const engine = { compat: createEngineCompat('magicienii'), app: { stage },
+        scopeManager: { find: (predicate) => predicate(object.name, object) ? object : null },
+        diagnostics: { hitTest() {} } };
+    const observer = new CanvasObserver(engine);
+    assert.equal(sprite.getGlobalPosition().x, 140);
+    assert.equal(sprite.worldTransform.tx, 0);
+    assert.equal(observer.GETGRAPHICSAT(160, 87, true, 2998, 2998), 'ANNITEM0');
+    sprite.position.set(240, 44);
+    assert.equal(sprite.worldTransform.tx, 140);
+    assert.equal(observer.GETGRAPHICSAT(260, 87, true, 2998, 2998), 'ANNITEM0');
+    assert.equal(observer.GETGRAPHICSAT(160, 87, true, 2998, 2998), null);
+    sprite.visible = false;
+    assert.equal(observer.GETGRAPHICSAT(260, 87, true, 2998, 2998), null);
+    sprite.visible = true;
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        engine.compat = createEngineCompat(profile);
+        assert.equal(engine.compat.dynamicHotspotTransforms, false);
+        sprite.position.set(340, 44);
+        assert.equal(observer.GETGRAPHICSAT(360, 87, true, 2998, 2998), null);
+    }
     stage.destroy({ children: true, texture: true, baseTexture: true });
 });
 
