@@ -13,7 +13,7 @@ import { Integer } from '../engine/types/integer'
 import { String as CMCString } from '../engine/types/string'
 import { Double } from '../engine/types/double'
 import { Bool } from '../engine/types/bool'
-import { parseCode } from './parser'
+import { parseCode, parseParameter } from './parser'
 import { parseLogicExpression } from './expression'
 import { CompareOp, ConditionExpr } from './expression/ast'
 import { color, fmt, logger } from '../engine/logging'
@@ -481,7 +481,10 @@ export class Interpreter {
                 return object
             }
             case 'IndirectRef': {
-                const name = await this.evaluateParameter(ref.inner)
+                const inner = this.context.engine.compat.modernScripts && ref.inner.type === 'Identifier'
+                    ? parseParameter(await this.interpolateArgumentText(ref.inner.name))
+                    : ref.inner
+                const name = await this.evaluateParameter(inner)
                 const object = this.getObject(name)
                 this.context.engine.diagnostics.objectLookup(this.context.caller, name, object !== null)
                 return object

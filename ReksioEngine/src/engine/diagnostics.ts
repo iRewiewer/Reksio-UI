@@ -26,6 +26,13 @@ const KEY_VALUES = new Set([
     'VARBSEQPLAYING',
     'VARBSEQSTOPABLE',
     'VARBLOCKSCENE',
+    'VARB_SCENELOCK',
+    'VARB_SEQARRPLAYING',
+    'VARB_SEQARRLOCKTALK',
+    'VARS_CLICKPLACE',
+    'VARS_SEQARRNAME',
+    'VARSSEQNAME',
+    'VARSGADA',
     'VARICURRENTHILL',
     'VARIFIRSTENTER',
     'VARIMAXPRIORITY',
@@ -60,6 +67,8 @@ export class EngineDiagnostics {
     private readonly traceScene: string
     private noisyWindowStarted = 0
     private noisyWindowCount = 0
+    private hitTests = new Map<string, string>()
+    private mousePositions = new Map<string, string>()
 
     constructor(
         private readonly engine: Engine,
@@ -241,12 +250,25 @@ export class EngineDiagnostics {
             return
         }
 
+        const key = `${object.name}:${action}`
+        const value = `${position.x}:${position.y}`
+        if (this.mousePositions.get(key) === value) return
+        this.mousePositions.set(key, value)
         this.write('mouse', {
             name: object.name,
             action,
             x: Math.round(position.x),
             y: Math.round(position.y),
         })
+    }
+
+    hitTest(object: Type<any>, x: number, y: number, minZ: number, maxZ: number, hit: string | null) {
+        if (!this.shouldTraceObject(object)) return
+        const key = `${object.name}:${minZ}:${maxZ}`
+        const value = hit ?? 'NULL'
+        if (this.hitTests.get(key) === value) return
+        this.hitTests.set(key, value)
+        this.write('hit-test', { name: object.name, x, y, minZ, maxZ, hit })
     }
 
     timerState(object: Type<any>, action: string, enabled: boolean, currentTick: number) {
@@ -385,7 +407,7 @@ export class EngineDiagnostics {
         }
 
         return KEY_OBJECT_PATTERN.test(object.name) ||
-            /^(CNVLOADER|__LOAD_DB__|BEHCLICK|BEHSEQFINISHED|BEHLOADSEQARR|BEHSEQARRPLAY|BEHINITSCRIPT|BEHPOSTINIT)/.test(object.name)
+            /^(CNVLOADER|__LOAD_DB__|BEHCLICK|BEHSEQFINISHED|BEHLOADSEQARR|BEHSEQARRPLAY|BEHINITSCRIPT|BEHPOSTINIT|BFITMP9$)/.test(object.name)
     }
 
     private isCurrentSceneRelevant() {
@@ -431,7 +453,8 @@ export class EngineDiagnostics {
         const noisy = ['object-lookup', 'statement', 'condition', 'behaviour', 'display', 'timer'].includes(kind)
             || (kind === 'callback' && ['ONFRAMECHANGED', 'ONTICK', 'ONMOVE'].includes(String(payload.type)))
             || (kind === 'value' && /^(VARITEMP|VARDTEMP)/.test(String(payload.name)))
-        if (noisy) {
+        const interaction = /^(BEHCLICK|BEHSEQARRPLAY|BFITMP9$)/.test(String(payload.caller ?? payload.name ?? ''))
+        if (noisy && !interaction) {
             const now = Date.now()
             if (now - this.noisyWindowStarted >= 1000) {
                 this.noisyWindowStarted = now

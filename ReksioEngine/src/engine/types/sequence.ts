@@ -265,7 +265,10 @@ export class Sequence extends Type<SequenceDefinition> {
             try {
                 const finished = this.runningSubSequence
                 this.runningSubSequence = null
-                if (finished) await this.callbacks.run('ONFINISHED', finished.NAME)
+                if (finished && finished.NAME !== this.sequenceName &&
+                    this.callbacks.hasParametrized('ONFINISHED', finished.NAME)) {
+                    await this.callbacks.run('ONFINISHED', finished.NAME)
+                }
                 if (!this.paused) await this.advanceQueue()
             } finally {
                 this.advancing = false

@@ -13,6 +13,7 @@ import { loadJpegBackground } from '../engine/compatAssets'
 import { patchTimeMachineDefinitions } from '../engine/patches/timpului'
 import { patchOznSource } from '../engine/patches/ozn'
 import { patchNemoDefinitions } from '../engine/patches/nemo'
+import { patchMagicieniiArray } from '../engine/patches/magicienii'
 
 const PIRATES_RIVER_THREE_PATH = 'dane/intro/mainmenu/09rzekac/rzeka3.cnv'
 const PIRATES_WIOSKA_PATH = 'dane/intro/mainmenu/10wioska/wioska10.cnv'
@@ -548,6 +549,7 @@ export default class Filesystem {
 
     async getARRFile(filename: string): Promise<any[]> {
         const data = await this.getFile(filename)
-        return deserializeArray(data)
+        const entries = deserializeArray(data)
+        return this.compat.magicieniiAssets ? patchMagicieniiArray(filename.toLowerCase().replaceAll('\\', '/'), entries) : entries
     }
 }

@@ -70,10 +70,12 @@ export class CanvasObserver extends Type<CanvasObserverDefinition> {
                 if (object === null) {
                     continue
                 }
+                this.engine.diagnostics.hitTest(this, x, y, minZ, maxZ, object.name)
                 return object.name
             }
         }
 
+        this.engine.diagnostics.hitTest(this, x, y, minZ, maxZ, null)
         return null
     }
 

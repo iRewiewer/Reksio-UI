@@ -14,6 +14,7 @@ export type EngineCompat = {
     oznDefinitions: boolean
     trailingAnnFrameData: boolean
     nemoDefinitions: boolean
+    magicieniiAssets: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -35,7 +36,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         clearAnimoCacheOnLoad: name !== 'default',
         simpleWorldPathing: name === 'magicienii' || name === 'timpului',
         modernScripts: name === 'magicienii' || name === 'nemo' || name === 'timpului',
-        sequenceSubevents: name === 'nemo' || name === 'timpului',
+        sequenceSubevents: name === 'magicienii' || name === 'nemo' || name === 'timpului',
         jpegImages: name === 'nemo' || name === 'timpului',
         packedSounds: name === 'nemo',
         serialTicks: name !== 'default',
@@ -45,5 +46,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         oznDefinitions: name === 'ozn',
         trailingAnnFrameData: name === 'nemo',
         nemoDefinitions: name === 'nemo',
+        magicieniiAssets: name === 'magicienii',
     }
 }

@@ -60,6 +60,10 @@ export class CallbacksComponent {
         return callbacks.nonParametrized !== null || callbacks.parametrized.size > 0
     }
 
+    hasParametrized(type: string, param: any): boolean {
+        return this.registry.get(type)?.parametrized.has(param) ?? false
+    }
+
     async run(type: string, param?: any, thisOverride?: Type<any> | null) {
         if (!this.has(type)) {
             return

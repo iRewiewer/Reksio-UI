@@ -118,7 +118,8 @@ test('subsequence completion may pause until an external animation resumes it', 
     const events = [];
     let advances = 0;
     sequence.runningSubSequence = { NAME: 'N2', TYPE: 'SPEAKING' };
-    sequence.callbacks = { run: async (event, name) => { events.push([event, name]); sequence.PAUSE(); } };
+    sequence.callbacks = { hasParametrized: () => true,
+        run: async (event, name) => { events.push([event, name]); sequence.PAUSE(); } };
     sequence.advanceQueue = async () => { advances++; };
     await sequence.progressNext();
     assert.deepEqual(events, [['ONFINISHED', 'N2']]);
@@ -136,6 +137,27 @@ test('baseline sequences do not emit new subsection callbacks', async () => {
     sequence.advanceQueue = async () => { advances++; };
     await sequence.progressNext();
     assert.equal(advances, 1);
+});
+
+test('modern sequences finish single entries once and reserve subsection events for named callbacks', async () => {
+    for (const profile of ['magicienii', 'timpului', 'nemo']) {
+        const sequence = new Sequence({ compat: createEngineCompat(profile) });
+        const events = [];
+        sequence.callbacks = { hasParametrized: (_event, name) => name === 'LINE2',
+            run: async (event, name) => events.push([event, name]) };
+        sequence.sequenceName = 'GADABLANK';
+        sequence.runningSubSequence = { NAME: 'GADABLANK', TYPE: 'SPEAKING' };
+        await sequence.progressNext();
+        assert.deepEqual(events, [['ONFINISHED', 'GADABLANK']]);
+        sequence.sequenceName = 'CUTSCENE';
+        sequence.runningSubSequence = { NAME: 'LINE1', TYPE: 'SPEAKING' };
+        sequence.advanceQueue = async () => {};
+        await sequence.progressNext();
+        assert.equal(events.length, 1);
+        sequence.runningSubSequence = { NAME: 'LINE2', TYPE: 'SPEAKING' };
+        await sequence.progressNext();
+        assert.deepEqual(events.at(-1), ['ONFINISHED', 'LINE2']);
+    }
 });
 
 const { World } = loadModule('engine/types/world.ts', {
@@ -480,7 +502,16 @@ test('modern argument values preserve filenames, empty strings and object-target
     numericArgument.setValue(42);
     await runCode(engine, null, 'TARGET^SET($1);', [numericArgument], false);
     assert.equal(values.at(-1), 42);
+    const place = new Value(engine);
+    place.setValue('KURATOR');
+    objects.set('PLACE', place);
+    objects.set('BEHCLICK_KURATOR', { RUN() { values.push('curator clicked'); } });
+    objects.set('field value', { RUN() { values.push('field target clicked'); } });
+    await runCode(engine, null, '*["BEHCLICK_"+PLACE]^RUN();*ROW|VALUE^RUN();', [], false);
+    assert.deepEqual(values.slice(-2), ['curator clicked', 'field target clicked']);
     engine.compat = createEngineCompat();
+    await runCode(engine, null, '*["BEHCLICK_"+PLACE]^RUN();', [], false);
+    assert.equal(values.at(-1), 'field target clicked');
     await runCode(engine, null, 'TARGET^SET($1);', ['00B_INTRO'], false);
     assert.equal(values.at(-1), 0);
 });
@@ -491,7 +522,7 @@ test('Nemo packed sound data remains reusable after Web Audio detaches a playbac
         '../fileFormats/ann': {}, '../fileFormats/fnt': {}, '../fileFormats/archive/array': {},
         '../engine/compat': { createEngineCompat }, '../fileFormats/archive/sound': { readSoundArchive },
         '../engine/compatAssets': {}, '../engine/patches/timpului': {}, '../engine/patches/ozn': {},
-        '../engine/patches/nemo': {},
+        '../engine/patches/nemo': {}, '../engine/patches/magicienii': {},
     });
     const archive = arrayBuffer(archiveEntry('TEST.WAV', Buffer.from('OggS123')));
     let reads = 0;
