@@ -1,9 +1,9 @@
 import { reference } from '../fileFormats/common'
 import { ScriptingManager } from './scripting'
 import { loadDefinition, doReady } from '../filesystem/definitionLoader'
-import { Application, Rectangle, Sprite, Texture } from 'pixi.js'
+import { Application, Rectangle, Sprite } from 'pixi.js'
 import { Scene } from './types/scene'
-import { loadSound, loadTexture } from '../filesystem/assetsLoader'
+import { loadSound, loadBackground } from '../filesystem/assetsLoader'
 import { SaveFile, SaveFileManager } from './saveFile'
 import { Debugging } from './debugging'
 import { assert, IgnorableError, IrrecoverableError } from '../common/errors'
@@ -307,11 +307,12 @@ export class Engine {
             }
 
             // Set background image
-            let texturePromise: Promise<Texture> | null = null
+            let backgroundPromise: ReturnType<typeof loadBackground> | null = null
             if (this.currentScene.definition.BACKGROUND) {
-                texturePromise = loadTexture(
+                backgroundPromise = loadBackground(
                     this.filesystem,
-                    await this.currentScene.getRelativePath(this.currentScene.definition.BACKGROUND)
+                    await this.currentScene.getRelativePath(this.currentScene.definition.BACKGROUND),
+                    this.compat.backgroundImagePositions
                 )
             } else {
                 this.rendering.clearBackground()
@@ -343,9 +344,9 @@ export class Engine {
                     .catch(reject)
             })
 
-            const [texture, music, newScope] = await Promise.all([texturePromise, musicPromise, newScopePromise])
-            if (texture) {
-                this.rendering.setBackground(texture)
+            const [background, music, newScope] = await Promise.all([backgroundPromise, musicPromise, newScopePromise])
+            if (background) {
+                this.rendering.setBackground(background.texture, background.position)
             }
 
             if (music) {

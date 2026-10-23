@@ -41,12 +41,13 @@ export class RenderingManager {
         this.resetCursor()
     }
 
-    setBackground(texture: Texture) {
+    setBackground(texture: Texture, position: IPointData = { x: 0, y: 0 }) {
         this.canvasBackground.texture = texture
+        this.canvasBackground.position.set(position.x, position.y)
     }
 
     clearBackground() {
-        this.canvasBackground.texture = this.blackTexture
+        this.setBackground(this.blackTexture)
     }
 
     setCursor(mode: string) {

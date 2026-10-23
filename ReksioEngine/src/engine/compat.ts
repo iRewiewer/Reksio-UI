@@ -31,6 +31,7 @@ export type EngineCompat = {
     relativeScriptedCursor: boolean
     propagateLoopBreak: boolean
     persistedArcadeCheckpoints: boolean
+    backgroundImagePositions: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -79,5 +80,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         relativeScriptedCursor: name === 'magicienii',
         propagateLoopBreak: name === 'magicienii',
         persistedArcadeCheckpoints: name === 'nemo',
+        backgroundImagePositions: name === 'magicienii',
     }
 }

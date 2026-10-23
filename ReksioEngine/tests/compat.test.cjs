@@ -103,6 +103,70 @@ class MousePoint {
     set(x, y) { this.x = x; this.y = y; }
     clone() { return new MousePoint(this.x, this.y); }
 }
+
+test('Magicienii backgrounds retain signed IMG offsets without changing other profiles', async () => {
+    const pixels = Uint8Array.of(1, 2, 3, 255);
+    const image = { header: { width: 800, height: 624, positionX: 0xffffffe0, positionY: 0xffffffe8 },
+        bytes: pixels.buffer };
+    const { loadBackground } = loadModule('filesystem/assetsLoader.ts', {
+        'pixi.js': { BaseTexture: { fromBuffer: (bytes, width, height) => ({ bytes, width, height }) },
+            Texture: class { constructor(baseTexture) { this.baseTexture = baseTexture; } } },
+        '../engine/rendering': {}, './index': {}, '../engine/audio': {},
+    });
+    const files = { getIMGFile: async (filename) => { assert.equal(filename, 'yard/bkg.img'); return image; } };
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const background = await loadBackground(files, 'yard/bkg.img', createEngineCompat(profile).backgroundImagePositions);
+        assert.deepEqual(background.position, profile === 'magicienii' ? { x: -32, y: -24 } : { x: 0, y: 0 });
+        assert.equal(background.texture.baseTexture.width, 800);
+        assert.equal(background.texture.baseTexture.height, 624);
+        assert.deepEqual(background.texture.baseTexture.bytes, pixels);
+    }
+    image.header.positionX = 555; image.header.positionY = 0;
+    assert.deepEqual((await loadBackground(files, 'yard/bkg.img', true)).position, { x: 555, y: 0 });
+    assert.deepEqual((await loadBackground(files, 'yard/bkg.img')).position, { x: 0, y: 0 });
+});
+
+test('Background replacement and clearing reset the previous image position', () => {
+    const { RenderingManager } = loadModule('engine/rendering.ts', {
+        'pixi.js': { Sprite: class {} }, '../common/errors': { assert: assert.ok }, './types': {},
+    });
+    const black = {}, shifted = {}, next = {};
+    const renderer = { canvasBackground: { position: new MousePoint() }, blackTexture: black,
+        setBackground: RenderingManager.prototype.setBackground };
+    renderer.setBackground(shifted, { x: 0, y: -24 });
+    assert.equal(renderer.canvasBackground.texture, shifted);
+    assert.equal(renderer.canvasBackground.position.y, -24);
+    renderer.setBackground(next);
+    assert.equal(renderer.canvasBackground.texture, next);
+    assert.equal(renderer.canvasBackground.position.y, 0);
+    renderer.setBackground(shifted, { x: 10, y: 20 });
+    RenderingManager.prototype.clearBackground.call(renderer);
+    assert.equal(renderer.canvasBackground.texture, black);
+    assert.deepEqual({ ...renderer.canvasBackground.position }, { x: 0, y: 0 });
+});
+
+test('Scripted background loads use only the current profile position policy', async () => {
+    let policy;
+    const texture = {}, position = { x: 0, y: -24 };
+    const { CanvasObserver } = loadModule('engine/types/canvasObserver.ts', {
+        './index': { Type: FakeType }, '../../common/types': decorator,
+        '../../filesystem/assetsLoader': { loadBackground: async (files, filename, enabled) => {
+            assert.equal(filename, 'room/bkg.img'); policy = enabled; return { texture, position };
+        } },
+        'pixi.js': {}, '../rendering': {}, '../../common/errors': {}, '../../fileFormats/img': {},
+        '../logging': {}, './class': {},
+    });
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const calls = [];
+        const observer = new CanvasObserver({ compat: createEngineCompat(profile), filesystem: {},
+            currentScene: { getRelativePath: async (name) => `room/${name}` },
+            rendering: { setBackground: (...args) => calls.push(args) } });
+        await observer.SETBACKGROUND('bkg.img');
+        assert.equal(policy, profile === 'magicienii');
+        assert.deepEqual(calls, [[texture, position]]);
+    }
+});
+
 const { Mouse } = loadModule('engine/types/mouse.ts', {
     './index': { Type: FakeType }, 'pixi.js': { Point: MousePoint },
     '../../common/types': decorator, '../../common/errors': { NotImplementedError: Error },

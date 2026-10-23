@@ -1,6 +1,6 @@
 import { DisplayType, Type } from './index'
 import { CanvasObserverDefinition } from '../../fileFormats/cnv/types'
-import { loadTexture } from '../../filesystem/assetsLoader'
+import { loadBackground } from '../../filesystem/assetsLoader'
 import { Point, Rectangle } from 'pixi.js'
 import { method } from '../../common/types'
 import { AdvancedSprite } from '../rendering'
@@ -13,12 +13,10 @@ export class CanvasObserver extends Type<CanvasObserverDefinition> {
     @method()
     async SETBACKGROUND(filename: string) {
         const relativePath = await this.engine.currentScene?.getRelativePath(filename)
-        const texture = await loadTexture(this.engine.filesystem, relativePath!)
-        if (texture == null) {
-            throw new Error(`Cannot load image '${filename}'`)
-        }
-
-        this.engine.rendering.setBackground(texture)
+        const background = await loadBackground(
+            this.engine.filesystem, relativePath!, this.engine.compat.backgroundImagePositions
+        )
+        this.engine.rendering.setBackground(background.texture, background.position)
     }
 
     @method()

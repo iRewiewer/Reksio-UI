@@ -28,7 +28,7 @@ export const loadSprite = async (fileLoader: Filesystem, filename: string) => {
     return sprite
 }
 
-export const loadTexture = async (fileLoader: Filesystem, filename: string) => {
+export const loadBackground = async (fileLoader: Filesystem, filename: string, useImagePosition = false) => {
     const image = await fileLoader.getIMGFile(filename)
     const baseTexture = PIXI.BaseTexture.fromBuffer(
         new Uint8Array(image.bytes),
@@ -36,5 +36,12 @@ export const loadTexture = async (fileLoader: Filesystem, filename: string) => {
         image.header.height
     )
 
-    return new PIXI.Texture(baseTexture)
+    // IMG coordinates are stored as unsigned words, including negative scene offsets.
+    return {
+        texture: new PIXI.Texture(baseTexture),
+        position: {
+            x: useImagePosition ? image.header.positionX | 0 : 0,
+            y: useImagePosition ? image.header.positionY | 0 : 0,
+        },
+    }
 }
