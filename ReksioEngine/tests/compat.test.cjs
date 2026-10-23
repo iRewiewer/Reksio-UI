@@ -228,7 +228,7 @@ test('Magicienii warped cursors ignore launcher controls and rebase on canvas re
     assert.deepEqual([mouse.GETPOSX(), mouse.GETPOSY()], [410, 310]);
 });
 
-test('Magicienii queued clicks retain coordinates across later moves and asynchronous script callbacks', async () => {
+test('Magicienii and Time Machine queued clicks retain coordinates across later moves and asynchronous callbacks', async () => {
     for (const profile of ['magicienii', 'default', 'ozn', 'nemo', 'timpului']) {
         const mouse = mouseFor(profile), events = [];
         let resume;
@@ -247,7 +247,7 @@ test('Magicienii queued clicks retain coordinates across later moves and asynchr
         mouse.onMouseMove(pointer(80, 95));
         resume();
         await ticking;
-        assert.deepEqual(events, profile === 'magicienii' ? [
+        assert.deepEqual(events, ['magicienii', 'timpului'].includes(profile) ? [
             ['ONCLICK', 'before', 10, 20], ['ONCLICK', 'after', 10, 20],
             ['ONRELEASE', 30, 40], ['ONMOVE', 80, 95],
         ] : [
@@ -258,17 +258,19 @@ test('Magicienii queued clicks retain coordinates across later moves and asynchr
     }
 });
 
-test('Magicienii synthetic double-clicks use the second click position without replacing live movement', async () => {
-    const mouse = mouseFor('magicienii'), events = [];
-    mouse.callbacks = { run: async (type) => events.push([type, mouse.GETPOSX(), mouse.GETPOSY()]) };
-    mouse.handleClickEvent(pointer(10, 20), 'click');
-    mouse.lastClicksTime.LEFT = Date.now();
-    mouse.handleClickEvent(pointer(30, 40), 'click');
-    mouse.onMouseMove(pointer(90, 100));
-    await mouse.tick(16);
-    assert.deepEqual(events, [
-        ['ONCLICK', 10, 20], ['ONCLICK', 30, 40], ['ONDBLCLICK', 30, 40], ['ONMOVE', 90, 100],
-    ]);
+test('Magicienii and Time Machine double-clicks use the second click position without replacing live movement', async () => {
+    for (const profile of ['magicienii', 'timpului']) {
+        const mouse = mouseFor(profile), events = [];
+        mouse.callbacks = { run: async (type) => events.push([type, mouse.GETPOSX(), mouse.GETPOSY()]) };
+        mouse.handleClickEvent(pointer(10, 20), 'click');
+        mouse.lastClicksTime.LEFT = Date.now();
+        mouse.handleClickEvent(pointer(30, 40), 'click');
+        mouse.onMouseMove(pointer(90, 100));
+        await mouse.tick(16);
+        assert.deepEqual(events, [
+            ['ONCLICK', 10, 20], ['ONCLICK', 30, 40], ['ONDBLCLICK', 30, 40], ['ONMOVE', 90, 100],
+        ]);
+    }
 });
 
 test('Magicienii event positions support scripted cursor writes and are released after callback errors', async () => {
@@ -340,6 +342,26 @@ test('live trace updates the options used by player restarts and checkpoint rest
     await player.setTrace(false);
     assert.equal(engine.options.trace, false);
     assert.deepEqual(calls.pop(), [false, '*']);
+});
+
+test('Time Machine inventory and build progress are traced only while tracing is enabled', () => {
+    const { EngineDiagnostics } = loadModule('engine/diagnostics.ts');
+    const messages = [], original = console.info;
+    const diagnostics = new EngineDiagnostics({ options: {}, currentScene: { name: 'ARCADE' } }, false);
+    console.info = (message) => messages.push(message);
+    try {
+        for (const name of ['G_SARCADESCENE', 'VARI_INVENTORYCOUNT', 'VARS_CURRENTITEM',
+            'VARS_CURRENTITEMOBJECT', 'VARS_USEPLACE', 'VARS_NEWITEM', 'VARINUMASSEMBLED']) {
+            diagnostics.valueChanged({ name }, 'old', 'new');
+            assert.equal(messages.length, 0);
+            diagnostics.enabled = true;
+            diagnostics.valueChanged({ name }, 'old', 'new');
+            assert.equal(JSON.parse(messages.pop().slice('[trace:value] '.length)).name, name);
+            diagnostics.enabled = false;
+        }
+    } finally {
+        console.info = original;
+    }
 });
 
 test('Magicienii repairs only the spell lesson drawing wand event references', () => {
@@ -424,20 +446,22 @@ test('Magicienii checkpoint restore clears transient page overlays without emitt
     restoreMagicieniiTransitionState({ getObject: () => null });
 });
 
-test('Magicienii inventory opacity queries return byte values without changing other profiles', () => {
+test('Magicienii and Time Machine inventory opacity queries return byte values without changing other profiles', () => {
     const { DisplayType } = loadModule('engine/types/index.ts', {
         '../components/callbacks': {}, '../../common/errors': { assert: assert.ok },
         '../components/events': {}, '../../common/types': decorator, '../logging': {},
     });
     const sprite = { alpha: 1 };
-    const object = { engine: { compat: createEngineCompat('magicienii') },
+    const object = { engine: { compat: createEngineCompat('default') },
         getRenderObject: () => sprite, __call: () => 'unsupported' };
-    assert.equal(DisplayType.prototype.GETOPACITY.call(object), 255);
-    sprite.alpha = 0;
-    assert.equal(DisplayType.prototype.GETOPACITY.call(object), 0);
-    sprite.alpha = 128 / 255;
-    assert.equal(DisplayType.prototype.GETOPACITY.call(object), 128);
-    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+    for (const profile of ['magicienii', 'timpului']) {
+        object.engine.compat = createEngineCompat(profile);
+        for (const opacity of [0, 128, 255]) {
+            sprite.alpha = opacity / 255;
+            assert.equal(DisplayType.prototype.GETOPACITY.call(object), opacity);
+        }
+    }
+    for (const profile of ['default', 'ozn', 'nemo']) {
         object.engine.compat = createEngineCompat(profile);
         assert.equal(DisplayType.prototype.GETOPACITY.call(object), 'unsupported');
     }
@@ -1198,7 +1222,7 @@ test('WORLD loads SEKAI scene-relative paths and follows converted waypoints wit
         getObject: () => actor, diagnostics: { worldState() {} } });
     await world.LOAD('mask.sek');
     assert.deepEqual(files, ['scene/mask.sek']);
-    world.LINK(100, 'ANNREX');
+    await world.LINK(100, 'ANNREX');
     world.START();
     assert.equal(world.FINDPATH(100, 9000, 500, 300, 0, false), true);
     world.tick(1000);
@@ -1218,6 +1242,47 @@ test('WORLD loads SEKAI scene-relative paths and follows converted waypoints wit
     await world.SETPOSITION(100, 425, 325, 0);
     await world.FOLLOWPATH(100);
     assert.deepEqual(positions.at(-1), [425, 325]);
+});
+
+test('Time Machine links actors at their saved body positions without changing Magicienii linking', async () => {
+    for (const profile of ['timpului', 'magicienii']) {
+        for (const point of [[71.2, 493.2], [0, 0], null]) {
+            const positions = [], signals = [];
+            const actor = { GETPOSITIONX: () => 400, GETPOSITIONY: () => 300,
+                SETPOSITION: (x, y) => positions.push([x, y]), SIGNAL: (signal) => signals.push(signal) };
+            const world = new World({ compat: createEngineCompat(profile), getObject: () => actor,
+                diagnostics: { worldState() {} } });
+            if (point) await world.SETPOSITION(100, ...point, 0);
+            await world.LINK(100, 'ANNREX');
+            if (profile === 'timpului') {
+                assert.deepEqual(positions, [point ?? [400, 300]]);
+                assert.equal(world.GETPOSITIONX(100), point?.[0] ?? 400);
+                assert.equal(world.GETPOSITIONY(100), point?.[1] ?? 300);
+            } else {
+                assert.deepEqual(positions, []);
+                assert.equal(world.GETPOSITIONX(100), point?.[0] || 400);
+                assert.equal(world.GETPOSITIONY(100), point?.[1] || 300);
+            }
+            assert.deepEqual(signals, []);
+        }
+    }
+});
+
+test('Time Machine linking a pending entry path updates the sprite without firing arrival early', async () => {
+    const positions = [], signals = [];
+    const actor = { SETPOSITION: (x, y) => positions.push([x, y]), SIGNAL: (signal) => signals.push(signal) };
+    const world = new World({ compat: createEngineCompat('timpului'), getObject: () => actor,
+        diagnostics: { worldState() {} } });
+    await world.SETPOSITION(100, 71.2, 493.2, 0);
+    world.FINDPATH(100, 9000, 71, 493, 0, false);
+    await world.LINK(100, 'ANNREX');
+    assert.deepEqual(positions, [[71.2, 493.2]]);
+    assert.deepEqual(signals, []);
+    world.START();
+    world.tick(16);
+    await world.FOLLOWPATH(100);
+    assert.deepEqual(positions.at(-1), [71, 493]);
+    assert.deepEqual(signals, ['ATGOAL']);
 });
 
 test('Magicienii path movement reaches its target and signals it only once', async () => {

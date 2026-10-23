@@ -22,6 +22,7 @@ type WorldBody = {
     atGoalSignaled: boolean
     speed: number
     remainingPath: SekPoint[]
+    positionInitialized: boolean
 }
 
 export class World extends Type<WorldDefinition> {
@@ -60,6 +61,7 @@ export class World extends Type<WorldDefinition> {
                 atGoalSignaled: false,
                 speed: 0,
                 remainingPath: [],
+                positionInitialized: false,
             }
             this.bodies.set(id, body)
         }
@@ -83,6 +85,7 @@ export class World extends Type<WorldDefinition> {
             body.x = position.x + 400
             body.y = 300 - position.y
             body.z = position.z
+            body.positionInitialized = true
         }
         for (const body of this.bodies.values()) {
             body.remainingPath = []
@@ -136,11 +139,14 @@ export class World extends Type<WorldDefinition> {
         const body = this.getBody(id)
         body.linkedAnimoName = animoName
 
-        if (!body.moving && body.x === 0 && body.y === 0 && body.targetX === 0 && body.targetY === 0) {
+        if (!body.moving && body.x === 0 && body.y === 0 && body.targetX === 0 && body.targetY === 0 &&
+            (!this.engine.compat.linkedBodyPositions || !body.positionInitialized)) {
             this.syncBodyFromLinkedAnimo(body)
         }
 
         this.engine.diagnostics.worldState(this, 'LINK', id, this.snapshotBody(body))
+        // Time Machine positions bodies before replacing its temporary actor sprites.
+        if (this.engine.compat.linkedBodyPositions) return this.syncLinkedAnimo(body)
     }
 
     @method()
@@ -150,6 +156,7 @@ export class World extends Type<WorldDefinition> {
         body.x = x
         body.y = y
         body.z = z
+        body.positionInitialized = true
         body.targetX = x
         body.targetY = y
         body.targetZ = z
@@ -380,6 +387,7 @@ export class World extends Type<WorldDefinition> {
             body.y = linkedAnimo.GETPOSITIONY()
             body.targetX = body.x
             body.targetY = body.y
+            body.positionInitialized = true
         }
     }
 

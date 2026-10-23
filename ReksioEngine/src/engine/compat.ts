@@ -32,6 +32,7 @@ export type EngineCompat = {
     propagateLoopBreak: boolean
     persistedArcadeCheckpoints: boolean
     backgroundImagePositions: boolean
+    linkedBodyPositions: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -70,8 +71,8 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         buttonAreaPriority: name === 'nemo',
         manualAnimationFrames: name === 'nemo',
         imageCloneRendering: name === 'ozn',
-        displayOpacity: name === 'magicienii',
-        queuedMouseCoordinates: name === 'magicienii',
+        displayOpacity: name === 'magicienii' || name === 'timpului',
+        queuedMouseCoordinates: name === 'magicienii' || name === 'timpului',
         dynamicHotspotTransforms: name === 'magicienii',
         resetDatabaseCursor: name === 'magicienii',
         databaseFindSelectsRow: name === 'magicienii',
@@ -81,5 +82,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         propagateLoopBreak: name === 'magicienii',
         persistedArcadeCheckpoints: name === 'nemo',
         backgroundImagePositions: name === 'magicienii',
+        linkedBodyPositions: name === 'timpului',
     }
 }
