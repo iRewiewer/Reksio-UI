@@ -45,6 +45,18 @@ export class String extends ValueType<StringDefinition, string> {
         return this.value.length
     }
 
+    @method()
+    async UPPER() {
+        if (!this.engine.compat.modernScripts) return this.__call('UPPER', [])
+        await this.setValue(this.value.toUpperCase())
+    }
+
+    @method()
+    async LOWER() {
+        if (!this.engine.compat.modernScripts) return this.__call('LOWER', [])
+        await this.setValue(this.value.toLowerCase())
+    }
+
     protected async valueChanged(oldValue: any, newValue: any) {
         if (oldValue !== newValue) {
             await this.callbacks.run('ONCHANGED', newValue)

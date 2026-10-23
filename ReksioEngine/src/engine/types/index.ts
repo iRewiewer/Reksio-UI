@@ -177,8 +177,15 @@ export class ValueType<DefinitionType extends ValueTypeDefinition, TypeOfValue> 
     @method()
     async COPYFILE(from: string, to: string) {
         console.debug(`Copying file ${from} to ${to}`)
-        const sourceData = await this.engine.filesystem.getFile(await this.engine.resolvePath(from))
+        const source = await this.engine.resolvePath(from)
+        // Time Machine's save menu copies optional minigame templates absent from the disc.
+        if (this.engine.options.compatProfile === 'timpului' && !await this.engine.filesystem.hasFile(source)) {
+            logger.warn(`Optional file copy skipped: ${source}`)
+            return false
+        }
+        const sourceData = await this.engine.filesystem.getFile(source)
         await this.engine.filesystem.saveFile(await this.engine.resolvePath(to), sourceData)
+        return true
     }
 
     valueOf() {
@@ -187,6 +194,10 @@ export class ValueType<DefinitionType extends ValueTypeDefinition, TypeOfValue> 
 
     getValue(): TypeOfValue | Promise<TypeOfValue> {
         return this.value
+    }
+
+    restoreCheckpointValue(value: TypeOfValue) {
+        this.value = structuredClone(value)
     }
 
     async setValue(newValue: TypeOfValue) {

@@ -9,6 +9,7 @@ import { Group } from './group'
 import { Animo } from './animo'
 
 export class Scene extends ParentType<SceneDefinition> {
+    public paused = false
     private minHSPriority = 0
     private maxHSPriority = 10000000
 
@@ -104,7 +105,17 @@ export class Scene extends ParentType<SceneDefinition> {
 
     @method()
     RESUME() {
+        if (this.engine.compat.modernScripts) {
+            this.paused = false
+            return
+        }
         throw new NotImplementedError()
+    }
+
+    @method()
+    PAUSE() {
+        if (!this.engine.compat.modernScripts) throw new NotImplementedError()
+        this.paused = true
     }
 
     public getRelativePath(filename: string) {

@@ -82,6 +82,6 @@ export class ClassInstance extends ParentType<TypeDefinition> {
             return
         }
 
-        await object.RUNC(...args)
+        return await object.RUNC(...args)
     }
 }

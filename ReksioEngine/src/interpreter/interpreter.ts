@@ -11,6 +11,8 @@ import { Behaviour } from '../engine/types/behaviour'
 import { IgnorableError, IrrecoverableError, NotImplementedError } from '../common/errors'
 import { Integer } from '../engine/types/integer'
 import { String as CMCString } from '../engine/types/string'
+import { Double } from '../engine/types/double'
+import { Bool } from '../engine/types/bool'
 import { parseCode } from './parser'
 import { parseLogicExpression } from './expression'
 import { CompareOp, ConditionExpr } from './expression/ast'
@@ -26,6 +28,10 @@ export class RuntimeError extends Error {
 
 class SilentError {
     constructor(public readonly cause: unknown) {}
+}
+
+export class ScriptReturn {
+    constructor(public readonly value: any) {}
 }
 
 export class RuntimeContext {
@@ -112,12 +118,30 @@ export class Interpreter {
     }
 
     private createGlobalHandlers(): Map<string, GlobalHandler> {
-        return new Map<string, GlobalHandler>([
+        const handlers = new Map<string, GlobalHandler>([
             ['IF', this.handleIf.bind(this)],
             ['BREAK', this.handleBreak.bind(this)],
             ['LOOP', this.handleLoop.bind(this)],
             ['WHILE', this.handleWhile.bind(this)],
         ])
+        if (this.context.engine.compat.modernScripts) {
+            for (const type of ['STRING', 'INT', 'INTEGER', 'DOUBLE', 'BOOL']) {
+                handlers.set(type, (args) => this.declareLocal(type, args))
+            }
+            handlers.set('RETURN', async (args) => { throw new ScriptReturn(args[0]) })
+        }
+        return handlers
+    }
+
+    private async declareLocal(type: string, [name, value]: any[]) {
+        const { engine } = this.context
+        const scope = engine.scopeManager.localScopes.at(-1)
+        if (!scope || typeof name !== 'string') throw new RuntimeError('Invalid local variable declaration')
+        const constructors = { STRING: CMCString, INT: Integer, INTEGER: Integer, DOUBLE: Double, BOOL: Bool }
+        const Constructor = constructors[type as keyof typeof constructors]
+        const object = new Constructor(engine, null, { NAME: name, TYPE: type === 'INT' ? 'INTEGER' : type, TOINI: false } as any)
+        await object.setValue((type === 'STRING' ? valueAsString(value ?? '') : value ?? 0) as never)
+        scope.set(name, object)
     }
 
     private async handleIf(args: any[]): Promise<void> {
@@ -263,7 +287,13 @@ export class Interpreter {
     }
 
     private async executeFunctionCall(call: FunctionCall): Promise<any> {
-        const args = await Promise.all(call.args.map((arg) => this.evaluateParameter(arg)))
+        const args = []
+        if (this.context.engine.compat.modernScripts) {
+            // Nested calls share the local-scope stack and must finish in argument order.
+            for (const arg of call.args) args.push(await this.evaluateParameter(arg))
+        } else {
+            args.push(...await Promise.all(call.args.map((arg) => this.evaluateParameter(arg))))
+        }
 
         if (!call.target) {
             throw new RuntimeError('Bare methods not implemented')

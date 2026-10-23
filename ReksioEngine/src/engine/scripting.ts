@@ -23,7 +23,7 @@ export class ScriptingManager {
         args?: any[],
         localScopeEntries?: Record<string, any>,
         forwardInterrupts: boolean = false
-    ) {
+    ): Promise<any> {
         let stackFrame = null
         try {
             const localScope = new Scope(

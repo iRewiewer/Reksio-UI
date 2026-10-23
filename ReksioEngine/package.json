@@ -4,7 +4,7 @@
     "description": "",
     "main": "index.js",
     "scripts": {
-        "test": "echo \"Error: no test specified\" && exit 1",
+        "test": "node --test tests/*.test.cjs",
         "build": "webpack --config webpack.config.app.ts",
         "build-lib": "webpack --config ./webpack.config.library.ts",
         "build-formats-lib": "tsc -p ./tsconfig.formats.json && cp ./static/formats.package.json ./dist/formats/package.json",

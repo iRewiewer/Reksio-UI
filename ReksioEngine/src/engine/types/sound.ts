@@ -4,7 +4,7 @@ import { SoundDefinition } from '../../fileFormats/cnv/types'
 import { FileNotFoundError } from '../../filesystem/fileLoader'
 import { assert, NotImplementedError } from '../../common/errors'
 import { method } from '../../common/types'
-import { Sound as ISound } from '../audio'
+import { Sound as ISound, globalAudio } from '../audio'
 import { logger } from '../logging'
 
 export class Sound extends Type<SoundDefinition> {
@@ -81,6 +81,11 @@ export class Sound extends Type<SoundDefinition> {
         try {
             this.sound = await loadSound(this.engine.filesystem, await this.engine.resolvePath(path))
         } catch (err) {
+            if (this.engine.compat.packedSounds && /(?:^|[\\/])(?:_pusty(?:_sfx)?\d+|_null_[\w]+)\.wav$/i.test(path)) {
+                // Nemo's empty Ogg placeholders contain no decodable audio packets.
+                this.sound = globalAudio.silence()
+                return
+            }
             if (err instanceof FileNotFoundError) {
                 // Ignore sound loading errors
                 // because there are some sounds for other language versions

@@ -4,6 +4,7 @@ import { FileLoader } from './filesystem/fileLoader'
 import { SaveFile, SaveFileManager } from './engine/saveFile'
 import { FileStorage } from './filesystem/fileStorage'
 import type { CompatProfile } from './engine/compat'
+import type { SceneCheckpoint } from './engine/checkpoint'
 export * as FileLoaders from './filesystem/fileLoader'
 export { SaveFile, SaveFileManager, createSaveFileLocalStorageHandler } from './engine/saveFile'
 export { FileStorage, IndexedDBStorage } from './filesystem/fileStorage'
@@ -23,6 +24,8 @@ export type GamePlayerOptions = {
     trace?: boolean
     traceScene?: string
     compatProfile?: CompatProfile | string
+    checkpointsEnabled?: boolean
+    checkpoint?: SceneCheckpoint
     debugContainer?: HTMLElement | null
     onExit?: () => void
     onSceneChange?: (next: string, previous?: string) => void
@@ -33,18 +36,40 @@ export class GamePlayerInstance {
     constructor(private engine: Engine) {}
 
     start() {
-        void this.engine.start()
+        return this.engine.start()
     }
 
-    restart(extraOptions?: GamePlayerOptions) {
-        const app = new PIXI.Application({
-            view: this.engine.app.view,
-        })
-
+    async restart(extraOptions?: Partial<GamePlayerOptions>) {
+        const view = this.engine.app.view as HTMLCanvasElement
+        await this.engine.stopForRestart()
         this.destroy()
+        const app = new PIXI.Application()
+        view.replaceWith(app.view as HTMLCanvasElement)
+
         this.engine = new Engine(app, { ...this.engine.options, ...(extraOptions ?? {}) })
-        void this.engine.init()
-        void this.engine.start()
+        await this.engine.init()
+        await this.engine.start()
+    }
+
+    captureCheckpoint() {
+        return this.engine.captureCheckpoint()
+    }
+
+    captureScreenshot(): Promise<Blob> {
+        const { app } = this.engine
+        const frame = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height)
+        const canvas = app.renderer.extract.canvas(app.stage, frame) as HTMLCanvasElement
+        return new Promise((resolve, reject) => {
+            canvas.toBlob(
+                (blob) => (blob ? resolve(blob) : reject(new Error('Screenshot encoding failed'))),
+                'image/png'
+            )
+        })
+    }
+
+    restoreCheckpoint(checkpoint: SceneCheckpoint) {
+        if (checkpoint.version !== 1 || !checkpoint.scene) throw new Error('Unsupported checkpoint')
+        return this.restart({ checkpoint, checkpointsEnabled: true })
     }
 
     destroy() {

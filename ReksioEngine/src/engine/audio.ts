@@ -243,6 +243,12 @@ export class AudioManager {
         return sound
     }
 
+    silence() {
+        const sound = new Sound(this, this.ctx.createBuffer(1, 1, this.ctx.sampleRate))
+        this.sounds.push(sound)
+        return sound
+    }
+
     stopAll() {
         for (const sound of [...this.sounds]) {
             sound.stop()

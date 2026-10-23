@@ -54,7 +54,12 @@ export class Database extends Type<DatabaseDefinition> {
     @method()
     FIND(column: string, value: any, offset: number) {
         // Should be ok without await for getValue as these types don't have async get
-        const index = this.content.findIndex((entry) => entry.GETFIELD(column)?.getValue() === value)
+        const index = this.content.findIndex((entry) => {
+            const stored = entry.GETFIELD(column)?.getValue()
+            return this.engine.compat.modernScripts && typeof stored === 'string' && typeof value === 'string'
+                ? stored.toUpperCase() === value.toUpperCase()
+                : stored === value
+        })
         if (index == -1) {
             return -1
         }
@@ -92,18 +97,41 @@ export class Database extends Type<DatabaseDefinition> {
 
         const structFieldsNames = Array.from(this.baseStruct.structure.keys())
         for (const line of lines) {
+            if (this.engine.compat.modernScripts && !line.trim()) continue
             const fieldContents = line.split('|')
             const newEntry = await this.baseStruct.clone()
 
             for (let i = 0; i < structFieldsNames.length; i++) {
                 const fieldName = structFieldsNames[i]
-                const fieldValue = fieldContents[i]
+                const fieldValue = fieldContents[i] ?? (this.engine.compat.modernScripts ? '' : undefined)
                 await newEntry.setField(fieldName, fieldValue === 'NULL' ? null : fieldValue)
             }
             this.content.push(newEntry)
         }
 
         this.updateCursorValue()
+    }
+
+    @method()
+    async SAVE(path: string) {
+        if (!this.engine.compat.modernScripts) return this.__call('SAVE', [path])
+        assert(this.baseStruct !== null)
+        const rows = []
+        for (const row of this.content) {
+            const fields = []
+            for (const name of this.baseStruct.structure.keys()) {
+                fields.push(String(await row.GETFIELD(name)?.getValue() ?? 'NULL'))
+            }
+            rows.push(fields.join('|'))
+        }
+        const text = rows.join('\r\n') + '\r\n'
+        // DTA files use Windows-1250, including localized slot names.
+        const alphabet = decoder.decode(Uint8Array.from({ length: 256 }, (_, i) => i))
+        const encoded = Uint8Array.from(text, (char) => {
+            const index = alphabet.indexOf(char)
+            return index < 0 ? 63 : index
+        })
+        await this.engine.filesystem.saveFile(await this.engine.resolvePath(path), encoded.buffer)
     }
 
     private updateCursorValue() {

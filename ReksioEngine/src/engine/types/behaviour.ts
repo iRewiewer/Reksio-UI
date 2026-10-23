@@ -6,6 +6,7 @@ import { assert } from '../../common/errors'
 import { ClassInstance } from './class'
 import { InterruptScriptExecution } from '../../interpreter'
 import { logger } from '../logging'
+import { ScriptReturn } from '../../interpreter/interpreter'
 
 export class Behaviour extends Type<BehaviourDefinition> {
     async ready() {
@@ -24,8 +25,9 @@ export class Behaviour extends Type<BehaviourDefinition> {
         this.engine.diagnostics.behaviour(this, 'RUN')
 
         try {
-            await this.executeCallback(args)
+            return await this.executeCallback(args)
         } catch (err) {
+            if (err instanceof ScriptReturn) return err.value
             if (!(err instanceof InterruptScriptExecution)) {
                 throw err
             }
@@ -44,7 +46,7 @@ export class Behaviour extends Type<BehaviourDefinition> {
         }
 
         if (shouldRun) {
-            await this.RUN(...args)
+            return await this.RUN(...args)
         }
     }
 
@@ -68,14 +70,14 @@ export class Behaviour extends Type<BehaviourDefinition> {
         }
     }
 
-    async executeCallback(args: any[] = []) {
+    async executeCallback(args: any[] = []): Promise<any> {
         // Don't resolve args, it will fail in S33_METEORY
         return await this.engine.scripting.executeCallback(null, this, this.definition.CODE, args)
     }
 
-    async executeConditionalCallback(args: any[] = []) {
+    async executeConditionalCallback(args: any[] = []): Promise<any> {
         if (await this.shouldRun()) {
-            await this.executeCallback(args)
+            return await this.executeCallback(args)
         }
     }
 

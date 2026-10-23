@@ -148,8 +148,8 @@ function getSnapshotDb() {
   return snapshotDbPromise;
 }
 
-function openEngineFilesystemDb() {
-  return openDatabase(ENGINE_DB_NAME, 1, (db) => {
+function openEngineFilesystemDb(gameId = state.selectedId) {
+  return openDatabase(gameId ? `reksio-${gameId}` : ENGINE_DB_NAME, undefined, (db) => {
     if (!db.objectStoreNames.contains(ENGINE_FILESYSTEM_STORE_NAME)) {
       db.createObjectStore(ENGINE_FILESYSTEM_STORE_NAME);
     }
@@ -277,7 +277,7 @@ function createSnapshotId() {
 }
 
 function storedValueSize(value) {
-  if (value instanceof ArrayBuffer) {
+  if (value instanceof ArrayBuffer || Object.prototype.toString.call(value) === '[object ArrayBuffer]') {
     return value.byteLength;
   }
 
@@ -636,6 +636,9 @@ async function captureGameScreenshot() {
     throw new Error('No game is currently loaded.');
   }
 
+  const bridge = nodes.gameFrame.contentWindow?.reksioSnapshots;
+  if (bridge?.screenshot) return bridge.screenshot();
+
   let canvases;
 
   try {
@@ -855,6 +858,7 @@ function renderSnapshots() {
             <div class="snapshot-title">${escapeHtml(snapshot.name)}</div>
             <div class="snapshot-meta">
               ${escapeHtml(formatDateTime(snapshot.createdAt))} - ${escapeHtml(formatBytes(snapshot.sizeBytes || 0))} - ${escapeHtml(String(snapshot.filesystemEntryCount || 0))} files
+              <br>${escapeHtml(snapshot.checkpoint ? `Scene entry: ${snapshot.checkpoint.scene}` : 'Legacy save files')}
             </div>
           </div>
           <div class="snapshot-actions">
@@ -910,6 +914,26 @@ async function openSnapshotsDialog() {
   }
 }
 
+function askSnapshotAction({ title, message = '', name, accept = 'Save' }) {
+  const dialog = document.getElementById('snapshotActionDialog');
+  if (dialog.open) return Promise.resolve(null);
+  const input = document.getElementById('snapshotNameInput');
+  document.getElementById('snapshotActionTitle').textContent = title;
+  document.getElementById('snapshotActionMessage').textContent = message;
+  document.getElementById('snapshotActionMessage').hidden = !message;
+  document.getElementById('snapshotNameField').hidden = name === undefined;
+  document.getElementById('snapshotActionAccept').textContent = accept;
+  input.value = name ?? '';
+  dialog.returnValue = '';
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => {
+      resolve(dialog.returnValue === 'accept' ? (name === undefined ? true : input.value) : null);
+    }, { once: true });
+    dialog.showModal();
+    if (name !== undefined) { input.focus(); input.select(); }
+  });
+}
+
 async function createCurrentSnapshot() {
   const game = getSelectedGame();
 
@@ -920,7 +944,7 @@ async function createCurrentSnapshot() {
   syncCurrentSave();
 
   const fallbackName = defaultSnapshotName(game);
-  const requestedName = window.prompt('Snapshot name', fallbackName);
+  const requestedName = await askSnapshotAction({ title: 'Create Snapshot', name: fallbackName });
 
   if (requestedName === null) {
     return;
@@ -933,9 +957,13 @@ async function createCurrentSnapshot() {
   setSnapshotStatus('Saving snapshot');
 
   try {
-    const filesystemEntries = await dumpEngineFilesystem();
-    const saveContent = getSaveContentForGame(game.id);
+    const bridge = nodes.gameFrame.contentWindow?.reksioSnapshots;
+    if (!bridge || state.loadedId !== game.id) throw new Error('Start the game before creating a checkpoint.');
+    const checkpoint = bridge.capture();
+    const filesystemEntries = checkpoint.filesystemEntries;
+    const saveContent = JSON.stringify(checkpoint.saveData);
     const snapshot = {
+      checkpoint,
       id: createSnapshotId(),
       gameId: game.id,
       gameTitle: game.title,
@@ -951,7 +979,7 @@ async function createCurrentSnapshot() {
     snapshot.sizeBytes = estimateSnapshotSize(snapshot);
     await putSnapshot(snapshot);
     await loadSnapshotsForSelectedGame();
-    showToast('Snapshot saved', name);
+    showToast('Checkpoint saved', `${name} - ${checkpoint.scene}`);
     addLog('launcher', 'info', 'Snapshot saved', `${name}\n${snapshot.filesystemEntryCount} filesystem entries`);
   } catch (error) {
     addLog('launcher', 'error', 'Failed to save snapshot', error);
@@ -969,13 +997,26 @@ async function restoreSnapshot(snapshotId) {
     throw new Error('Snapshot not found.');
   }
 
-  const confirmed = window.confirm(`Restore "${snapshot.name}"? Current progress for this game will be overwritten.`);
+  const confirmed = await askSnapshotAction({ title: 'Restore Snapshot',
+    message: `Restore "${snapshot.name}"? Current progress for this game will be overwritten.`, accept: 'Restore' });
 
   if (!confirmed) {
     return;
   }
 
   setSnapshotStatus('Restoring snapshot');
+
+  if (snapshot.checkpoint) {
+    if (state.loadedId !== snapshot.gameId) throw new Error('Load this game before restoring its checkpoint.');
+    const bridge = nodes.gameFrame.contentWindow?.reksioSnapshots;
+    if (!bridge) throw new Error('Reload the launcher to enable checkpoint restore.');
+    await bridge.restore(snapshot.checkpoint);
+    syncCurrentSave();
+    nodes.snapshotsDialog.close();
+    showToast('Checkpoint restored', `${snapshot.name} - ${snapshot.checkpoint.scene}`);
+    addLog('launcher', 'info', 'Scene checkpoint restored', snapshot.checkpoint.scene);
+    return;
+  }
 
   if (state.loadedId) {
     syncCurrentSave();
@@ -986,7 +1027,7 @@ async function restoreSnapshot(snapshotId) {
 
   setSaveContentForGame(snapshot.gameId, snapshot.saveContent || '');
   await replaceEngineFilesystem(snapshot.filesystemEntries || []);
-  showToast('Snapshot restored', snapshot.name);
+  showToast('Save files restored', 'Legacy snapshot: use the in-game Load menu to continue.');
   addLog('launcher', 'info', 'Snapshot restored', snapshot.name);
 
   if (state.games.some((game) => game.id === snapshot.gameId)) {
@@ -1003,7 +1044,7 @@ async function renameSnapshot(snapshotId) {
     throw new Error('Snapshot not found.');
   }
 
-  const nextName = window.prompt('Snapshot name', snapshot.name);
+  const nextName = await askSnapshotAction({ title: 'Rename Snapshot', name: snapshot.name });
 
   if (nextName === null) {
     return;
@@ -1029,7 +1070,7 @@ async function deleteSnapshot(snapshotId) {
     throw new Error('Snapshot not found.');
   }
 
-  const confirmed = window.confirm(`Delete "${snapshot.name}"?`);
+  const confirmed = await askSnapshotAction({ title: 'Delete Snapshot', message: `Delete "${snapshot.name}"?`, accept: 'Delete' });
 
   if (!confirmed) {
     return;
@@ -1124,6 +1165,9 @@ function compatProfileForGame(game) {
   if (/(magicien|magicians|czarodzieje)/.test(label)) {
     return 'magicienii';
   }
+  if (/nemo/.test(label)) return 'nemo';
+  if (/(timpului|time|wehikul)/.test(label)) return 'timpului';
+  if (/(ozn|ufo)/.test(label)) return 'ozn';
 
   return '';
 }
@@ -1143,6 +1187,7 @@ function buildLaunchUrl(game) {
   }
 
   const compatProfile = compatProfileForGame(game);
+  params.set('storage', `reksio-${game.id}`);
   if (compatProfile) {
     params.set('compatProfile', compatProfile);
   }

@@ -363,6 +363,13 @@ export class Animo extends DisplayType<AnimoDefinition> {
         await this.playEvent(name)
     }
 
+    @method()
+    async NPLAY(index: number) {
+        if (!this.engine.compat.modernScripts) return this.__call('NPLAY', [index])
+        const event = this.getAllEvents()[index]
+        if (event) await this.playEvent(event.name)
+    }
+
     async playEvent(name: string) {
         const eventExists = this.hasEvent(name.toString())
         this.engine.diagnostics.animoPlay(this, name, eventExists)

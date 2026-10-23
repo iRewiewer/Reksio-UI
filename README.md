@@ -57,9 +57,21 @@ The raw ISO endpoint is still available at `/api/games/<game-id>/iso` for diagno
 
 ## Snapshots
 
-The launcher can create named per-game snapshots from the browser UI. A snapshot captures the current ReksioEngine save JSON plus the engine IndexedDB filesystem, then restores by writing those values back and relaunching the selected game.
+New snapshots are **scene-entry checkpoints**, not exact mid-animation save states. They capture the scene name, persistent global values, save JSON, and IndexedDB files from entry into the current scene. Restoring rebuilds the engine inside the existing iframe and returns directly to that scene. A minigame restarts from its entry state; earlier scenes do not need to be replayed.
+
+Old snapshots remain available as **Legacy save files**. They restore saved files only and may require the game's own Load menu. They cannot be converted into a checkpoint after the fact.
 
 Snapshots are stored in the browser's IndexedDB under the current host/origin. They survive Docker rebuilds and app restarts, but they are local to the browser profile.
+
+Each game now has an isolated engine filesystem. Existing shared filesystem data is copied once for Magicienii without deleting the old database.
+
+## Compatibility Profiles
+
+Pirates uses the `default` profile, which preserves the existing engine behavior. The launcher selects `magicienii`, `ozn`, `nemo`, or `timpului` from the game title. New compatibility behavior is gated in `ReksioEngine/src/engine/compat.ts`; do not enable a new fix globally without regression testing Pirates.
+
+Current compatibility work includes JPEG backgrounds, newer script local variables and return values, Nemo packed SND archives and cutscene tables, and subsection completion callbacks for Time Machine's intro. Magicienii's WORLD pathing remains a limited straight-line implementation, not a complete physics or obstacle engine.
+
+Run focused compatibility regression tests with `npm test --prefix ReksioEngine`, plus `npm run check` and `npm run build --prefix ReksioEngine`. Then run `.\rebuild.bat` for the Docker deployment. Reaching a title or menu is not evidence that an entire game is playable; gameplay still needs scene-by-scene verification.
 
 ## Local Working Files
 

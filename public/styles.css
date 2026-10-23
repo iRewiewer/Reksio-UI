@@ -986,3 +986,6 @@ h2 {
     width: 100%;
   }
 }
+#snapshotNameField[hidden] {
+  display: none;
+}

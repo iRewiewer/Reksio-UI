@@ -7,6 +7,7 @@ const RELATED_SCENES: Record<string, string[]> = {
 }
 
 const KEY_VALUES = new Set([
+    'VAR_AKCJA', 'G_IREADY', 'G_SSCENENAME', 'SGSCENENAME', 'S_BFIRSTINTRO',
     'CZYEKRAN',
     'EKRANACTIVE',
     'INT_DRZWI',
@@ -294,7 +295,7 @@ export class EngineDiagnostics {
                 }
             }
 
-            if (object.definition.TYPE === 'ANIMO' && (/^REKSIO17[A-F]$/.test(object.name) || object.name === 'ANNREX')) {
+            if (object.definition.TYPE === 'ANIMO') {
                 const renderObject = typeof anyObject.getRenderObject === 'function' ? anyObject.getRenderObject() : null
                 animos.push({
                     name: object.name,

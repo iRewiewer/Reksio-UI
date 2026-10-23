@@ -7,6 +7,9 @@ import { decryptCNV } from '../fileFormats/cnv'
 import { deserializeArray } from '../fileFormats/archive/array'
 import { FileLoader } from './fileLoader'
 import { FileStorage } from './fileStorage'
+import { createEngineCompat, EngineCompat } from '../engine/compat'
+import { readSoundArchive } from '../fileFormats/archive/sound'
+import { loadJpegBackground } from '../engine/compatAssets'
 
 const PIRATES_RIVER_THREE_PATH = 'dane/intro/mainmenu/09rzekac/rzeka3.cnv'
 const PIRATES_WIOSKA_PATH = 'dane/intro/mainmenu/10wioska/wioska10.cnv'
@@ -232,9 +235,12 @@ export const pathJoin = (...parts: Array<string>) => {
 }
 
 export default class Filesystem {
+    private soundArchives = new Map<string, Promise<Map<string, ArrayBuffer>>>()
+
     constructor(
         public fileLoader: FileLoader,
-        public storage: FileStorage
+        public storage: FileStorage,
+        private compat: EngineCompat = createEngineCompat()
     ) {}
 
     async init() {
@@ -248,13 +254,38 @@ export default class Filesystem {
         if (storageFile) {
             return storageFile
         }
+        if (this.compat.packedSounds && !this.fileLoader.hasFile(path) && path.endsWith('.wav')) {
+            const packed = await this.getPackedSound(path)
+            if (packed) return packed
+        }
         return this.fileLoader.getRawFile(path)
+    }
+
+    private async getPackedSound(path: string) {
+        const directory = path.slice(0, path.lastIndexOf('/') + 1)
+        const archives = this.fileLoader.getFilesListing().filter((name) =>
+            normalizePath(name).startsWith(directory) && name.toLowerCase().endsWith('.snd'))
+        for (const archive of archives) {
+            if (!this.soundArchives.has(archive)) {
+                this.soundArchives.set(archive, this.fileLoader.getRawFile(archive).then((data) => {
+                    const base = normalizePath(archive).slice(0, archive.lastIndexOf('/') + 1)
+                    return new Map(readSoundArchive(data).map((entry) =>
+                        [base + entry.name, data.slice(entry.offset, entry.offset + entry.length)]))
+                }))
+            }
+            const entry = (await this.soundArchives.get(archive)!).get(path)
+            if (entry) return entry
+        }
+        return null
     }
 
     async hasFile(path: string) {
         path = normalizePath(path)
         if (await this.storage.has(path)) {
             return true
+        }
+        if (this.compat.packedSounds && path.endsWith('.wav') && !this.fileLoader.hasFile(path)) {
+            return (await this.getPackedSound(path)) !== null
         }
         return this.fileLoader.hasFile(path)
     }
@@ -501,6 +532,9 @@ export default class Filesystem {
         }
 
         const data = await this.getFile(filename)
+        if (this.compat.jpegImages && data.byteLength >= 40 && new DataView(data).getUint32(24, true) === 5) {
+            return loadJpegBackground(data)
+        }
         return loadImage(data)
     }
 

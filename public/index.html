@@ -255,6 +255,21 @@
       </div>
     </dialog>
 
+    <dialog class="add-dialog" id="snapshotActionDialog" aria-labelledby="snapshotActionTitle">
+      <form class="dialog-shell" method="dialog" id="snapshotActionForm">
+        <header class="dialog-header"><h2 id="snapshotActionTitle">Snapshot</h2></header>
+        <p id="snapshotActionMessage" hidden></p>
+        <label class="field" id="snapshotNameField">
+          <span>Snapshot name</span>
+          <input id="snapshotNameInput" type="text" maxlength="120" />
+        </label>
+        <div class="dialog-footer">
+          <button class="tool-button" type="submit" value="cancel" formnovalidate>Cancel</button>
+          <button class="tool-button primary" type="submit" value="accept" id="snapshotActionAccept">Save</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog class="add-dialog notes-dialog" id="notesDialog">
       <div class="dialog-shell">
         <header class="dialog-header">

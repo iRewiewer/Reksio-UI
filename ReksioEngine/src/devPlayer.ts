@@ -1,4 +1,5 @@
-import { BUILD_VARS, createGamePlayer, GamePlayerOptions } from './index'
+import { BUILD_VARS, createGamePlayer, GamePlayerOptions, GamePlayerInstance } from './index'
+import type { SceneCheckpoint } from './engine/checkpoint'
 import {
     ArchiveOrgFileLoader,
     ListingJSONUrlFileLoader,
@@ -24,10 +25,12 @@ const baseOptions = {
     trace: traceEnabled,
     traceScene,
     compatProfile: urlParams.get('compatProfile') ?? undefined,
+    checkpointsEnabled: true,
     debugContainer: debugContainer,
     onExit: () => document.exitFullscreen(),
     saveFile: areSavesEnabled ? SaveFileManager.fromLocalStorage() : undefined,
-    storage: new IndexedDBStorage('reksio'),
+    storage: new IndexedDBStorage(urlParams.get('storage') ?? 'reksio',
+        urlParams.get('storage') && urlParams.get('compatProfile') === 'magicienii' ? 'reksio' : undefined),
 }
 
 const consoleLogQueue: Array<Record<string, unknown>> = []
@@ -115,6 +118,7 @@ const flushLauncherConsoleLogs = () => {
 }
 
 const shouldForwardConsoleLog = (level: string) => {
+    if (level === 'error') return true
     const now = Date.now()
 
     if (now - consoleWindowStartedAt >= 1000) {
@@ -133,6 +137,7 @@ const shouldForwardConsoleLog = (level: string) => {
 }
 
 const shouldPrintOriginalConsoleLog = (level: string) => {
+    if (level === 'error') return true
     if (traceEnabled && level === 'info') {
         return true
     }
@@ -239,15 +244,35 @@ console.info('ReksioEngine player booting', {
 })
 
 let config = {}
-const start = () => {
+let player: GamePlayerInstance | null = null
+const start = async () => {
     gameContainer.removeEventListener('click', start)
     gameContainer.classList.remove('notready')
 
-    const player = createGamePlayer(gameContainer, config as GamePlayerOptions)
+    player = createGamePlayer(gameContainer, config as GamePlayerOptions)
     if (player) {
-        void player.start()
+        await player.start()
     }
 }
+
+Object.assign(window, { reksioSnapshots: {
+    screenshot: () => {
+        if (!player) throw new Error('Start the game before capturing a screenshot.')
+        return player.captureScreenshot()
+    },
+    capture: () => {
+        if (!player) throw new Error('Start the game before creating a checkpoint.')
+        return player.captureCheckpoint()
+    },
+    restore: async (checkpoint: SceneCheckpoint) => {
+        if (checkpoint.version !== 1 || !checkpoint.scene) throw new Error('Unsupported checkpoint')
+        if (player) await player.restoreCheckpoint(checkpoint)
+        else {
+            config = { ...config, checkpoint }
+            await start()
+        }
+    },
+} })
 
 if (urlParams.get('loader') === 'iso-local') {
     const fileSelector = document.createElement('input')

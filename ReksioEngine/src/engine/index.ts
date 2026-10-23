@@ -12,7 +12,9 @@ import { RenderingManager } from './rendering'
 import { BUILD_VARS, GamePlayerOptions } from '../index'
 import { Scope, ScopeManager } from './scope'
 import { Episode } from './types/episode'
-import { Type } from './types'
+import { Type, ValueType } from './types'
+import type { SceneCheckpoint } from './checkpoint'
+import { Behaviour } from './types/behaviour'
 import Filesystem, { pathJoin } from '../filesystem'
 import { globalAudio, SoundInstance } from './audio'
 import { logger } from './logging'
@@ -39,6 +41,10 @@ export class Engine {
     public filesystem: Filesystem
     public music: SoundInstance | null = null
     public readonly compat: EngineCompat
+    private entryCheckpoint: SceneCheckpoint | null = null
+    private changingScene = false
+    private ticking = false
+    private startupComplete = false
 
     constructor(
         public readonly app: Application,
@@ -51,7 +57,7 @@ export class Engine {
         this.diagnostics = new EngineDiagnostics(this, this.options.trace ?? false, this.options.traceScene)
         this.scripting = new ScriptingManager(this)
         this.debug = new Debugging(this, this.options.debug ?? false, options.debugContainer ?? null)
-        this.filesystem = new Filesystem(this.options.fileLoader, this.options.storage)
+        this.filesystem = new Filesystem(this.options.fileLoader, this.options.storage, this.compat)
         this.saveFile = this.options.saveFile ?? SaveFileManager.empty(undefined)
     }
 
@@ -77,6 +83,10 @@ export class Engine {
     async start() {
         try {
             await this.filesystem.init()
+            if (this.options.checkpoint) {
+                await this.options.storage.restore(this.options.checkpoint.filesystemEntries)
+                this.saveFile = new SaveFile(this.options.checkpoint.saveData, this.saveFile.onChange)
+            }
 
             const applicationDef = await this.filesystem.getCNVFile('DANE/Application.def')
             const rootScope = this.scopeManager.newScope('root')
@@ -90,12 +100,35 @@ export class Engine {
             }
 
             await this.debug.fillSceneSelector()
-            await this.changeScene(this.options.startScene ?? episode.definition.STARTWITH)
+            const checkpoint = this.options.checkpoint
+            if (checkpoint) {
+                // Recreate persistent UI classes before applying captured global values.
+                this.currentScene = this.getObject<Scene>(checkpoint.scene)
+                const initialized = checkpoint.globals.find((entry) => entry.name === 'G_IREADY')?.value
+                const initializer = initialized
+                    ? '__GAME_INIT__'
+                    : this.options.compatProfile === 'nemo' && checkpoint.scene !== 'START'
+                      ? '__PRZYGODA_INIT__'
+                      : null
+                if (initializer) await this.getObject<Behaviour>(initializer)?.RUN()
+                for (const entry of checkpoint.globals) {
+                    const object = this.scopeManager.scopes
+                        .flatMap((scope) => scope.objects)
+                        .find((object) => object.name === entry.name && (object.parent?.name ?? null) === entry.parent)
+                    if (object instanceof ValueType && object.definition.TYPE === entry.type) {
+                        object.restoreCheckpointValue(entry.value)
+                    }
+                }
+                this.currentScene = checkpoint.previousScene ? this.getObject<Scene>(checkpoint.previousScene) : null
+            }
+            await this.changeScene(checkpoint?.scene ?? this.options.startScene ?? episode.definition.STARTWITH)
 
+            this.startupComplete = true
             this.app.ticker.start()
         } catch (err) {
             if (err instanceof CancelTick) {
                 await err.callback?.()
+                this.startupComplete = true
                 return
             }
 
@@ -106,6 +139,7 @@ export class Engine {
                 },
                 err
             )
+            if (this.options.checkpoint) throw err
         }
     }
 
@@ -117,45 +151,96 @@ export class Engine {
         globalAudio.stopAll()
     }
 
+    async stopForRestart() {
+        this.app.ticker.stop()
+        const deadline = Date.now() + 15000
+        while (this.ticking || this.changingScene) {
+            if (Date.now() > deadline) throw new Error('The current scene is busy. Wait before restoring a checkpoint.')
+            await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        this.app.ticker.stop()
+    }
+
     async tick(elapsedMS: number) {
-        for (const scope of this.scopeManager.scopes) {
-            for (const object of scope.objects.filter((object) => object.isReady)) {
-                try {
-                    await object.tick(elapsedMS)
-                } catch (err) {
-                    if (err instanceof CancelTick) {
-                        await err.callback?.()
-                        return
-                    } else if (err instanceof IrrecoverableError) {
-                        logger.error(
-                            'Irrecoverable error occurred. Execution paused\n' + 'Call "engine.resume()" to resume',
-                            {
-                                scopes: this.scopeManager.scopes,
-                            },
-                            err
-                        )
-                    } else {
-                        logger.error(
-                            'Unhandled error occurred during tick. Execution paused\n' +
-                                'Call "engine.resume()" to resume',
-                            {
-                                scopes: this.scopeManager.scopes,
-                            },
-                            err
-                        )
+        if (this.compat.serialTicks && (this.ticking || this.changingScene || !this.startupComplete)) return
+        this.ticking = true
+        try {
+            for (const scope of this.scopeManager.scopes) {
+                if (scope === this.currentScene?.scope && this.currentScene.paused) continue
+                for (const object of scope.objects.filter((object) => object.isReady)) {
+                    try {
+                        await object.tick(elapsedMS)
+                    } catch (err) {
+                        if (err instanceof CancelTick) {
+                            await err.callback?.()
+                            return
+                        } else if (err instanceof IrrecoverableError) {
+                            logger.error(
+                                'Irrecoverable error occurred. Execution paused\n' + 'Call "engine.resume()" to resume',
+                                {
+                                    scopes: this.scopeManager.scopes,
+                                },
+                                err
+                            )
+                        } else {
+                            logger.error(
+                                'Unhandled error occurred during tick. Execution paused\n' +
+                                    'Call "engine.resume()" to resume',
+                                {
+                                    scopes: this.scopeManager.scopes,
+                                },
+                                err
+                            )
+                        }
+                        this.pause()
                     }
-                    this.pause()
                 }
             }
-        }
 
-        this.debug.updateXRay()
+            this.debug.updateXRay()
+        } finally {
+            this.ticking = false
+        }
     }
 
     async changeScene(sceneName: string) {
+        this.changingScene = true
         this.options.onSceneChange?.(sceneName, this.currentScene?.name)
         this.diagnostics.sceneChanging(sceneName, this.currentScene?.name)
         this.app.ticker.stop()
+        if (this.options.checkpointsEnabled) {
+            try {
+                const globals: SceneCheckpoint['globals'] = []
+                for (const scope of this.scopeManager.scopes.filter((scope) =>
+                    ['root', 'application', 'episode'].includes(scope.type)
+                )) {
+                    for (const object of scope.objects) {
+                        if (
+                            object instanceof ValueType &&
+                            ['INTEGER', 'DOUBLE', 'BOOL', 'STRING', 'ARRAY'].includes(object.definition.TYPE)
+                        ) {
+                            globals.push({
+                                parent: object.parent?.name ?? null,
+                                name: object.name,
+                                type: object.definition.TYPE,
+                                value: structuredClone(await object.getValue()),
+                            })
+                        }
+                    }
+                }
+                this.entryCheckpoint = {
+                    version: 1,
+                    scene: sceneName,
+                    previousScene: this.currentScene?.name ?? null,
+                    globals,
+                    saveData: structuredClone(this.saveFile.toObject()),
+                    filesystemEntries: await this.options.storage.snapshot(),
+                }
+            } catch (err) {
+                this.entryCheckpoint = null
+                logger.warn('Could not capture scene checkpoint', null, err)
+            }
+        }
         this.music?.pause()
 
         this.rendering.onSceneChange()
@@ -259,11 +344,18 @@ export class Engine {
                 await this.diagnostics.sceneReady()
             }
         } finally {
+            this.changingScene = false
             this.app.stage.removeChild(loadingFreezeOverlay)
 
             this.app.ticker.start()
             this.debug.updateCurrentScene()
         }
+    }
+
+    captureCheckpoint(): SceneCheckpoint {
+        if (!this.entryCheckpoint || this.changingScene)
+            throw new Error('Wait for the scene to finish loading before saving a checkpoint.')
+        return structuredClone(this.entryCheckpoint)
     }
 
     getObject<T extends Type<any>>(name: string | reference | null, parentScope: Scope | null = null): T | null {
@@ -273,7 +365,12 @@ export class Engine {
                 return currentScopeEntry
             }
 
-            return currentScopeEntry ?? this.scopeManager.findByName(name, parentScope)
+            const object = this.scopeManager.findByName<T>(name, parentScope)
+            // Newer games address the original animation as clone zero without creating a clone.
+            if (!object && this.compat.modernScripts && name.endsWith('_0')) {
+                return this.getObject<T>(name.slice(0, -2), parentScope)
+            }
+            return object
         } else if (name === null) {
             return null
         } else {

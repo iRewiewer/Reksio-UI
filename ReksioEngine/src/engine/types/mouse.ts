@@ -150,6 +150,11 @@ export class Mouse extends Type<MouseDefinition> {
 
     @method()
     SETPOSITION(x: number, y: number) {
+        if (this.engine.compat.clearAnimoCacheOnLoad) {
+            this.mousePosition.set(x, y)
+            this.moved = true
+            return
+        }
         // This is kinda impossible. We would have to hide cursor and emulate it.
         throw new NotImplementedError()
     }

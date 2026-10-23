@@ -321,13 +321,30 @@ export class Button extends Type<ButtonDefinition> {
     }
 
     @method()
-    SETRECT(objectName: string) {
-        this.setRect({ objectName })
+    SETRECT(objectName: string | number, y1?: number, x2?: number, y2?: number) {
+        if (this.engine.compat.modernScripts && y1 !== undefined && x2 !== undefined && y2 !== undefined) {
+            this.setRect([Number(objectName), y1, x2, y2])
+        } else {
+            this.setRect({ objectName: String(objectName) })
+        }
     }
 
     @method()
     SETSTD(graphicObjectName: string, removeFromCanvas: boolean = false, onBoundingBox: boolean = false) {
-        throw new NotImplementedError()
+        if (!this.engine.compat.modernScripts) throw new NotImplementedError()
+        const graphic = this.getObject(graphicObjectName)
+        assert(graphic instanceof Image || graphic instanceof Animo, 'button graphic should be an image or animation')
+        if (this.gfxStandard) {
+            this.unregisterInteractive(this.gfxStandard)
+            if (removeFromCanvas) this.gfxStandard.HIDE()
+        }
+        this.gfxStandard = graphic
+        this.prepareGraphic(graphic)
+        if (this.logic.enabled && !this.rect) this.registerInteractive(graphic)
+        const sprite = graphic.getRenderObject()
+        if (sprite) sprite.checkPixelPerfect = !onBoundingBox
+        if (this.logic.state === State.DISABLED) graphic.HIDE()
+        else graphic.SHOW()
     }
 
     private registerInteractive(object: Image | Animo) {

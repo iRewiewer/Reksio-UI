@@ -41,6 +41,8 @@ export class Sequence extends Type<SequenceDefinition> {
 
     private loop: boolean = false
     private loopIndex: number = 0
+    private paused = false
+    private advancing = false
 
     private readonly onAnimoEventFinishedCallback: (eventName: string) => Promise<void>
 
@@ -129,6 +131,7 @@ export class Sequence extends Type<SequenceDefinition> {
     }
 
     async tick(elapsedMS: number) {
+        if (this.paused) return
         while (this.endedSpeakingSoundsQueue.length > 0) {
             this.loop = false
             const entry = this.endedSpeakingSoundsQueue.shift()!
@@ -147,6 +150,11 @@ export class Sequence extends Type<SequenceDefinition> {
 
         const subEntries = this.subEntries.get(this.parameterSequence.NAME)
         if (subEntries !== undefined && this.parametersMapping.has(sequenceName)) {
+            if (this.engine.compat.modernScripts) {
+                this.paused = false
+                this.queue = []
+                this.runningSubSequence = null
+            }
             const entryIndex = this.parametersMapping.get(sequenceName)!
             const entry = subEntries[entryIndex]
             this.sequenceName = sequenceName
@@ -181,6 +189,26 @@ export class Sequence extends Type<SequenceDefinition> {
         this.activeAnimo?.events.unregister(Animo.Events.ONFINISHED, this.onAnimoEventFinishedCallback)
         this.activeAnimo = null
         this.playingSound?.stop()
+    }
+
+    @method()
+    PAUSE() {
+        if (!this.engine.compat.modernScripts) return this.__call('PAUSE', [])
+        this.paused = true
+        if (this.runningSubSequence) this.activeAnimo?.PAUSE()
+        this.playingSound?.pause()
+    }
+
+    @method()
+    async RESUME() {
+        if (!this.engine.compat.modernScripts) return this.__call('RESUME', [])
+        this.paused = false
+        if (this.runningSubSequence) {
+            this.activeAnimo?.RESUME()
+            this.playingSound?.resume()
+        } else if (!this.advancing) {
+            await this.progressNext()
+        }
     }
 
     private fillQueue(entry: SequenceFileEntry) {
@@ -227,9 +255,28 @@ export class Sequence extends Type<SequenceDefinition> {
     }
 
     private async progressNext() {
+        if (this.engine.compat.modernScripts) {
+            if (this.advancing || this.paused) return
+            this.advancing = true
+            try {
+                const finished = this.runningSubSequence
+                this.runningSubSequence = null
+                if (finished) await this.callbacks.run('ONFINISHED', finished.NAME)
+                if (!this.paused) await this.advanceQueue()
+            } finally {
+                this.advancing = false
+            }
+        } else {
+            await this.advanceQueue()
+        }
+    }
+
+    private async advanceQueue() {
         if (this.sequenceName === null) {
             return
         }
+
+        while (this.queue[0]?.TYPE === 'SEQUENCE') this.queue.shift()
 
         if (this.queue.length === 0) {
             const finishedName = this.sequenceName
@@ -239,11 +286,6 @@ export class Sequence extends Type<SequenceDefinition> {
         }
 
         const next = this.queue.shift()!
-        if (next.TYPE === 'SEQUENCE') {
-            await this.progressNext()
-            return
-        }
-
         if (next.TYPE === 'SPEAKING') {
             const speaking = next as Speaking
 
@@ -275,6 +317,9 @@ export class Sequence extends Type<SequenceDefinition> {
                             this.endedSpeakingSoundsQueue.push(speaking)
                         },
                     })
+                } else if (this.engine.compat.modernScripts) {
+                    logger.warn(`Sequence sound missing: ${speaking.WAVFN}`)
+                    this.endedSpeakingSoundsQueue.push(speaking)
                 }
 
                 const startEvent = speaking.PREFIX + '_START'
