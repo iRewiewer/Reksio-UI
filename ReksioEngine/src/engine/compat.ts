@@ -10,6 +10,7 @@ export type EngineCompat = {
     serialTicks: boolean
     imageInvalidation: boolean
     scriptedCursor: boolean
+    timeMachineMusicNames: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -37,5 +38,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         serialTicks: name !== 'default',
         imageInvalidation: name !== 'default',
         scriptedCursor: name !== 'default',
+        timeMachineMusicNames: name === 'timpului',
     }
 }

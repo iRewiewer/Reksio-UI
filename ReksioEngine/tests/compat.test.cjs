@@ -225,3 +225,47 @@ test('Magicienii dialogue sequences resolve dynamically loaded SOUND objects', a
     assert.equal(sequence.ISPLAYING(), false);
     assert.deepEqual(finished, ['ONFINISHED', 'GADABLANK']);
 });
+
+test('JPEG alpha decoding uses the LZO view length, not its backing allocation', () => {
+    const allocation = Uint8Array.from([99, 99, 0, 127, 255, 0, 99, 99]);
+    const { decompressCLZW } = loadModule('fileFormats/compression/clzw.ts', {
+        'lzo-ts': { LZO: { decompress: () => allocation.subarray(2, 6) } },
+    });
+    const input = { getUint32: () => 4, read: () => new ArrayBuffer(4) };
+    assert.deepEqual([...new Uint8Array(decompressCLZW(input, true))], [0, 127, 255, 0]);
+    assert.equal(decompressCLZW(input).byteLength, 8);
+});
+
+test('Time Machine sequence completion can start the next sequence immediately', async () => {
+    const sequence = new Sequence({ compat: createEngineCompat('timpului') });
+    const played = [];
+    const actor = { definition: { FILENAME: 'actor' }, hasEvent: () => true,
+        playEvent: async (event) => { played.push(event); } };
+    sequence.activeAnimo = actor;
+    sequence.sequenceName = 'FIRST';
+    sequence.parameterSequence = { NAME: 'ROOT' };
+    sequence.parametersMapping.set('NEXT', 0);
+    sequence.subEntries.set('ROOT', [{ NAME: 'NEXT_ENTRY', TYPE: 'SIMPLE', FILENAME: 'actor', EVENT: 'NEXT_EVENT' }]);
+    sequence.callbacks = { run: async (event, name) => { if (name === 'FIRST') await sequence.PLAY('NEXT'); } };
+    await sequence.progressNext();
+    assert.deepEqual(played, ['NEXT_EVENT']);
+    assert.equal(sequence.sequenceName, 'NEXT');
+});
+
+test('Time Machine music-name patch is confined to its episode helpers', () => {
+    const { patchTimeMachineDefinitions } = loadModule('engine/patches/timpului.ts');
+    const definitions = {
+        BEHMUSICSET: { CODE: { code: 'G_ITEMP^SET($1);' } },
+        BFITMP15: { CODE: { code: 'G_SMUSIC^SET(G_ITEMP);' } },
+        OTHER: { CODE: { code: 'G_ITEMP^SET(3);' } },
+    };
+    patchTimeMachineDefinitions('other.cnv', definitions);
+    assert.equal(definitions.BEHMUSICSET.CODE.code, 'G_ITEMP^SET($1);');
+    patchTimeMachineDefinitions('dane/game/przygoda/przygoda.cnv', definitions);
+    assert.equal(definitions.BEHMUSICSET.CODE.code, 'G_SMUSIC^SET($1);');
+    assert.equal(definitions.BFITMP15.CODE.code, 'G_SMUSIC^SET(G_SMUSIC);');
+    assert.equal(definitions.OTHER.CODE.code, 'G_ITEMP^SET(3);');
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo']) {
+        assert.equal(createEngineCompat(profile).timeMachineMusicNames, false);
+    }
+});

@@ -21,7 +21,7 @@ export const loadJpegBackground = async (data: ArrayBuffer): Promise<Image> => {
         context.drawImage(bitmap, 0, 0)
         const rgba = context.getImageData(0, 0, width, height).data
         if (alphaLen) {
-            const alpha = new Uint8Array(decompressCLZW(new BinaryBuffer(new DataView(data.slice(40 + imageLen)))))
+            const alpha = new Uint8Array(decompressCLZW(new BinaryBuffer(new DataView(data.slice(40 + imageLen, 40 + imageLen + alphaLen))), true))
             if (alpha.length !== width * height) throw new Error('JPEG alpha dimensions mismatch')
             for (let i = 0; i < alpha.length; i++) rgba[i * 4 + 3] = alpha[i]
         }

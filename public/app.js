@@ -6,6 +6,7 @@ const state = {
   games: [],
   notes: [],
   snapshots: [],
+  snapshotBusy: false,
   selectedId: null,
   selectedNoteId: null,
   loadedId: null,
@@ -832,6 +833,26 @@ function setSnapshotStatus(message) {
   nodes.snapshotSummary.textContent = message;
 }
 
+function setSnapshotBusy(busy) {
+  state.snapshotBusy = busy;
+  nodes.createSnapshotButton.disabled = busy || !getSelectedGame();
+  nodes.closeSnapshotsDialogButton.disabled = busy;
+  nodes.snapshotList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+}
+
+async function runSnapshotOperation(action, operation) {
+  if (state.snapshotBusy) return;
+  setSnapshotBusy(true);
+  try {
+    await operation();
+  } catch (error) {
+    addLog('launcher', 'error', `Snapshot ${action} failed`, error);
+    setSnapshotStatus(error.message);
+  } finally {
+    setSnapshotBusy(false);
+  }
+}
+
 function renderSnapshots() {
   const game = getSelectedGame();
 
@@ -842,7 +863,7 @@ function renderSnapshots() {
     return;
   }
 
-  nodes.createSnapshotButton.disabled = false;
+  nodes.createSnapshotButton.disabled = state.snapshotBusy;
   setSnapshotStatus(`${state.snapshots.length} snapshot${state.snapshots.length === 1 ? '' : 's'} for ${game.title}`);
 
   if (!state.snapshots.length) {
@@ -879,6 +900,7 @@ function renderSnapshots() {
       `
     )
     .join('');
+  setSnapshotBusy(state.snapshotBusy);
 }
 
 async function loadSnapshotsForSelectedGame() {
@@ -1100,10 +1122,7 @@ function handleSnapshotListClick(event) {
     return;
   }
 
-  handlers[action](snapshotId).catch((error) => {
-    addLog('launcher', 'error', `Snapshot ${action} failed`, error);
-    setSnapshotStatus(error.message);
-  });
+  runSnapshotOperation(action, () => handlers[action](snapshotId));
 }
 
 function formatBytes(bytes) {
@@ -1527,6 +1546,12 @@ function selectGame(gameId, shouldLoad) {
   renderDetails();
 
   const url = new URL(window.location.href);
+  if (url.searchParams.get('game') !== game.id) {
+    for (const parameter of ['scene', 'sceneObject']) {
+      url.searchParams.delete(parameter);
+      launcherParams.delete(parameter);
+    }
+  }
   url.searchParams.set('game', game.id);
   window.history.replaceState(null, '', url);
 
@@ -1779,7 +1804,10 @@ nodes.notesForm.addEventListener('submit', saveCurrentNote);
 nodes.deleteNoteButton.addEventListener('click', deleteCurrentNote);
 nodes.snapshotsButton.addEventListener('click', openSnapshotsDialog);
 nodes.closeSnapshotsDialogButton.addEventListener('click', () => nodes.snapshotsDialog.close());
-nodes.createSnapshotButton.addEventListener('click', createCurrentSnapshot);
+nodes.createSnapshotButton.addEventListener('click', () => runSnapshotOperation('save', createCurrentSnapshot));
+nodes.snapshotsDialog.addEventListener('cancel', (event) => {
+  if (state.snapshotBusy) event.preventDefault();
+});
 nodes.snapshotList.addEventListener('click', handleSnapshotListClick);
 nodes.refreshButton.addEventListener('click', () => loadGames());
 nodes.searchInput.addEventListener('input', (event) => {

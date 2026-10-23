@@ -73,6 +73,8 @@ Current compatibility work includes JPEG backgrounds, newer script local variabl
 
 Magicienii's white-room entrance, hidden door and transition to the mirror room have been verified. Its profile also supports asynchronous numeric database lookup, NULL entrance-name lookup, named sound objects in dialogue sequences, and fractional direction calculations. A mirror-room checkpoint has been restored successfully without replaying the intro.
 
+Time Machine's title menu and first two story cutscenes now run. Its JPEG alpha masks use the actual decompressed view length, and sequences can chain from their completion callbacks. A game-specific script repair in `ReksioEngine/src/engine/patches/timpului.ts` keeps music filenames out of an integer variable. This patch is selected only by the Time Machine profile.
+
 For local debugging, append `&scene=ARCADE&sceneObject=BIALO` to a Magicienii launcher URL that already contains `?game=<game-id>`. This initializes the persistent game objects and enters the white room; use `LUSTRO` for the mirror room. These parameters can write the game's normal save files, so create a checkpoint before testing. Remove both parameters to return to normal startup. They are not applied when selecting a different game.
 
 Run focused compatibility regression tests with `npm test --prefix ReksioEngine`, plus `npm run check` and `npm run build --prefix ReksioEngine`. Then run `.\rebuild.bat` for the Docker deployment. Reaching a title or menu is not evidence that an entire game is playable; gameplay still needs scene-by-scene verification.

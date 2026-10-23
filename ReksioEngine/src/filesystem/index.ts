@@ -10,6 +10,7 @@ import { FileStorage } from './fileStorage'
 import { createEngineCompat, EngineCompat } from '../engine/compat'
 import { readSoundArchive } from '../fileFormats/archive/sound'
 import { loadJpegBackground } from '../engine/compatAssets'
+import { patchTimeMachineDefinitions } from '../engine/patches/timpului'
 
 const PIRATES_RIVER_THREE_PATH = 'dane/intro/mainmenu/09rzekac/rzeka3.cnv'
 const PIRATES_WIOSKA_PATH = 'dane/intro/mainmenu/10wioska/wioska10.cnv'
@@ -311,7 +312,9 @@ export default class Filesystem {
         this.fileLoader.registerLogicalFilenames(this.getDirectoryPath(filename), text)
         console.debug(filename)
         console.debug(text)
-        return parseCNV(text)
+        const definitions = parseCNV(text)
+        if (this.compat.timeMachineMusicNames) patchTimeMachineDefinitions(filename, definitions)
+        return definitions
     }
 
     async getSequenceFile(filename: string) {

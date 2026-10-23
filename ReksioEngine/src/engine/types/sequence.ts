@@ -286,6 +286,10 @@ export class Sequence extends Type<SequenceDefinition> {
             const finishedName = this.sequenceName
             this.sequenceName = null
             await this.callbacks.run('ONFINISHED', finishedName)
+            // PLAY from this callback is deferred by the re-entrancy guard.
+            if (this.engine.compat.sequenceSubevents && !this.paused && this.sequenceName !== null && this.runningSubSequence === null) {
+                await this.advanceQueue()
+            }
             return
         }
 
