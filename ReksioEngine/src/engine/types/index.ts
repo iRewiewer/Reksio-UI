@@ -131,6 +131,14 @@ export class DisplayType<DefinitionType extends DisplayTypeDefinition> extends T
     private priority: number = 0
 
     @method()
+    GETOPACITY() {
+        if (!this.engine.compat.displayOpacity) return this.__call('GETOPACITY', [])
+        const renderObject = this.getRenderObject()
+        assert(renderObject !== null)
+        return Math.round(renderObject.alpha * 255)
+    }
+
+    @method()
     GETWIDTH() {
         if (!this.engine.compat.modernScripts) return this.__call('GETWIDTH', [])
         const renderObject = this.getRenderObject()

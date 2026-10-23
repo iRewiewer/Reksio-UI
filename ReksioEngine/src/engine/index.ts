@@ -23,6 +23,7 @@ import { EngineDiagnostics } from './diagnostics'
 import { createEngineCompat } from './compat'
 import type { EngineCompat } from './compat'
 import { restoreNemoSaveDatabase } from './patches/nemo'
+import { restoreMagicieniiTransitionState } from './patches/magicienii'
 
 export class Engine {
     public debug: Debugging
@@ -109,6 +110,7 @@ export class Engine {
                 await this.getObject<Behaviour>('__GAME_INIT__')?.RUN()
                 const sceneObject = this.getObject<ValueType<any, string>>('G_SARCADEOBJECTS')
                 await sceneObject?.setValue(this.options.startSceneObject.toUpperCase())
+                restoreMagicieniiTransitionState(this)
                 this.currentScene = null
             }
             if (checkpoint) {
@@ -130,6 +132,7 @@ export class Engine {
                     }
                 }
                 if (this.options.compatProfile === 'nemo') await restoreNemoSaveDatabase(this)
+                if (this.options.compatProfile === 'magicienii') restoreMagicieniiTransitionState(this)
                 this.currentScene = checkpoint.previousScene ? this.getObject<Scene>(checkpoint.previousScene) : null
             }
             await this.changeScene(checkpoint?.scene ?? this.options.startScene ?? episode.definition.STARTWITH)

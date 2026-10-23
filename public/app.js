@@ -572,15 +572,25 @@ function toggleHiddenCursor() {
   );
 }
 
-function toggleTrace() {
+async function toggleTrace() {
   state.traceEnabled = !state.traceEnabled;
   localStorage.setItem('reksioLauncher.traceEnabled', String(state.traceEnabled));
   renderTraceButton();
+  let applied = false;
+  try {
+    const bridge = nodes.gameFrame.contentWindow?.reksioSnapshots;
+    if (bridge?.setTrace) {
+      await bridge.setTrace(state.traceEnabled);
+      applied = true;
+    }
+  } catch (error) {
+    addLog('launcher', 'warn', 'Could not update live engine trace', error.message);
+  }
   addLog(
     'launcher',
     'info',
     state.traceEnabled ? 'Engine trace enabled' : 'Engine trace disabled',
-    state.traceEnabled ? 'Next launch will include targeted engine trace logs.' : 'Next launch will use normal engine logging.'
+    applied ? 'Updated the running game without restarting.' : 'The setting will apply on the next launch.'
   );
 }
 

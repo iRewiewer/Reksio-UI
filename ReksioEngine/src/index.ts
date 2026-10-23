@@ -56,6 +56,12 @@ export class GamePlayerInstance {
         return this.engine.captureCheckpoint()
     }
 
+    setTrace(enabled: boolean, scene: string = '*') {
+        this.engine.options.trace = enabled
+        this.engine.options.traceScene = scene
+        return this.engine.diagnostics.setTrace(enabled, scene)
+    }
+
     captureScreenshot(): Promise<Blob> {
         const { app } = this.engine
         const frame = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height)

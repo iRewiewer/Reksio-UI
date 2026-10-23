@@ -80,13 +80,21 @@ const KEY_VALUES = new Set([
     'I_MOLE_FIELD_CURR',
     'I_MOLE_FIELD_NEXT',
     'I_MOLE_DYNAMITES_NO',
+    'VARINUMITEMS',
+    'VARIMENUVISIBLE',
+    'VARSCURRENTITEM',
+    'VARSCURRENTITEMOBJECT',
+    'VARINUMASSEMBLED',
+    'VARSNEWITEM',
+    'VARSITEMON',
+    'VARSITEMTO',
 ])
 
 const KEY_OBJECT_PATTERN =
     /^(REKSIO16|REKSIO17[A-F]|BUT_DRZWI|BUT_POCHODNIA|BUT_PRZEJSCIE|17BEZPOCH|BEH_|BEHINITHILLS\d+|BEHPOSITIONHILLS|BEHMOVEHILL|BEHENTERREKS|BEHENTERRABBIT|COND_|INT_DRZWI|INT_POCHODNIA|INT_Z_JAKIEJ_PLANSZY|STOP_16_REKS|ANNHILL\d+|ANNREX\d+|ANNREX|ANNKRET|ANNOBJECT\d+|ANNRABBIT\d+|ANNRABBITBEHIND|ANNREXSAD|IMGOVER\d+|ARRPRIORITY|ARRPOSITION|ARRMOVEMENT|POZYCJAWULKAN|POZYCJAREKSIA|SAVEROZDZIAL6|BUTEKRANU|MOUSE|WPATH|CANVASOBSERVER|CANVAS_OBSERVER|DBOBJECTS|SOBJECT|STRZAL|TIMERSTRZALU|POCZGRY|WLACZCELOWNIK|WYLACZCELOWNIK|STRZEL|DISABLETIMERSTRZALU|PRZESUNIECIEBEH|PRZESUNIECIEBEH2|PRZESUNIECIEBEH3|COMBOCEL|BLOKX|BLOKY|BLOKXMAX|BLOKXMIN|BLOKYMAX|BLOKYMIN|JUZGRAMY|CZYEKRAN|EKRANACTIVE|KALIBRACJAX|KALIBRACJAY|RANDOMX|RANDOMY|G_SARCADEOBJECTS|G_SLASTOBJECTS|S_IHILLNUMBER|VARBSEQPLAYING|VARBSEQSTOPABLE|VARBLOCKSCENE|VARICURRENTHILL|VARIFIRSTENTER|VARIMAXPRIORITY|VARINEXTPRIORITY|VARINEXTTRIGGER|VARINUMHILLS|VARIPATHID|VARIITER|VARITRIGGERTYPE|VARITEMP0|VARITEMP1|VARITEMP2|VARSAUXCLICKED|VARSLASTFOCUS|VARSLASTFOCUSON|VARDTEMP0|VARDTEMP1|VARDTEMP2|VARIBKGOFFSETX|VARIBKGOFFSETY|XEXPRES|YEXPRES|KAMIENROZWALANY|WGLAB|N|WIN)/
 
 export class EngineDiagnostics {
-    private readonly traceScene: string
+    private traceScene: string
     private noisyWindowStarted = 0
     private noisyWindowCount = 0
     private hitTests = new Map<string, string>()
@@ -94,10 +102,20 @@ export class EngineDiagnostics {
 
     constructor(
         private readonly engine: Engine,
-        public readonly enabled: boolean,
+        public enabled: boolean,
         traceScene?: string
     ) {
         this.traceScene = (traceScene || '*').toUpperCase()
+    }
+
+    async setTrace(enabled: boolean, scene: string = '*') {
+        this.enabled = enabled
+        this.traceScene = scene.toUpperCase()
+        this.hitTests.clear()
+        this.mousePositions.clear()
+        this.noisyWindowCount = 0
+        this.noisyWindowStarted = 0
+        if (this.isCurrentSceneRelevant()) await this.snapshot('trace-enabled')
     }
 
     sceneChanging(nextScene: string, previousScene?: string) {
@@ -411,6 +429,22 @@ export class EngineDiagnostics {
             }
         }
 
+        const overlays = (this.engine.scopeManager?.scopes ?? [])
+            .filter((other) => other !== scope)
+            .flatMap((other) => other.objects)
+            .filter((object) => ['ANIMO', 'IMAGE'].includes(object.definition.TYPE))
+            .flatMap((object) => {
+                const display = object as any
+                const sprite = display.getRenderObject?.()
+                return sprite?.visible ? [{
+                    name: object.name,
+                    parent: object.parent?.name ?? null,
+                    event: display.currentEvent?.name ?? null,
+                    x: Math.round(sprite.x), y: Math.round(sprite.y),
+                    width: Math.round(sprite.width), height: Math.round(sprite.height),
+                    priority: sprite.zIndex,
+                }] : []
+            })
         this.write('snapshot', {
             label,
             scene: scene.name,
@@ -420,6 +454,7 @@ export class EngineDiagnostics {
             values,
             animos,
             buttons,
+            overlays,
         })
     }
 

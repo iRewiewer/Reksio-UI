@@ -16,7 +16,7 @@ const controls = document.getElementById('controls')!
 
 const savesEnabledEntry: string | null = localStorage.getItem('savesEnabled')
 const areSavesEnabled = savesEnabledEntry == 'true' || savesEnabledEntry === null
-const traceEnabled = urlParams.has('trace') && urlParams.get('trace') !== 'false'
+let traceEnabled = urlParams.has('trace') && urlParams.get('trace') !== 'false'
 const traceScene = urlParams.get('traceScene') ?? 'CIEMNOSC'
 
 const baseOptions = {
@@ -257,6 +257,13 @@ const start = async () => {
 }
 
 Object.assign(window, { reksioSnapshots: {
+    setTrace: async (enabled: boolean) => {
+        traceEnabled = enabled
+        baseOptions.trace = enabled
+        baseOptions.traceScene = '*'
+        config = { ...config, trace: enabled, traceScene: '*' }
+        if (player) await player.setTrace(enabled)
+    },
     screenshot: () => {
         if (!player) throw new Error('Start the game before capturing a screenshot.')
         return player.captureScreenshot()

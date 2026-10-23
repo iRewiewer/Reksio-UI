@@ -21,6 +21,7 @@ export type EngineCompat = {
     buttonAreaPriority: boolean
     manualAnimationFrames: boolean
     imageCloneRendering: boolean
+    displayOpacity: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -59,5 +60,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         buttonAreaPriority: name === 'nemo',
         manualAnimationFrames: name === 'nemo',
         imageCloneRendering: name === 'ozn',
+        displayOpacity: name === 'magicienii',
     }
 }

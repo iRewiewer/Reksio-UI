@@ -59,6 +59,86 @@ function matrixFromRows(rows) {
     return model;
 }
 
+test('live trace toggles immediately and resets cached diagnostic queries', async () => {
+    const { EngineDiagnostics } = loadModule('engine/diagnostics.ts');
+    const messages = [];
+    const original = console.info;
+    console.info = (message) => messages.push(message);
+    try {
+        const diagnostics = new EngineDiagnostics({
+            options: {}, currentScene: { name: 'ARCADE', scope: { objects: [] } },
+        }, false, 'CIEMNOSC');
+        diagnostics.hitTests.set('query', 'old-result');
+        diagnostics.mousePositions.set('mouse', 'old-position');
+        await diagnostics.setTrace(true);
+        assert.equal(diagnostics.enabled, true);
+        assert.equal(diagnostics.hitTests.size, 0);
+        assert.equal(diagnostics.mousePositions.size, 0);
+        assert.match(messages.pop(), /"label":"trace-enabled"/);
+        diagnostics.sceneChanging('ARCADE');
+        assert.match(messages.pop(), /trace:scene-changing/);
+        await diagnostics.setTrace(false);
+        diagnostics.sceneChanging('ARCADE');
+        assert.deepEqual(messages, []);
+        await diagnostics.setTrace(true, 'OTHER');
+        diagnostics.behaviour({ name: 'BEHCLICK' }, 'RUN');
+        assert.deepEqual(messages, []);
+    } finally {
+        console.info = original;
+    }
+});
+
+test('live trace updates the options used by player restarts and checkpoint restores', async () => {
+    const { GamePlayerInstance } = loadModule('index.ts', {
+        './engine': {}, 'pixi.js': {}, './filesystem/fileLoader': {},
+        './engine/saveFile': {}, './filesystem/fileStorage': {},
+    });
+    const calls = [];
+    const engine = { options: { trace: false, traceScene: 'CIEMNOSC' },
+        diagnostics: { setTrace: async (...args) => calls.push(args) } };
+    const player = new GamePlayerInstance(engine);
+    await player.setTrace(true);
+    assert.deepEqual(calls.pop(), [true, '*']);
+    assert.equal(engine.options.trace, true);
+    assert.equal(engine.options.traceScene, '*');
+    await player.setTrace(false);
+    assert.equal(engine.options.trace, false);
+    assert.deepEqual(calls.pop(), [false, '*']);
+});
+
+test('Magicienii checkpoint restore clears transient page overlays without emitting completion callbacks', () => {
+    const { restoreMagicieniiTransitionState } = loadModule('engine/patches/magicienii.ts');
+    const calls = [];
+    const objects = Object.fromEntries(['G_ANNPAGE', 'G_STLPAGE', 'G_IMGPAGE'].map((name) => [name, {
+        STOP: (signal) => calls.push([name, 'stop', signal]), HIDE: () => calls.push([name, 'hide']),
+    }]));
+    restoreMagicieniiTransitionState({ getObject: (name) => objects[name] });
+    assert.deepEqual(calls, [
+        ['G_ANNPAGE', 'stop', false], ['G_ANNPAGE', 'hide'],
+        ['G_STLPAGE', 'stop', false], ['G_STLPAGE', 'hide'], ['G_IMGPAGE', 'hide'],
+    ]);
+    restoreMagicieniiTransitionState({ getObject: () => null });
+});
+
+test('Magicienii inventory opacity queries return byte values without changing other profiles', () => {
+    const { DisplayType } = loadModule('engine/types/index.ts', {
+        '../components/callbacks': {}, '../../common/errors': { assert: assert.ok },
+        '../components/events': {}, '../../common/types': decorator, '../logging': {},
+    });
+    const sprite = { alpha: 1 };
+    const object = { engine: { compat: createEngineCompat('magicienii') },
+        getRenderObject: () => sprite, __call: () => 'unsupported' };
+    assert.equal(DisplayType.prototype.GETOPACITY.call(object), 255);
+    sprite.alpha = 0;
+    assert.equal(DisplayType.prototype.GETOPACITY.call(object), 0);
+    sprite.alpha = 128 / 255;
+    assert.equal(DisplayType.prototype.GETOPACITY.call(object), 128);
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        object.engine.compat = createEngineCompat(profile);
+        assert.equal(DisplayType.prototype.GETOPACITY.call(object), 'unsupported');
+    }
+});
+
 function matrixTick(model) {
     model.tick();
     const moves = [];
