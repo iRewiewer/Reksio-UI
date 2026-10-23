@@ -29,6 +29,7 @@ export class Button extends Type<ButtonDefinition> {
 
     private interactArea: Graphics | null = null
     private rect: Rectangle | null = null
+    private areaPriority: number | null = null
 
     constructor(engine: Engine, parent: ParentType<any> | null, definition: ButtonDefinition) {
         super(engine, parent, definition)
@@ -132,7 +133,8 @@ export class Button extends Type<ButtonDefinition> {
 
         this.rect = rectangle
         this.interactArea.hitArea = rectangle
-        this.interactArea.zIndex = 9999999 - rectangle.top
+        this.interactArea.zIndex = this.areaPriority ?? 9999999 - rectangle.top
+        if (this.areaPriority !== null) this.engine.rendering.sortObjects()
     }
 
     destroy() {
@@ -318,6 +320,13 @@ export class Button extends Type<ButtonDefinition> {
         this.gfxStandard?.SETPRIORITY(priority)
         this.gfxOnMove?.SETPRIORITY(priority)
         this.gfxOnClick?.SETPRIORITY(priority)
+        if (this.engine.compat.buttonAreaPriority) {
+            this.areaPriority = priority
+            if (this.interactArea) {
+                this.interactArea.zIndex = priority
+                this.engine.rendering.sortObjects()
+            }
+        }
     }
 
     @method()

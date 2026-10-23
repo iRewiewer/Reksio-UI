@@ -509,6 +509,24 @@ export class Animo extends DisplayType<AnimoDefinition> {
     }
 
     @method()
+    async NEXTFRAME() {
+        if (!this.engine.compat.manualAnimationFrames) return this.__call('NEXTFRAME', [])
+        await this.stepManualFrame(1)
+    }
+
+    @method()
+    async PREVFRAME() {
+        if (!this.engine.compat.manualAnimationFrames) return this.__call('PREVFRAME', [])
+        await this.stepManualFrame(-1)
+    }
+
+    private async stepManualFrame(direction: number) {
+        if (!this.currentEvent || this.currentEvent.framesCount === 0) return
+        const frame = Math.max(0, Math.min(this.currentEvent.framesCount - 1, this.currentFrame + direction))
+        await this.SETFRAME(this.currentEvent.name, frame)
+    }
+
+    @method()
     SETFPS(fps: number) {
         this.fps = fps
     }

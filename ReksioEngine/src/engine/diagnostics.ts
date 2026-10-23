@@ -58,6 +58,24 @@ const KEY_VALUES = new Set([
     'SAVEROZDZIAL6',
     'WGLAB',
     'WIN',
+    'IPLANSZASEL',
+    'SCLICKSEL',
+    'SOBJCLICKED',
+    'SWALKERSIGNAL',
+    'SKRETTARGETACTIONSEL',
+    'SCLASSNAME',
+    'ICREATUREPOSX',
+    'ICREATUREPOSY',
+    'ICREATURETARGETX',
+    'ICREATURETARGETY',
+    'IMOUSETARGETX',
+    'IMOUSETARGETY',
+    'IITEMSCNT',
+    'SINVSTRING',
+    'IINVCENTERX',
+    'IINVCENTERY',
+    'IRADIUS',
+    'DOPACITY',
 ])
 
 const KEY_OBJECT_PATTERN =
@@ -406,7 +424,8 @@ export class EngineDiagnostics {
             return false
         }
 
-        return KEY_OBJECT_PATTERN.test(object.name) ||
+        return KEY_OBJECT_PATTERN.test(object.name) || KEY_VALUES.has(object.name) ||
+            (this.engine.options.compatProfile === 'nemo' && /^(ROZWIN|ADD|PLACEGFX|ENABLEBUTTONS|BFITMP145|ANNRUNNER|ANNSLOT(?:_\d+)?|ANNITEM(?:_\d+)?)$/.test(object.name)) ||
             /^(CNVLOADER|__LOAD_DB__|BEHCLICK|BEHSEQFINISHED|BEHLOADSEQARR|BEHSEQARRPLAY|BEHINITSCRIPT|BEHPOSTINIT|BFITMP9$)/.test(object.name)
     }
 
@@ -453,7 +472,7 @@ export class EngineDiagnostics {
         const noisy = ['object-lookup', 'statement', 'condition', 'behaviour', 'display', 'timer'].includes(kind)
             || (kind === 'callback' && ['ONFRAMECHANGED', 'ONTICK', 'ONMOVE'].includes(String(payload.type)))
             || (kind === 'value' && /^(VARITEMP|VARDTEMP)/.test(String(payload.name)))
-        const interaction = /^(BEHCLICK|BEHSEQARRPLAY|BFITMP9$)/.test(String(payload.caller ?? payload.name ?? ''))
+        const interaction = /^(BEHCLICK|BEHSEQARRPLAY|BFITMP9$|ROZWIN$|BFITMP145$)/.test(String(payload.caller ?? payload.name ?? ''))
         if (noisy && !interaction) {
             const now = Date.now()
             if (now - this.noisyWindowStarted >= 1000) {

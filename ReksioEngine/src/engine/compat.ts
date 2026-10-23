@@ -15,6 +15,11 @@ export type EngineCompat = {
     trailingAnnFrameData: boolean
     nemoDefinitions: boolean
     magicieniiAssets: boolean
+    hiddenHotspotTransforms: boolean
+    classConstructorName: boolean
+    classHotspotOwners: boolean
+    buttonAreaPriority: boolean
+    manualAnimationFrames: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -47,5 +52,10 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         trailingAnnFrameData: name === 'nemo',
         nemoDefinitions: name === 'nemo',
         magicieniiAssets: name === 'magicienii',
+        hiddenHotspotTransforms: name === 'nemo',
+        classConstructorName: name === 'nemo',
+        classHotspotOwners: name === 'nemo',
+        buttonAreaPriority: name === 'nemo',
+        manualAnimationFrames: name === 'nemo',
     }
 }

@@ -52,6 +52,63 @@ test('Pirates and unknown profiles retain all baseline compatibility flags', () 
     assert.equal(createEngineCompat('timpului').packedSounds, false);
 });
 
+test('Nemo refreshes invisible hotspot transforms without changing Pirates hit tests', () => {
+    const pixi = require('pixi.js');
+    const { AdvancedSprite } = loadModule('engine/rendering.ts', {
+        'pixi.js': pixi, '../common/errors': { assert: assert.ok },
+    });
+    class Display extends FakeType {}
+    class ClassInstance extends FakeType {}
+    const { CanvasObserver } = loadModule('engine/types/canvasObserver.ts', {
+        './index': { Type: FakeType, DisplayType: Display },
+        '../../filesystem/assetsLoader': {},
+        'pixi.js': pixi,
+        '../../common/types': decorator,
+        '../rendering': { AdvancedSprite },
+        '../../common/errors': {}, '../../fileFormats/img': {}, '../logging': {},
+        './class': { ClassInstance },
+    });
+    const stage = new pixi.Container();
+    const sprite = new AdvancedSprite(new pixi.Texture(new pixi.BaseTexture(null, { width: 36, height: 85 })));
+    sprite.visible = false;
+    sprite.zIndex = 399;
+    sprite.hitmap = new Uint8Array(36 * 85).fill(255);
+    sprite.position.set(140, 44);
+    stage.addChild(sprite);
+    const object = new Display();
+    object.name = 'ANNMASKA1_3';
+    object.getRenderObject = () => sprite;
+    let objects = [object];
+    const engine = {
+        compat: createEngineCompat('nemo'), app: { stage },
+        scopeManager: { find: (predicate) => objects.find((entry) => predicate(entry.name, entry)) ?? null },
+        diagnostics: { hitTest() {} },
+    };
+    const observer = new CanvasObserver(engine);
+    assert.equal(sprite.getGlobalPosition().x, 140);
+    assert.equal(sprite.worldTransform.tx, 0);
+    assert.equal(observer.GETGRAPHICSAT(160, 87, false, 399, 399), object.name);
+    sprite.position.x = 240;
+    assert.equal(observer.GETGRAPHICSAT(260, 87, true, 399, 399), null);
+    assert.equal(sprite.worldTransform.tx, 140);
+    engine.compat = createEngineCompat();
+    assert.equal(observer.GETGRAPHICSAT(260, 87, false, 399, 399), null);
+    for (const profile of ['default', 'magicienii', 'ozn', 'timpului']) {
+        assert.equal(createEngineCompat(profile).hiddenHotspotTransforms, false);
+        assert.equal(createEngineCompat(profile).classHotspotOwners, false);
+    }
+    const owner = new ClassInstance(engine);
+    owner.name = 'KRET';
+    owner.scope = { objects: [object] };
+    objects = [owner];
+    sprite.visible = true;
+    sprite.toGlobal(new pixi.Point(0, 0));
+    assert.equal(observer.GETGRAPHICSAT(260, 87, true, 399, 399), null);
+    engine.compat = createEngineCompat('nemo');
+    assert.equal(observer.GETGRAPHICSAT(260, 87, true, 399, 399), 'KRET');
+    stage.destroy({ children: true, texture: true, baseTexture: true });
+});
+
 function archiveEntry(name, payload) {
     const encodedName = Buffer.from(name + '\0');
     const header = Buffer.alloc(12);
@@ -59,6 +116,99 @@ function archiveEntry(name, payload) {
     header.writeUInt32LE(encodedName.length, 8);
     return Buffer.concat([header, encodedName, payload]);
 }
+
+test('Nemo class constructors receive their instance name before explicit arguments', async () => {
+    class Base {
+        constructor(engine, parent, definition) {
+            Object.assign(this, { engine, parent, definition, name: definition.NAME });
+        }
+        get parentScope() { return this.parent?.scope; }
+    }
+    const constructed = [];
+    const { Class } = loadModule('engine/types/class.ts', {
+        './index': { Type: Base, ParentType: Base }, '../../common/types': decorator,
+        '../scope': { Scope: class {} },
+        '../../filesystem/definitionLoader': {
+            loadDefinition: async (_engine, _scope, _definition, instance) => {
+                constructed.push(instance.args);
+            },
+            doReady: async () => {},
+        },
+        '../../common/errors': { assert: assert.ok }, './behaviour': {},
+        '../logging': { logger: { debug() {} } },
+    });
+    const engine = { compat: createEngineCompat('nemo') };
+    const cls = new Class(engine, null, { TYPE: 'CLASS', NAME: 'WALKER' });
+    cls.innerDefinition = {};
+    await cls.NEW('KRET');
+    await cls.NEW('ENEMY0', '1_ENEMY0.ANN', 2, 5, 16);
+    assert.deepEqual(constructed, [['KRET'], ['ENEMY0', '1_ENEMY0.ANN', 2, 5, 16]]);
+    for (const profile of ['default', 'magicienii', 'ozn', 'timpului']) {
+        engine.compat = createEngineCompat(profile);
+        await cls.NEW('UNCHANGED', 42);
+        assert.deepEqual(constructed.at(-1), [42]);
+    }
+});
+
+test('Nemo rectangular button priorities keep inventory items above the close overlay', () => {
+    const { Button } = loadModule('engine/types/button.ts', {
+        './index': { Type: FakeType }, './image': {}, './animo': {}, './sound': {},
+        'pixi.js': { Point: class {}, Graphics: class {}, Rectangle: class {
+            constructor(x, y, width, height) { Object.assign(this, { x, y, width, height, top: y }); }
+        } },
+        '../components/button': { ButtonLogicComponent: class {} },
+        '../../common/errors': {}, '../../common/types': decorator, '../logging': {},
+    });
+    const engine = { compat: createEngineCompat('nemo'), rendering: { addToStage() {}, sortObjects() {} } };
+    const item = new Button(engine, null, {});
+    item.definition = { ENABLE: false };
+    item.SETPRIORITY(20010);
+    item.SETRECT(100, 300, 160, 360);
+    assert.equal(item.interactArea.zIndex, 20010);
+    item.SETRECT(150, 250, 210, 310);
+    assert.equal(item.interactArea.zIndex, 20010);
+    const overlay = new Button(engine, null, {});
+    overlay.definition = { ENABLE: false };
+    overlay.SETRECT(0, 0, 800, 600);
+    overlay.SETPRIORITY(20000);
+    assert.ok(item.interactArea.zIndex > overlay.interactArea.zIndex);
+    engine.compat = createEngineCompat();
+    const baseline = new Button(engine, null, {});
+    baseline.definition = { ENABLE: false };
+    baseline.setRect([100, 300, 160, 360]);
+    baseline.SETPRIORITY(20010);
+    assert.equal(baseline.interactArea.zIndex, 9999999 - 300);
+});
+
+test('Nemo inventory frame steps stay within the active event and leave Pirates unchanged', async () => {
+    const { Animo } = loadModule('engine/types/animo.ts', {
+        './index': { DisplayType: FakeType }, '../../common/errors': {}, 'pixi.js': {},
+        '../components/button': {}, '../../filesystem/assetsLoader': {},
+        '../../filesystem/fileLoader': {}, '../rendering': {}, '../../common/types': decorator,
+        '../components/collisions': {}, '../audio': {}, '../logging': {},
+    });
+    const animation = Object.create(Animo.prototype);
+    animation.engine = { compat: createEngineCompat('nemo') };
+    animation.currentEvent = { name: 'IDLE', framesCount: 2 };
+    animation.currentFrame = 0;
+    animation.SETFRAME = async (name, frame) => {
+        assert.equal(name, 'IDLE');
+        animation.currentFrame = frame;
+    };
+    await animation.NEXTFRAME();
+    assert.equal(animation.currentFrame, 1);
+    await animation.NEXTFRAME();
+    assert.equal(animation.currentFrame, 1);
+    await animation.PREVFRAME();
+    await animation.PREVFRAME();
+    assert.equal(animation.currentFrame, 0);
+    animation.engine.compat = createEngineCompat();
+    animation.__call = (name) => name;
+    assert.equal(await animation.NEXTFRAME(), 'NEXTFRAME');
+    assert.equal(await animation.PREVFRAME(), 'PREVFRAME');
+    assert.equal(animation.currentFrame, 0);
+});
+
 function arrayBuffer(bytes) {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }

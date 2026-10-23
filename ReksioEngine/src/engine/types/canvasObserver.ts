@@ -7,6 +7,7 @@ import { AdvancedSprite } from '../rendering'
 import { assert } from '../../common/errors'
 import { buildImage } from '../../fileFormats/img'
 import { logger } from '../logging'
+import { ClassInstance } from './class'
 
 export class CanvasObserver extends Type<CanvasObserverDefinition> {
     @method()
@@ -57,6 +58,11 @@ export class CanvasObserver extends Type<CanvasObserverDefinition> {
                 continue
             }
 
+            if (this.engine.compat.hiddenHotspotTransforms && !renderObject.visible) {
+                // Invisible masks are not rendered, so PIXI leaves their world matrix stale.
+                renderObject.toGlobal(new Point(0, 0))
+            }
+
             const position = renderObject.getGlobalPosition()
             if (position === null) {
                 continue
@@ -64,8 +70,10 @@ export class CanvasObserver extends Type<CanvasObserverDefinition> {
 
             const containsPoint = renderObject.containsPoint(point, !ignoreAlpha)
             if (containsPoint && renderObject.zIndex >= minZ && renderObject.zIndex <= maxZ) {
-                const object: DisplayType<any> | null = this.engine.scopeManager.find(
-                    (key: string, obj) => obj instanceof DisplayType && obj.getRenderObject() === renderObject
+                const ownsSprite = (obj: Type<any>) => obj instanceof DisplayType && obj.getRenderObject() === renderObject
+                const object: Type<any> | null = this.engine.scopeManager.find(
+                    (key: string, obj) => ownsSprite(obj) ||
+                        (this.engine.compat.classHotspotOwners && obj instanceof ClassInstance && obj.scope.objects.some(ownsSprite))
                 )
                 if (object === null) {
                     continue

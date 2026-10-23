@@ -34,7 +34,8 @@ export class Class extends Type<ClassDefinition> {
     async NEW(name: string, ...args: any[]) {
         assert(this.innerDefinition !== null)
 
-        const instance = new ClassInstance(this.engine, this, name, args)
+        const constructorArgs = this.engine.compat.classConstructorName ? [name, ...args] : args
+        const instance = new ClassInstance(this.engine, this, name, constructorArgs)
         await instance.init()
         this.instances.push(instance)
         this.parentScope?.set(name, instance)
