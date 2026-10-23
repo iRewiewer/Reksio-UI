@@ -46,6 +46,7 @@ test('Pirates and unknown profiles retain all baseline compatibility flags', () 
     }
     assert.equal(normalizeCompatProfile('Reksio si Magicienii'), 'magicienii');
     assert.equal(createEngineCompat('magicienii').simpleWorldPathing, true);
+    assert.equal(createEngineCompat('timpului').simpleWorldPathing, true);
     assert.equal(createEngineCompat('ozn').simpleWorldPathing, false);
     assert.equal(createEngineCompat('nemo').packedSounds, true);
     assert.equal(createEngineCompat('timpului').packedSounds, false);
@@ -266,6 +267,59 @@ test('Time Machine music-name patch is confined to its episode helpers', () => {
     assert.equal(definitions.BFITMP15.CODE.code, 'G_SMUSIC^SET(G_SMUSIC);');
     assert.equal(definitions.OTHER.CODE.code, 'G_ITEMP^SET(3);');
     for (const profile of ['default', 'magicienii', 'ozn', 'nemo']) {
-        assert.equal(createEngineCompat(profile).timeMachineMusicNames, false);
+        assert.equal(createEngineCompat(profile).timeMachineDefinitions, false);
     }
+});
+
+test('Time Machine keeps its dynamically loaded Reksio object alive with a valid placeholder', () => {
+    const { patchTimeMachineDefinitions } = loadModule('engine/patches/timpului.ts');
+    const definitions = { ANNREX: { FILENAME: 'REX.ANN' }, OTHER: { FILENAME: 'REX.ANN' } };
+    patchTimeMachineDefinitions('dane/game/przygoda/arcade/arcade.cnv', definitions);
+    assert.equal(definitions.ANNREX.FILENAME, 'TEMPLATE.ANN');
+    assert.equal(definitions.OTHER.FILENAME, 'REX.ANN');
+});
+
+test('modern scripts can assign struct fields without enabling this for Pirates', async () => {
+    class Struct {
+        getField(name) { return name === 'VALUE' ? this.field : undefined; }
+    }
+    const { Interpreter, RuntimeContext } = loadModule('interpreter/interpreter.ts', {
+        '../engine/types': { Type: FakeType, ValueType: FakeType },
+        '../engine/types/struct': { Struct },
+        '../common/types': {},
+        '../engine/types/rand': { Rand: FakeType },
+        '../engine/types/system': { System: FakeType },
+        '../engine/types/cnvloader': { CNVLoader: FakeType },
+        '../fileFormats/common': {},
+        '../engine/types/behaviour': {},
+        '../common/errors': { IgnorableError: Error },
+        '../engine/types/integer': {},
+        '../engine/types/string': {},
+        '../engine/types/double': {},
+        '../engine/types/bool': {},
+        './parser': {}, './expression': {}, './expression/ast': {},
+        '../engine/logging': {}, './stacktrace': {},
+    });
+    const row = new Struct();
+    row.field = { value: 'INTRO_TYTUL', SET(value) { this.value = value; } };
+    const engine = { compat: createEngineCompat('nemo'),
+        diagnostics: { objectLookup() {} }, getObject: (name) => name === 'STLINE' ? row : null };
+    const interpreter = new Interpreter(new RuntimeContext(engine, null, ''));
+    const field = await interpreter.resolveObjectRef({ type: 'Identifier', name: 'STLINE|VALUE' });
+    field.SET('GAME');
+    assert.equal(row.field.value, 'GAME');
+    engine.compat = createEngineCompat();
+    assert.equal(await interpreter.resolveObjectRef({ type: 'Identifier', name: 'STLINE|VALUE' }), null);
+});
+
+test('OZN intro punctuation repairs do not affect other scenes or games', () => {
+    const { patchOznSource } = loadModule('engine/patches/ozn.ts');
+    const source = 'UFOLECI:ONFINISHED^1={THIS^PLAY("2"):;}\nTIMER1:ONINIT={THIS^DISABLE():;}\nTIMERKUR:ONINIT={THIS^DISABLE():;}';
+    assert.equal(patchOznSource('other.cnv', source), source);
+    const fixed = patchOznSource('dane/reksioufo/przygoda/s1_0_intro1/s1_0_intro1.cnv', source);
+    assert.equal(fixed, source.replaceAll('):;', ');'));
+    for (const profile of ['default', 'magicienii', 'timpului', 'nemo']) {
+        assert.equal(createEngineCompat(profile).oznDefinitions, false);
+    }
+    assert.equal(createEngineCompat('ozn').oznDefinitions, true);
 });

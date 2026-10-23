@@ -633,6 +633,20 @@ async function copyTextToClipboard(text) {
 }
 
 async function captureGameScreenshot() {
+  let timeout;
+  try {
+    return await Promise.race([
+      captureGameCanvas(),
+      new Promise((resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Screenshot capture timed out; the game may have changed.')), 5000);
+      })
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function captureGameCanvas() {
   if (!nodes.gameFrame.src || nodes.gameFrame.hidden) {
     throw new Error('No game is currently loaded.');
   }
@@ -676,6 +690,8 @@ async function saveConsoleExport() {
   const previousHtml = nodes.saveLogsButton.innerHTML;
   nodes.saveLogsButton.disabled = true;
   nodes.saveLogsButton.innerHTML = `${icon('archive')}<span>Saving</span>`;
+  const traceEnabled = state.traceEnabled;
+  const screenshotResult = captureGameScreenshot().then((blob) => ({ blob }), (error) => ({ error }));
 
   try {
     const sessionId = await ensureLogSession();
@@ -684,14 +700,16 @@ async function saveConsoleExport() {
     let screenshotBlob = new Blob([], { type: 'image/png' });
 
     try {
-      screenshotBlob = await captureGameScreenshot();
+      const result = await screenshotResult;
+      if (result.error) throw result.error;
+      screenshotBlob = result.blob;
     } catch (error) {
       addLog('launcher', 'warn', 'Game screenshot unavailable', error);
       await flushLogQueue();
     }
 
     const exportParams = new URLSearchParams();
-    if (state.traceEnabled) {
+    if (traceEnabled) {
       exportParams.set('trace', '1');
     }
     const exportQuery = exportParams.toString();

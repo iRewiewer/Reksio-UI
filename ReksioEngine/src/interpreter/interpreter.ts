@@ -454,6 +454,14 @@ export class Interpreter {
             case 'DirectRef':
                 throw new RuntimeError(`Unsupported ref: ${ref.type}`)
             case 'Identifier': {
+                if (this.context.engine.compat.modernScripts && ref.name.includes('|')) {
+                    const [objectName, fieldName] = ref.name.split('|')
+                    const object = this.getObject(objectName)
+                    if (!(object instanceof Struct)) {
+                        throw new RuntimeError(`Cannot assign field ${fieldName} on non-struct ${objectName}`)
+                    }
+                    return object.getField(fieldName) ?? null
+                }
                 const object = this.getObject(ref.name)
                 this.context.engine.diagnostics.objectLookup(this.context.caller, ref.name, object !== null)
                 return object

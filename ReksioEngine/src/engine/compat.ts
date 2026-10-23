@@ -10,7 +10,8 @@ export type EngineCompat = {
     serialTicks: boolean
     imageInvalidation: boolean
     scriptedCursor: boolean
-    timeMachineMusicNames: boolean
+    timeMachineDefinitions: boolean
+    oznDefinitions: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -30,7 +31,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
     const name = normalizeCompatProfile(profile)
     return {
         clearAnimoCacheOnLoad: name !== 'default',
-        simpleWorldPathing: name === 'magicienii',
+        simpleWorldPathing: name === 'magicienii' || name === 'timpului',
         modernScripts: name === 'magicienii' || name === 'nemo' || name === 'timpului',
         sequenceSubevents: name === 'nemo' || name === 'timpului',
         jpegImages: name === 'nemo' || name === 'timpului',
@@ -38,6 +39,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         serialTicks: name !== 'default',
         imageInvalidation: name !== 'default',
         scriptedCursor: name !== 'default',
-        timeMachineMusicNames: name === 'timpului',
+        timeMachineDefinitions: name === 'timpului',
+        oznDefinitions: name === 'ozn',
     }
 }

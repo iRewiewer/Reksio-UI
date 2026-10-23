@@ -11,6 +11,7 @@ import { createEngineCompat, EngineCompat } from '../engine/compat'
 import { readSoundArchive } from '../fileFormats/archive/sound'
 import { loadJpegBackground } from '../engine/compatAssets'
 import { patchTimeMachineDefinitions } from '../engine/patches/timpului'
+import { patchOznSource } from '../engine/patches/ozn'
 
 const PIRATES_RIVER_THREE_PATH = 'dane/intro/mainmenu/09rzekac/rzeka3.cnv'
 const PIRATES_WIOSKA_PATH = 'dane/intro/mainmenu/10wioska/wioska10.cnv'
@@ -308,12 +309,13 @@ export default class Filesystem {
     async getCNVFile(filename: string) {
         filename = normalizePath(filename)
         const data = await this.getFile(filename)
-        const text = this.repairKnownDefinition(filename, decryptCNV(data))
+        let text = this.repairKnownDefinition(filename, decryptCNV(data))
+        if (this.compat.oznDefinitions) text = patchOznSource(filename, text)
         this.fileLoader.registerLogicalFilenames(this.getDirectoryPath(filename), text)
         console.debug(filename)
         console.debug(text)
         const definitions = parseCNV(text)
-        if (this.compat.timeMachineMusicNames) patchTimeMachineDefinitions(filename, definitions)
+        if (this.compat.timeMachineDefinitions) patchTimeMachineDefinitions(filename, definitions)
         return definitions
     }
 
