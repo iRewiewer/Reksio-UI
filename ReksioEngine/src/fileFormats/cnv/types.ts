@@ -533,6 +533,24 @@ const WorldStructure = {
     FILENAME: string,
 }
 
+export type MatrixDefinition = TypeDefinition & {
+    SIZE: number[]
+    BASEPOS: number[]
+    CELLWIDTH: number
+    CELLHEIGHT: number
+    ONNEXT?: callback
+    ONLATEST?: callback
+}
+
+const MatrixStructure = {
+    SIZE: array(number),
+    BASEPOS: array(number),
+    CELLWIDTH: number,
+    CELLHEIGHT: number,
+    ONNEXT: optional(callback),
+    ONLATEST: optional(callback),
+}
+
 export type VectorDefinition = TypeDefinition & {
     SIZE: number
     VALUE: Array<number>
@@ -567,6 +585,7 @@ export const structureDefinitions = {
     INTEGER: IntegerStructure,
     KEYBOARD: KeyboardStructure,
     MOUSE: MouseStructure,
+    MATRIX: MatrixStructure,
     MULTIARRAY: MultiArrayDefinitionStructure,
     MUSIC: MusicStructure,
     PATTERN: PatterDefinitionStructure,

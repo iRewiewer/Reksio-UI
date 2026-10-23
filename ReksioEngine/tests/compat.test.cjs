@@ -19,6 +19,7 @@ function loadModule(file, dependencies = {}) {
 }
 
 const { createEngineCompat, normalizeCompatProfile } = loadModule('engine/compat.ts');
+const { OznMatrixSimulation } = loadModule('engine/compat/oznMatrix.ts');
 const { readSoundArchive } = loadModule('fileFormats/archive/sound.ts');
 const decorator = { method: () => (method) => method };
 class FakeType {
@@ -50,6 +51,181 @@ test('Pirates and unknown profiles retain all baseline compatibility flags', () 
     assert.equal(createEngineCompat('ozn').simpleWorldPathing, false);
     assert.equal(createEngineCompat('nemo').packedSounds, true);
     assert.equal(createEngineCompat('timpului').packedSounds, false);
+});
+
+function matrixFromRows(rows) {
+    const model = new OznMatrixSimulation(rows[0].length, rows.length);
+    rows.forEach((row, y) => model.setRow(y, row));
+    return model;
+}
+
+function matrixTick(model) {
+    model.tick();
+    const moves = [];
+    let move;
+    while ((move = model.next())) moves.push(move);
+    return moves;
+}
+
+test('OZN MATRIX drops only the bottom of a stone stack per tick', () => {
+    const model = matrixFromRows([
+        [6, 6, 6, 6, 6], [6, 0, 2, 0, 6], [6, 0, 2, 0, 6],
+        [6, 0, 0, 0, 6], [6, 0, 0, 0, 6], [6, 6, 6, 6, 6],
+    ]);
+    assert.deepEqual(matrixTick(model), [{ x: 2, y: 2, code: 1, latest: true, result: 0 }]);
+    assert.equal(model.get(7), 2);
+    assert.equal(model.get(12), 0);
+    assert.equal(model.get(17), 2);
+    assert.deepEqual(matrixTick(model), [
+        { x: 2, y: 3, code: 1, latest: false, result: 1 },
+        { x: 2, y: 1, code: 1, latest: true, result: 0 },
+    ]);
+});
+
+test('OZN MATRIX rolls left first and only when supported by another stone', () => {
+    const model = matrixFromRows([
+        [6, 6, 6, 6, 6], [6, 0, 2, 0, 6], [6, 0, 2, 0, 6], [6, 6, 6, 6, 6],
+    ]);
+    assert.deepEqual(matrixTick(model), [{ x: 2, y: 1, code: 2, latest: true, result: 0 }]);
+    assert.equal(model.get(11), 2);
+    model.set(11, 0);
+    model.set(7, 2);
+    model.set(6, 4);
+    assert.equal(matrixTick(model)[0].code, 3);
+    model.set(7, 2);
+    model.set(12, 4);
+    assert.deepEqual(matrixTick(model), []);
+});
+
+test('OZN MATRIX preserves last-move callbacks and hero/enemy collision semantics', () => {
+    const hero = matrixFromRows([
+        [6, 6, 6, 6, 6], [6, 0, 2, 0, 6], [6, 0, 0, 0, 6],
+        [6, 0, 99, 0, 6], [6, 6, 6, 6, 6],
+    ]);
+    assert.deepEqual(matrixTick(hero), [{ x: 2, y: 1, code: 1, latest: true, result: 2 }]);
+    const enemy = matrixFromRows([
+        [6, 6, 6, 6, 6], [6, 0, 2, 0, 6], [6, 0, 0, 0, 6],
+        [6, 0, 5, 0, 6], [6, 6, 6, 6, 6],
+    ]);
+    assert.equal(matrixTick(enemy)[0].code, 1);
+    assert.deepEqual(matrixTick(enemy), [{ x: 2, y: 2, code: 4, latest: true, result: 0 }]);
+    assert.equal(enemy.get(12), 2);
+    assert.equal(enemy.get(17), 5);
+    assert.deepEqual(matrixTick(enemy), []);
+    enemy.set(18, 8);
+    enemy.move(12, 18);
+    assert.equal(enemy.get(18), 8);
+    assert.equal(enemy.get(12), 0);
+});
+
+test('OZN MATRIX gate checks and enemy wall following use native cell rules', () => {
+    const model = matrixFromRows([
+        [6, 6, 6, 6, 6], [6, 0, 0, 0, 6], [6, 0, 5, 0, 6],
+        [6, 0, 99, 0, 6], [6, 6, 6, 6, 6],
+    ]);
+    assert.equal(model.enemyDirection(12, 0), 3);
+    model.setGate(2, 3, 2, 3);
+    assert.equal(model.enemyDirection(12, 0), 0);
+    model.set(11, 1);
+    assert.equal(model.enemyDirection(12, 0), 1);
+    model.set(7, 1);
+    assert.equal(model.enemyDirection(12, 0), 2);
+    model.set(13, 1);
+    assert.equal(model.enemyDirection(12, 0), 4);
+    assert.equal(model.enemyDestination(12, 4), 12);
+    model.setGate(0, 0, 0, 0);
+    model.set(7, 0);
+    model.set(17, 0);
+    assert.equal(model.enemyDirection(12, 4), 1);
+    model.setGate(2, 3, 2, 3);
+    for (const code of [0, 1, 3, 5, 8, 9]) {
+        model.set(11, code);
+        assert.equal(model.canHeroGoTo(11), true);
+    }
+    for (const code of [2, 4, 6, 7, 99]) {
+        model.set(11, code);
+        assert.equal(model.canHeroGoTo(11), false);
+    }
+    model.set(17, 0);
+    assert.equal(model.canHeroGoTo(17), false);
+    assert.equal(model.isGateEmpty(), true);
+    model.set(17, 2);
+    assert.equal(model.isGateEmpty(), false);
+    assert.equal(model.canHeroGoTo(-1), false);
+    assert.throws(() => new OznMatrixSimulation(-1, 11), /dimensions/);
+});
+
+test('OZN MATRIX script API supports coordinate overloads and three callback arguments', async () => {
+    const { Matrix } = loadModule('engine/types/matrix.ts', {
+        './index': { Type: FakeType }, '../../common/types': decorator,
+        '../../common/errors': { NotImplementedError: Error },
+        '../compat/oznMatrix': { OznMatrixSimulation }, './behaviour': {},
+    });
+    const received = [];
+    const engine = { compat: createEngineCompat('ozn'), diagnostics: { callback() {} },
+        scripting: { executeCallback: async (...args) => received.push(args[3]) } };
+    const matrix = new Matrix(engine);
+    matrix.definition = { NAME: 'MAT', TYPE: 'MATRIX', SIZE: [5, 5], BASEPOS: [10, 100],
+        CELLWIDTH: 40, CELLHEIGHT: 30, ONLATEST: { behaviourReference: 'MOVE', constantArguments: [] } };
+    matrix.getObject = () => ({ RUNC: async (...args) => received.push(args) });
+    matrix.init();
+    for (let row = 0; row < 5; row++) matrix.SETROW(row, 6, row === 0 || row === 4 ? 6 : 0, 0, 0, 6);
+    matrix.SET(2, 1, 2);
+    assert.equal(matrix.GET(7), 2);
+    assert.equal(matrix.GET(2, 1), 2);
+    assert.equal(matrix.GETCELLSNO(2), 1);
+    assert.equal(matrix.GETCELLPOSX(7), 90);
+    assert.equal(matrix.GETCELLPOSX(2, 1), 90);
+    assert.equal(matrix.GETCELLPOSY(7), 130);
+    assert.equal(matrix.GETCELLPOSY(2, 1), 130);
+    assert.equal(matrix.GETOFFSET(91, 131), 7);
+    assert.equal(matrix.GETOFFSET(210, 131), -1);
+    matrix.TICK();
+    assert.equal(await matrix.NEXT(), 0);
+    assert.deepEqual(received.pop(), [2, 1, 1]);
+    assert.equal(matrix.GET(12), 2);
+    matrix.definition.ONLATEST = { code: 'INLINE', constantArguments: [] };
+    matrix.TICK();
+    await matrix.NEXT();
+    assert.deepEqual(received.pop(), [2, 2, 1]);
+    for (const profile of ['default', 'magicienii', 'nemo', 'timpului']) {
+        engine.compat = createEngineCompat(profile);
+        assert.throws(() => matrix.init());
+    }
+});
+
+test('OZN image clones join the renderer at their original priority without changing Pirates', async () => {
+    class FakeSprite {
+        constructor(texture) { this.texture = texture; this.visible = true; }
+    }
+    class FakeDisplay extends FakeType {
+        async clone() { return new this.constructor(this.engine); }
+        GETPRIORITY() { return 7; }
+        SETPRIORITY(priority) { this.sprite.zIndex = priority; }
+    }
+    const { Image } = loadModule('engine/types/image.ts', {
+        './index': { DisplayType: FakeDisplay }, '../../common/errors': { assert: assert.ok },
+        'pixi.js': {}, '../../filesystem/assetsLoader': {},
+        '../rendering': { AdvancedSprite: FakeSprite }, '../../common/types': decorator,
+    });
+    const added = [];
+    const engine = { compat: createEngineCompat('ozn'), rendering: { addToStage: (sprite) => added.push(sprite) } };
+    const image = new Image(engine);
+    image.definition = { TOCANVAS: true };
+    image.sprite = { texture: {}, x: 40, y: 100, visible: false, alpha: 0.8, hitmap: new Uint8Array([255]) };
+    const clone = await image.clone();
+    assert.equal(added[0], clone.sprite);
+    assert.equal(clone.sprite.zIndex, 7);
+    assert.equal(clone.sprite.visible, false);
+    assert.equal(clone.sprite.alpha, 0.8);
+    assert.equal(clone.sprite.x, 40);
+    assert.equal(clone.sprite.y, 100);
+    assert.equal(clone.sprite.hitmap, image.sprite.hitmap);
+    for (const profile of ['default', 'magicienii', 'nemo', 'timpului']) {
+        engine.compat = createEngineCompat(profile);
+        await image.clone();
+    }
+    assert.equal(added.length, 1);
 });
 
 test('Nemo refreshes invisible hotspot transforms without changing Pirates hit tests', () => {

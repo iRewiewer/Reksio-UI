@@ -39,6 +39,7 @@ import { Database } from '../engine/types/database'
 import { Class } from '../engine/types/class'
 import { logger } from '../engine/logging'
 import { World } from '../engine/types/world'
+import { Matrix } from '../engine/types/matrix'
 import { StackFrame, stackTrace } from '../interpreter/stacktrace'
 
 const createTypeInstance = (engine: Engine, parent: ParentType<any> | null, definition: any) => {
@@ -89,6 +90,8 @@ const createTypeInstance = (engine: Engine, parent: ParentType<any> | null, defi
             return new Keyboard(engine, parent, definition)
         case 'MOUSE':
             return new Mouse(engine, parent, definition)
+        case 'MATRIX':
+            return new Matrix(engine, parent, definition)
         case 'MULTIARRAY':
             return new MultiArray(engine, parent, definition)
         case 'MUSIC':

@@ -76,6 +76,10 @@ const KEY_VALUES = new Set([
     'IINVCENTERY',
     'IRADIUS',
     'DOPACITY',
+    'I_PODKOP_LEVEL',
+    'I_MOLE_FIELD_CURR',
+    'I_MOLE_FIELD_NEXT',
+    'I_MOLE_DYNAMITES_NO',
 ])
 
 const KEY_OBJECT_PATTERN =
@@ -425,6 +429,7 @@ export class EngineDiagnostics {
         }
 
         return KEY_OBJECT_PATTERN.test(object.name) || KEY_VALUES.has(object.name) ||
+            (this.engine.options.compatProfile === 'ozn' && /^(MAT|ANN_MOLE|BEHKEYB.*|BEHKILLED|BEHSUCCES)$/.test(object.name)) ||
             (this.engine.options.compatProfile === 'nemo' && /^(ROZWIN|ADD|PLACEGFX|ENABLEBUTTONS|BFITMP145|ANNRUNNER|ANNSLOT(?:_\d+)?|ANNITEM(?:_\d+)?)$/.test(object.name)) ||
             /^(CNVLOADER|__LOAD_DB__|BEHCLICK|BEHSEQFINISHED|BEHLOADSEQARR|BEHSEQARRPLAY|BEHINITSCRIPT|BEHPOSTINIT|BFITMP9$)/.test(object.name)
     }

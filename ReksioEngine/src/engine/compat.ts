@@ -20,6 +20,7 @@ export type EngineCompat = {
     classHotspotOwners: boolean
     buttonAreaPriority: boolean
     manualAnimationFrames: boolean
+    imageCloneRendering: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -57,5 +58,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         classHotspotOwners: name === 'nemo',
         buttonAreaPriority: name === 'nemo',
         manualAnimationFrames: name === 'nemo',
+        imageCloneRendering: name === 'ozn',
     }
 }
