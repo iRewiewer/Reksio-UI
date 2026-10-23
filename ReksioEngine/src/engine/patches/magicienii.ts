@@ -7,6 +7,7 @@ export function patchMagicieniiSource(filename: string, source: string): string 
     return source
         .replaceAll('ANNWAND0^SETFRAME("PLAY",VARIDEBUG)', 'ANNWAND0^SETFRAME("CZARUJE",VARIDEBUG)')
         .replaceAll('ANNWAND0^GETNOFINEVENT(1)', 'ANNWAND0^GETNOFINEVENT("CZARUJE")')
+        .replaceAll('BEHPLAYRANDSOUND^PLAY()', 'BEHPLAYRANDSOUND^RUN()')
 }
 
 export function patchMagicieniiArray(filename: string, entries: any[]): any[] {

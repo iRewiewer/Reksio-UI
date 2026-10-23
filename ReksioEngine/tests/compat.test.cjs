@@ -287,6 +287,63 @@ test('Magicienii repairs only the spell lesson drawing wand event references', (
     assert.equal(patchMagicieniiSource(file, repaired), repaired);
     assert.equal(patchMagicieniiSource('dane/game/przygoda/magic/magic2.cnv', source), source);
     assert.equal(patchMagicieniiSource('other/magic.cnv', source), source);
+    assert.equal(patchMagicieniiSource(file, 'BEHPLAYRANDSOUND^PLAY();OTHER^PLAY();'),
+        'BEHPLAYRANDSOUND^RUN();OTHER^PLAY();');
+});
+
+test('Magicienii counted-loop BREAK propagates to the behaviour boundary; ONE_BREAK only skips an iteration', async () => {
+    class IgnorableError extends Error {}
+    class Counter { async setValue(value) { this.value = value; } }
+    const { Interpreter, RuntimeContext, InterruptScriptExecution, ScriptReturn } = loadModule('interpreter/interpreter.ts', {
+        '../engine/types': { Type: FakeType, ValueType: FakeType }, '../engine/types/struct': {},
+        '../common/types': {}, '../engine/types/rand': { Rand: FakeType },
+        '../engine/types/system': { System: FakeType }, '../engine/types/cnvloader': { CNVLoader: FakeType },
+        '../fileFormats/common': { createCallback: (code) => ({ code }) }, '../engine/types/behaviour': {},
+        '../common/errors': { IgnorableError, IrrecoverableError: Error },
+        '../engine/types/integer': { Integer: Counter }, '../engine/types/string': {},
+        '../engine/types/double': {}, '../engine/types/bool': {}, './parser': {},
+        './expression': {}, './expression/ast': {}, '../engine/logging': {}, './stacktrace': {},
+    });
+    const { Behaviour } = loadModule('engine/types/behaviour.ts', {
+        './index': { Type: FakeType }, './condition': {}, '../../common/types': decorator,
+        '../../common/errors': { assert: assert.ok }, './class': {},
+        '../../interpreter': { InterruptScriptExecution }, '../logging': {},
+        '../../interpreter/interpreter': { ScriptReturn },
+    });
+    for (const profile of ['magicienii', 'default', 'ozn', 'nemo', 'timpului']) {
+        const visited = [];
+        let skipOne = false;
+        const engine = { compat: createEngineCompat(profile), diagnostics: { behaviour() {} }, scripting: {
+            executeCallback: async (self, caller, callback, args, locals, forward) => {
+                assert.equal(forward, true);
+                visited.push(locals._I_.value);
+                if (locals._I_.value === 2) throw new InterruptScriptExecution(skipOne);
+            },
+        } };
+        const interpreter = new Interpreter(new RuntimeContext(engine, null, ''));
+        const run = () => interpreter.handleLoop(['BODY', 0, 5, 1]);
+        if (profile === 'magicienii') await assert.rejects(run(), InterruptScriptExecution);
+        else await run();
+        assert.deepEqual(visited, [0, 1, 2]);
+        visited.length = 0;
+        skipOne = true;
+        await run();
+        assert.deepEqual(visited, [0, 1, 2, 3, 4]);
+        skipOne = false;
+        visited.length = 0;
+        let reachedAfterLoop = false;
+        const executeBody = engine.scripting.executeCallback;
+        engine.scripting.executeCallback = async (...args) => {
+            if (args[2].code !== 'OUTER') return executeBody(...args);
+            await run();
+            reachedAfterLoop = true;
+        };
+        const outer = new Behaviour(engine);
+        outer.definition = { CODE: { code: 'OUTER' } };
+        await outer.RUN();
+        assert.deepEqual(visited, [0, 1, 2]);
+        assert.equal(reachedAfterLoop, profile !== 'magicienii');
+    }
 });
 
 test('Magicienii checkpoint restore clears transient page overlays without emitting completion callbacks', () => {

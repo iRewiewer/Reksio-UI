@@ -213,6 +213,7 @@ export class Interpreter {
             } catch (err) {
                 if (err instanceof InterruptScriptExecution) {
                     if (err.one) continue
+                    if (this.context.engine.compat.propagateLoopBreak) throw err
                     break
                 }
                 throw err
