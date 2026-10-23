@@ -9,6 +9,7 @@ import { logger } from '../logging'
 
 export class Sound extends Type<SoundDefinition> {
     private sound: ISound | null = null
+    private loadedFilename: string | null = null
     private callbacksQueue: string[] = []
 
     async init() {
@@ -29,6 +30,7 @@ export class Sound extends Type<SoundDefinition> {
         if (this.sound !== null) {
             this.sound.stop()
             this.sound = null
+            this.loadedFilename = null
         }
     }
 
@@ -40,10 +42,11 @@ export class Sound extends Type<SoundDefinition> {
 
     playForSequence(onEnd?: () => void) {
         assert(this.sound !== null)
+        const filename = this.loadedFilename ?? this.definition.FILENAME
         return this.sound.play({
-            onStart: this.onStart.bind(this),
+            onStart: () => this.onStart(filename),
             onEnd: () => {
-                this.onEnd()
+                this.onEnd(filename)
                 onEnd?.()
             },
         })
@@ -86,11 +89,14 @@ export class Sound extends Type<SoundDefinition> {
 
     private async loadSound(path: string) {
         try {
-            this.sound = await loadSound(this.engine.filesystem, await this.engine.resolvePath(path))
+            const filename = await this.engine.resolvePath(path)
+            this.sound = await loadSound(this.engine.filesystem, filename)
+            this.loadedFilename = filename
         } catch (err) {
             if (this.engine.compat.packedSounds && /(?:^|[\\/])(?:_pusty(?:_sfx)?\d+|_null_[\w]+)\.wav$/i.test(path)) {
                 // Nemo's empty Ogg placeholders contain no decodable audio packets.
                 this.sound = globalAudio.silence()
+                this.loadedFilename = path
                 return
             }
             if (err instanceof FileNotFoundError) {
@@ -110,15 +116,15 @@ export class Sound extends Type<SoundDefinition> {
         }
     }
 
-    private onStart() {
-        logger.debug(`Playing sound '${this.definition.FILENAME}'`, {
+    private onStart(filename: string) {
+        logger.debug(`Playing sound '${filename}'`, {
             sound: this,
         })
         this.callbacksQueue.push('ONSTARTED')
     }
 
-    private onEnd() {
-        logger.debug(`Finished playing sound '${this.definition.FILENAME}'`, {
+    private onEnd(filename: string) {
+        logger.debug(`Finished playing sound '${filename}'`, {
             sound: this,
         })
         this.callbacksQueue.push('ONFINISHED')

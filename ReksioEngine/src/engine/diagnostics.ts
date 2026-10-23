@@ -195,6 +195,13 @@ export class EngineDiagnostics {
         })
     }
 
+    databaseFind(object: Type<any>, column: string, value: any, offset: number, result: number, cursor: number) {
+        if (!this.isCurrentSceneRelevant()) return
+        this.write('database-find', {
+            name: object.name, column, value: this.valueToString(value), offset, result, cursor,
+        })
+    }
+
     condition(object: Type<any>, operand1: any, operator: string, operand2: any, result: boolean) {
         if (!this.shouldTraceObject(object)) {
             return

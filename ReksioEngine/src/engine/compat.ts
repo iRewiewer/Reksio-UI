@@ -25,6 +25,7 @@ export type EngineCompat = {
     queuedMouseCoordinates: boolean
     dynamicHotspotTransforms: boolean
     resetDatabaseCursor: boolean
+    databaseFindSelectsRow: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -67,5 +68,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         queuedMouseCoordinates: name === 'magicienii',
         dynamicHotspotTransforms: name === 'magicienii',
         resetDatabaseCursor: name === 'magicienii',
+        databaseFindSelectsRow: name === 'magicienii',
     }
 }

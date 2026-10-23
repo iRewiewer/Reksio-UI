@@ -75,8 +75,13 @@ export class Database extends Type<DatabaseDefinition> {
             const stored = await this.content[index].GETFIELD(column)?.getValue()
             const matches = typeof stored === 'string' && typeof value === 'string'
                 ? stored.toUpperCase() === value.toUpperCase() : stored === value
-            if (matches) return index
+            if (matches) {
+                if (this.engine.compat.databaseFindSelectsRow) this.SELECT(index)
+                this.engine.diagnostics?.databaseFind(this, column, value, offset ?? 0, index, this.cursorPosition)
+                return index
+            }
         }
+        this.engine.diagnostics?.databaseFind(this, column, value, offset ?? 0, -1, this.cursorPosition)
         return -1
     }
 

@@ -612,10 +612,93 @@ test('Nemo database lookup is case-insensitive without changing default profile'
 
 test('Magicienii database lookup awaits INTEGER fields', async () => {
     const database = new Database({ compat: createEngineCompat('magicienii') });
+    database.parentScope = { set() {}, remove() {} };
     database.content = [101, 102, 104, 108].map((value) => ({ GETFIELD: () => ({ getValue: async () => value }) }));
     assert.equal(await database.FIND('TYPE', 102, 0), 1);
     assert.equal(await database.FIND('TYPE', 108, 0), 3);
     assert.equal(await database.FIND('TYPE', 999, 0), -1);
+});
+
+test('Magicienii FIND selects the matching row for direct database cursor reads', async () => {
+    const { Scope } = loadModule('engine/scope.ts', { '../common/errors': { assert: assert.ok } });
+    const scope = new Scope('scene');
+    const database = new Database({ compat: createEngineCompat('magicienii') });
+    database.name = 'DBDIALOG';
+    database.parentScope = scope;
+    database.content = ['one', 'topic', 'other', 'TOPIC'].map((value) => ({
+        GETFIELD: () => ({ getValue: async () => value }),
+    }));
+    database.SELECT(0);
+    assert.equal(await database.FIND('ID', 'TOPIC', 0), 1);
+    assert.equal(database.GETCURSORPOS(), 1);
+    assert.equal(scope.get('DBDIALOG_CURSOR'), database.content[1]);
+    assert.equal(await database.FIND('ID', 'topic', 2), 3);
+    assert.equal(database.GETCURSORPOS(), 3);
+    assert.equal(scope.get('DBDIALOG_CURSOR'), database.content[3]);
+    assert.equal(await database.FIND('ID', 'missing', 0), -1);
+    assert.equal(database.GETCURSORPOS(), 3);
+    assert.equal(scope.get('DBDIALOG_CURSOR'), database.content[3]);
+});
+
+test('database FIND cursor selection is confined to Magicienii', async () => {
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului', 'magicienii']) {
+        const database = new Database({ compat: createEngineCompat(profile) });
+        database.parentScope = { set() {}, remove() {} };
+        database.content = ['one', 'topic', 'other'].map((value) => ({ GETFIELD: () => ({ getValue: () => value }) }));
+        database.SELECT(2);
+        assert.equal(await database.FIND('ID', 'topic', 0), 1);
+        assert.equal(database.GETCURSORPOS(), profile === 'magicienii' ? 1 : 2);
+    }
+});
+
+test('database lookup tracing records the matched row and is silent when disabled', () => {
+    const { EngineDiagnostics } = loadModule('engine/diagnostics.ts');
+    const messages = [];
+    const original = console.info;
+    console.info = (message) => messages.push(message);
+    try {
+        const diagnostics = new EngineDiagnostics({ currentScene: { name: 'DIALOGS' } }, true);
+        diagnostics.databaseFind({ name: 'DBDIALOG' }, 'ID', '7', 0, 6, 6);
+        assert.match(messages[0], /trace:database-find/);
+        assert.deepEqual(JSON.parse(messages[0].slice(messages[0].indexOf('{'))), {
+            name: 'DBDIALOG', column: 'ID', value: '7', offset: 0, result: 6, cursor: 6,
+        });
+        diagnostics.enabled = false;
+        diagnostics.databaseFind({ name: 'DBDIALOG' }, 'ID', '12', 0, 12, 12);
+        assert.equal(messages.length, 1);
+    } finally { console.info = original; }
+});
+
+test('sound logs name the loaded file and retain its identity across subsequent reloads', async () => {
+    const logs = [], plays = [];
+    class Missing extends Error {}
+    const { Sound } = loadModule('engine/types/sound.ts', {
+        './index': { Type: FakeType }, '../../common/types': decorator,
+        '../../common/errors': { assert: assert.ok }, '../../filesystem/fileLoader': { FileNotFoundError: Missing },
+        '../audio': {}, '../logging': { logger: { debug: (message) => logs.push(message), warn() {} } },
+        '../../filesystem/assetsLoader': { loadSound: async (_filesystem, filename) => {
+            if (filename.endsWith('missing.wav')) throw new Missing();
+            return { play: (callbacks) => { plays.push(callbacks); return filename; } };
+        } },
+    });
+    const sound = new Sound({ compat: createEngineCompat('magicienii'), resolvePath: async (name) => `wavs/${name}` });
+    sound.definition = { FILENAME: 'original.wav' };
+    await sound.LOAD('answer1.wav');
+    assert.equal(sound.playForSequence(), 'wavs/answer1.wav');
+    await sound.LOAD('answer2.wav');
+    assert.equal(sound.playForSequence(), 'wavs/answer2.wav');
+    plays[0].onStart();
+    plays[1].onStart();
+    plays[0].onEnd();
+    plays[1].onEnd();
+    assert.deepEqual(logs, ["Playing sound 'wavs/answer1.wav'", "Playing sound 'wavs/answer2.wav'",
+        "Finished playing sound 'wavs/answer1.wav'", "Finished playing sound 'wavs/answer2.wav'"]);
+    await sound.LOAD('missing.wav');
+    sound.playForSequence();
+    plays[2].onStart();
+    assert.equal(logs.at(-1), "Playing sound 'wavs/answer2.wav'");
+    assert.equal(sound.definition.FILENAME, 'original.wav');
+    assert.deepEqual(sound.callbacksQueue, ['ONSTARTED', 'ONSTARTED', 'ONFINISHED', 'ONFINISHED', 'ONSTARTED']);
 });
 
 test('Magicienii dialogue sequence repair removes only its unused missing placeholder', () => {
