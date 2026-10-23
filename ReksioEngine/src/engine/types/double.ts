@@ -73,6 +73,12 @@ export class Double extends ValueType<DoubleDefinition, number> {
     }
 
     @method()
+    async SQRT() {
+        if (!this.engine.compat.modernScripts) return this.__call('SQRT', [])
+        return this.setValue(Math.sqrt(this.value))
+    }
+
+    @method()
     async LENGTH(pointX: number, pointY: number) {
         return await this.setValue(Math.sqrt(pointX * pointX + pointY * pointY))
     }

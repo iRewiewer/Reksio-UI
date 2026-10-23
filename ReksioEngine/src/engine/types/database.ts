@@ -71,11 +71,11 @@ export class Database extends Type<DatabaseDefinition> {
     }
 
     private async findRow(column: string, value: any, offset: number) {
-        for (let index = 0; index < this.content.length; index++) {
+        for (let index = Math.max(0, offset ?? 0); index < this.content.length; index++) {
             const stored = await this.content[index].GETFIELD(column)?.getValue()
             const matches = typeof stored === 'string' && typeof value === 'string'
                 ? stored.toUpperCase() === value.toUpperCase() : stored === value
-            if (matches) return index < offset ? this.content.length + index : index
+            if (matches) return index
         }
         return -1
     }

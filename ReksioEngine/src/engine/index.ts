@@ -22,6 +22,7 @@ import { setFormatsLogger } from '../fileFormats/logger'
 import { EngineDiagnostics } from './diagnostics'
 import { createEngineCompat } from './compat'
 import type { EngineCompat } from './compat'
+import { restoreNemoSaveDatabase } from './patches/nemo'
 
 export class Engine {
     public debug: Debugging
@@ -128,6 +129,7 @@ export class Engine {
                         object.restoreCheckpointValue(entry.value)
                     }
                 }
+                if (this.options.compatProfile === 'nemo') await restoreNemoSaveDatabase(this)
                 this.currentScene = checkpoint.previousScene ? this.getObject<Scene>(checkpoint.previousScene) : null
             }
             await this.changeScene(checkpoint?.scene ?? this.options.startScene ?? episode.definition.STARTWITH)
@@ -153,6 +155,10 @@ export class Engine {
     }
 
     destroy() {
+        this.app.ticker.stop()
+        for (const error of this.scopeManager.destroy()) {
+            logger.warn('Object cleanup failed while closing the player', null, error)
+        }
         this.app.destroy()
         if (this.music !== null) {
             this.music.stop()

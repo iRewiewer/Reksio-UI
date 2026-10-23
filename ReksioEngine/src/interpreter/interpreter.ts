@@ -38,7 +38,8 @@ export class RuntimeContext {
     constructor(
         public readonly engine: Engine,
         public readonly caller: Type<any> | null,
-        public readonly script: string
+        public readonly script: string,
+        public readonly args: any[] = []
     ) {}
 }
 
@@ -287,6 +288,7 @@ export class Interpreter {
     }
 
     private async executeFunctionCall(call: FunctionCall): Promise<any> {
+        const methodName = await this.interpolateArgumentText(call.method)
         const args = []
         if (this.context.engine.compat.modernScripts) {
             // Nested calls share the local-scope stack and must finish in argument order.
@@ -301,15 +303,15 @@ export class Interpreter {
 
         switch (call.target.type) {
             case 'GlobalTarget': {
-                const handler = this.globalHandlers.get(call.method)
+                const handler = this.globalHandlers.get(methodName)
                 if (!handler) {
-                    throw new RuntimeError(`Global method not found: @${call.method}`)
+                    throw new RuntimeError(`Global method not found: @${methodName}`)
                 }
 
                 try {
                     const stackFrame = StackFrame.builder()
                         .type('specialCall')
-                        .method(call.method)
+                        .method(methodName)
                         .args(...args)
                         .build()
                     stackTrace.push(stackFrame)
@@ -330,13 +332,13 @@ export class Interpreter {
                     const stackFrame = StackFrame.builder()
                         .type('method')
                         .object(targetObj)
-                        .method(call.method)
+                        .method(methodName)
                         .args(...args)
                         .build()
                     stackTrace.push(stackFrame)
 
-                    const method = (targetObj as any)[call.method]
-                    return method !== undefined ? method.bind(targetObj)(...args) : targetObj.__call(call.method, args)
+                    const method = (targetObj as any)[methodName]
+                    return method !== undefined ? method.bind(targetObj)(...args) : targetObj.__call(methodName, args)
                 } catch (err) {
                     if (err instanceof IgnorableError) throw err
 
@@ -369,34 +371,45 @@ export class Interpreter {
     async evaluateParameter(param: Parameter): Promise<any> {
         switch (param.type) {
             case 'NumberLiteral': {
-                const value = toNumber(param.value)
+                const value = toNumber(await this.interpolateArgumentText(param.value))
                 if (isNaN(value)) {
                     throw new RuntimeError(`Invalid number literal: ${param.value}`)
                 }
                 return value
             }
             case 'StringLiteral':
-                return param.value
+                return this.interpolateArgumentText(param.value)
             case 'BooleanLiteral':
                 return param.value
             case 'BracketExpression':
                 return this.evaluateExpression(param.expression)
             case 'Identifier': {
-                const object = this.getObject<Type<any>>(param.name)
+                if (this.context.engine.compat.modernScripts && /^\$\d+$/.test(param.name)) {
+                    const index = Number(param.name.slice(1)) - 1
+                    if (index >= 0 && index < this.context.args.length) {
+                        const arg = this.context.args[index]
+                        if (arg instanceof ValueType) return arg.getValue()
+                        return arg instanceof Type ? arg.name : arg
+                    }
+                }
+                const name = await this.interpolateArgumentText(param.name)
+                const object = this.getObject<Type<any>>(name)
                 if (object instanceof ValueType) {
                     return await object.getValue()
                 }
-                return param.name
+                return name
             }
             case 'FieldAccess': {
-                const obj = this.getObject<Struct>(param.objectName)
+                const objectName = await this.interpolateArgumentText(param.objectName)
+                const fieldName = await this.interpolateArgumentText(param.fieldName)
+                const obj = this.getObject<Struct>(objectName)
                 if (!obj) {
                     throw new RuntimeError(`Cannot access field ${param.fieldName} on non-object ${param.objectName}`)
                 }
                 if (!(obj instanceof Struct)) {
                     throw new RuntimeError('Failed to access field: object is not a Struct')
                 }
-                const field = obj.getField(param.fieldName)
+                const field = obj.getField(fieldName)
                 if (field === undefined) {
                     throw new RuntimeError(`Field ${param.fieldName} not found on object ${param.objectName}`)
                 }
@@ -454,20 +467,25 @@ export class Interpreter {
             case 'DirectRef':
                 throw new RuntimeError(`Unsupported ref: ${ref.type}`)
             case 'Identifier': {
-                if (this.context.engine.compat.modernScripts && ref.name.includes('|')) {
-                    const [objectName, fieldName] = ref.name.split('|')
+                const name = await this.interpolateArgumentText(ref.name)
+                if (this.context.engine.compat.modernScripts && name.includes('|')) {
+                    const [objectName, fieldName] = name.split('|')
                     const object = this.getObject(objectName)
                     if (!(object instanceof Struct)) {
                         throw new RuntimeError(`Cannot assign field ${fieldName} on non-struct ${objectName}`)
                     }
                     return object.getField(fieldName) ?? null
                 }
-                const object = this.getObject(ref.name)
-                this.context.engine.diagnostics.objectLookup(this.context.caller, ref.name, object !== null)
+                const object = this.getObject(name)
+                this.context.engine.diagnostics.objectLookup(this.context.caller, name, object !== null)
                 return object
             }
-            case 'IndirectRef':
-                return this.getObject(await this.evaluateParameter(ref.inner))
+            case 'IndirectRef': {
+                const name = await this.evaluateParameter(ref.inner)
+                const object = this.getObject(name)
+                this.context.engine.diagnostics.objectLookup(this.context.caller, name, object !== null)
+                return object
+            }
             default:
                 throw new RuntimeError(`Unknown ref type: ${(ref as any).type}`)
         }
@@ -480,6 +498,12 @@ export class Interpreter {
         }
         return object
     }
+
+    private interpolateArgumentText(text: string) {
+        return this.context.engine.compat.modernScripts
+            ? substituteArguments(text, this.context.args)
+            : Promise.resolve(text)
+    }
 }
 
 export async function runCode(
@@ -489,10 +513,11 @@ export async function runCode(
     args: any[],
     isSingleStatement: boolean
 ): Promise<any> {
-    const processedScript = await substituteArguments(script, args)
+    // Newer scripts pass digit-leading filenames and empty strings as values, not source code.
+    const processedScript = engine.compat.modernScripts ? script : await substituteArguments(script, args)
     const ast = parseCode(processedScript)
 
-    const context = new RuntimeContext(engine, caller, processedScript)
+    const context = new RuntimeContext(engine, caller, processedScript, args)
     const interpreter = new Interpreter(context)
 
     try {
@@ -504,6 +529,7 @@ export async function runCode(
 }
 
 async function substituteArguments(script: string, args: any[]): Promise<string> {
+    if (!args.length || !script.includes('$')) return script
     const regex = /\$(\d+)/g
     const parts: (string | Promise<string>)[] = []
     let lastIndex = 0

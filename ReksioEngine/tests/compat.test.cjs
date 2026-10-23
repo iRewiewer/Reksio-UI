@@ -323,3 +323,286 @@ test('OZN intro punctuation repairs do not affect other scenes or games', () => 
     }
     assert.equal(createEngineCompat('ozn').oznDefinitions, true);
 });
+
+test('Nemo ANN frame extensions follow names without consuming the next frame', () => {
+    const { loadAnn } = loadModule('fileFormats/ann/index.ts', {
+        '../utils': loadModule('fileFormats/utils.ts'), '../img': {}, '../compression': {},
+    });
+    const header = Buffer.alloc(52);
+    header.writeUInt32LE(0x50564e);
+    header.writeUInt16LE(1, 8);
+    const event = Buffer.alloc(67 + 4);
+    event.write('PLAY');
+    event.writeUInt16LE(2, 32);
+    const frame = Buffer.alloc(30);
+    frame.writeUInt32LE(1);
+    frame.writeUInt32LE(1, 4);
+    frame.writeInt16LE(-117, 8);
+    frame.writeInt16LE(72, 10);
+    const name = Buffer.concat([Buffer.from([6, 0, 0, 0]), Buffer.from('Clone\0')]);
+    const extension = Buffer.alloc(16);
+    extension.writeUInt32LE(12);
+    extension.writeFloatLE(-0.6, 4);
+    extension.writeFloatLE(1, 8);
+    extension.writeFloatLE(1, 12);
+    const nextFrame = Buffer.alloc(30);
+    nextFrame.writeInt16LE(9, 8);
+    nextFrame.writeInt16LE(10, 10);
+    const input = arrayBuffer(Buffer.concat([header, event, frame, name, extension, nextFrame]));
+    const ann = loadAnn(input, true);
+    assert.deepEqual(ann.events[0].frames.map(({ name, positionX, positionY }) => [name, positionX, positionY]),
+        [['Clone', -117, 72], ['', 9, 10]]);
+    assert.equal(createEngineCompat('nemo').trailingAnnFrameData, true);
+    assert.equal(createEngineCompat().trailingAnnFrameData, false);
+});
+
+test('modern INTEGER RANDOM assigns its result while the baseline only returns it', async () => {
+    class Value extends FakeType {
+        value = 0;
+        setValue(value) { this.value = value; }
+    }
+    const { Integer } = loadModule('engine/types/integer.ts', {
+        './index': { ValueType: Value }, '../../common/types': decorator,
+    });
+    const integer = new Integer({ compat: createEngineCompat('timpului') });
+    assert.equal(await integer.RANDOM(5, 1), 5);
+    assert.equal(integer.value, 5);
+    assert.equal(await integer.RANDOM(1), 0);
+    assert.equal(integer.value, 0);
+    integer.engine.compat = createEngineCompat();
+    assert.equal(await integer.RANDOM(7, 1), 7);
+    assert.equal(integer.value, 0);
+    assert.equal(Number.isNaN(await integer.RANDOM(1)), true);
+});
+
+test('modern keyboard input can be re-enabled after a transition', () => {
+    const { Keyboard } = loadModule('engine/types/keyboard.ts', {
+        './index': { Type: FakeType }, '../../common/types': decorator, '../logging': {},
+    });
+    const keyboard = new Keyboard({ compat: createEngineCompat('nemo') });
+    keyboard.__call = () => 'unsupported';
+    keyboard.DISABLE();
+    assert.equal(keyboard.ISENABLED(), false);
+    keyboard.ENABLE();
+    assert.equal(keyboard.ISENABLED(), true);
+    keyboard.engine.compat = createEngineCompat();
+    keyboard.DISABLE();
+    assert.equal(keyboard.ENABLE(), 'unsupported');
+    assert.equal(keyboard.ISENABLED(), false);
+});
+
+test('Nemo checkpoint restore reloads only an existing selected save slot', async () => {
+    const { restoreNemoSaveDatabase } = loadModule('engine/patches/nemo.ts');
+    const calls = [];
+    const engine = {
+        getObject: (name) => name === 'SGSLOTNAME' ? { getValue: () => '2' }
+            : { __call: async (...args) => { calls.push(args); } },
+        resolvePath: async (path) => { assert.equal(path, '$COMMON/SAVE/SLOT2.DTA'); return path; },
+        filesystem: { hasFile: async () => true },
+    };
+    await restoreNemoSaveDatabase(engine);
+    assert.deepEqual(calls, [['DBLOAD', []]]);
+    engine.filesystem.hasFile = async () => false;
+    await restoreNemoSaveDatabase(engine);
+    assert.equal(calls.length, 1);
+});
+
+test('callback removal targets only the requested event or parameter', () => {
+    const { CallbacksComponent } = loadModule('engine/components/callbacks.ts', {
+        '../../common/errors': { assert: assert.ok }, '../../fileFormats/cnv/types': {},
+        '../../interpreter/stacktrace': {}, '../../interpreter': {},
+    });
+    const callbacks = new CallbacksComponent({ compat: createEngineCompat() }, {});
+    callbacks.addBehaviour('ONFINISHED', 'DONE');
+    callbacks.addBehaviour('ONBRUTALCHANGED$__END__', 'END');
+    callbacks.addBehaviour('ONBRUTALCHANGED$PLAY', 'PLAY');
+    callbacks.removeBehaviour('ONBRUTALCHANGED$__END__');
+    assert.equal(callbacks.registry.get('ONBRUTALCHANGED').parametrized.has('__END__'), false);
+    assert.equal(callbacks.registry.get('ONBRUTALCHANGED').parametrized.has('PLAY'), true);
+    callbacks.removeBehaviour('ONFINISHED');
+    assert.equal(callbacks.has('ONFINISHED'), false);
+});
+
+test('Nemo clone cleanup destroys only the requested range and retains identities', () => {
+    const { Scene } = loadModule('engine/types/scene.ts', {
+        './index': { ParentType: FakeType }, './behaviour': {},
+        '../../common/errors': { assert: assert.ok }, '../../common/types': decorator,
+        '../../filesystem/assetsLoader': {}, '../../filesystem': {}, './group': {}, './animo': {},
+    });
+    const removed = [];
+    const destroyed = [];
+    const clones = [1, 2, 3].map((number) => ({ name: `ANN_${number}`, isReady: true,
+        destroy: () => destroyed.push(number), parentScope: { remove: (name) => removed.push(name) } }));
+    const scene = new Scene({ compat: createEngineCompat('nemo') });
+    scene.getObject = () => ({ clones });
+    scene.REMOVECLONES('ANN', 2, 2);
+    assert.deepEqual(removed, ['ANN_2']);
+    assert.equal(clones.length, 3);
+    scene.REMOVECLONES('ANN', -1, -1);
+    assert.deepEqual(destroyed, [2, 1, 3]);
+    assert.equal(clones.every((clone) => !clone.isReady), true);
+});
+
+test('modern argument values preserve filenames, empty strings and object-target interpolation', async () => {
+    class Value extends FakeType {
+        setValue(value) { this.value = value; }
+        getValue() { return this.value; }
+    }
+    class Struct { getField() { return { getValue: () => 'field value' }; } }
+    const common = { toNumber: (value) => parseFloat(value) || 0, valueAsBool: (value) => value === 'TRUE',
+        valueAsString: (value) => String(value) };
+    const parser = loadModule('interpreter/parser.ts', {
+        './ast': loadModule('interpreter/ast.ts'), '../common/types': common,
+    });
+    const stackFrame = { type() { return this; }, method() { return this; }, object() { return this; },
+        args() { return this; }, build() { return {}; } };
+    const { runCode } = loadModule('interpreter/interpreter.ts', {
+        '../engine/types': { Type: FakeType, ValueType: Value }, '../engine/types/struct': { Struct },
+        '../common/types': common, '../engine/types/rand': { Rand: FakeType },
+        '../engine/types/system': { System: FakeType }, '../engine/types/cnvloader': { CNVLoader: FakeType },
+        '../fileFormats/common': {}, '../engine/types/behaviour': {},
+        '../common/errors': { IgnorableError: Error }, '../engine/types/integer': { Integer: Value },
+        '../engine/types/string': { String: Value }, '../engine/types/double': { Double: Value },
+        '../engine/types/bool': { Bool: Value }, './parser': parser, './expression': {}, './expression/ast': {},
+        '../engine/logging': {}, './stacktrace': { StackFrame: { builder: () => stackFrame }, stackTrace: [] },
+    });
+    const values = [];
+    const objects = new Map([['TARGET', { SET(value) { values.push(value); } }], ['ROW', new Struct()]]);
+    const engine = { compat: createEngineCompat('nemo'), getObject: (name) => objects.get(name) ?? null,
+        diagnostics: { scriptStatement() {}, objectLookup() {} },
+        scopeManager: { localScopes: [{ set: (name, value) => objects.set(name, value) }] } };
+    await runCode(engine, null, '@STRING("LOCAL",$1);TARGET^SET(LOCAL);TARGET^SET($2);TARGET^SET($3);',
+        ['00B_INTRO', '', 'text, with "quotes"; and brackets [x]'], false);
+    assert.deepEqual(values, ['00B_INTRO', '', 'text, with "quotes"; and brackets [x]']);
+    await runCode(engine, null, '$1^$2("prefix_$3");TARGET^SET($4|VALUE);', ['TARGET', 'SET', '00B', 'ROW'], false);
+    assert.deepEqual(values.slice(-2), ['prefix_00B', 'field value']);
+    const numericArgument = new Value(engine);
+    numericArgument.setValue(42);
+    await runCode(engine, null, 'TARGET^SET($1);', [numericArgument], false);
+    assert.equal(values.at(-1), 42);
+    engine.compat = createEngineCompat();
+    await runCode(engine, null, 'TARGET^SET($1);', ['00B_INTRO'], false);
+    assert.equal(values.at(-1), 0);
+});
+
+test('Nemo packed sound data remains reusable after Web Audio detaches a playback buffer', async () => {
+    const { default: Filesystem } = loadModule('filesystem/index.ts', {
+        '../fileFormats/cnv': {}, '../fileFormats/seq': {}, '../fileFormats/img': {},
+        '../fileFormats/ann': {}, '../fileFormats/fnt': {}, '../fileFormats/archive/array': {},
+        '../engine/compat': { createEngineCompat }, '../fileFormats/archive/sound': { readSoundArchive },
+        '../engine/compatAssets': {}, '../engine/patches/timpului': {}, '../engine/patches/ozn': {},
+        '../engine/patches/nemo': {},
+    });
+    const archive = arrayBuffer(archiveEntry('TEST.WAV', Buffer.from('OggS123')));
+    let reads = 0;
+    const filesystem = new Filesystem({ hasFile: () => false, getFilesListing: () => ['wavs/wav.snd'],
+        getRawFile: async () => { reads++; return archive; } }, { get: async () => null, has: async () => false },
+        createEngineCompat('nemo'));
+    const first = await filesystem.getFile('wavs/test.wav');
+    structuredClone(first, { transfer: [first] });
+    assert.equal(first.byteLength, 0);
+    assert.equal(Buffer.from(await filesystem.getFile('wavs/test.wav')).toString(), 'OggS123');
+    assert.equal(await filesystem.hasFile('wavs/test.wav'), true);
+    assert.equal(reads, 1);
+});
+
+test('player teardown releases input listeners and class scopes once even after a cleanup error', () => {
+    const { ScopeManager } = loadModule('engine/scope.ts', {
+        './types': {}, './types/application': {}, '../common/errors': { assert: assert.ok },
+    });
+    const manager = new ScopeManager();
+    const scope = manager.newScope('root');
+    const destroyed = [];
+    const object = (type, name, destroy = () => destroyed.push(name)) => ({
+        definition: { TYPE: type }, name, isReady: true, destroy,
+    });
+    const instance = object('CLASS_INSTANCE', 'INSTANCE');
+    const owner = object('CLASS', 'OWNER', () => instance.destroy());
+    const keyboard = object('KEYBOARD', 'KEYBOARD');
+    scope.set('OWNER', owner);
+    scope.set('INSTANCE', instance);
+    scope.set('BROKEN', object('IMAGE', 'BROKEN', () => { throw new Error('not initialized'); }));
+    scope.set('KEYBOARD', keyboard);
+    manager.localScopes.push(scope);
+    assert.equal(manager.destroy().length, 1);
+    assert.deepEqual(destroyed, ['INSTANCE', 'KEYBOARD']);
+    assert.equal(keyboard.isReady, false);
+    assert.deepEqual(manager.scopes, []);
+    assert.deepEqual(manager.localScopes, []);
+    assert.deepEqual(manager.destroy(), []);
+});
+
+test('Nemo walker placeholders are limited to its dynamic animation objects', () => {
+    const { patchNemoDefinitions } = loadModule('engine/patches/nemo.ts');
+    const definitions = { ANNCREATURE: { TYPE: 'ANIMO', FILENAME: '' },
+        ANNFRIEND: { TYPE: 'ANIMO', FILENAME: '' }, ANNMASK: { TYPE: 'ANIMO', FILENAME: '' },
+        OTHER: { TYPE: 'ANIMO', FILENAME: '' } };
+    patchNemoDefinitions('other.class', definitions);
+    assert.equal(definitions.ANNCREATURE.FILENAME, '');
+    patchNemoDefinitions('common/classes/clswalker.class', definitions);
+    assert.equal(definitions.ANNCREATURE.FILENAME, '$COMMON/WALKER_MOVE.ANN');
+    assert.equal(definitions.ANNFRIEND.FILENAME, '$COMMON/WALKER_MOVE.ANN');
+    assert.equal(definitions.ANNMASK.FILENAME, '$COMMON/WALKER_MOVE.ANN');
+    assert.equal(definitions.OTHER.FILENAME, '');
+    assert.equal(createEngineCompat('nemo').nemoDefinitions, true);
+    for (const profile of ['default', 'magicienii', 'ozn', 'timpului']) {
+        assert.equal(createEngineCompat(profile).nemoDefinitions, false);
+    }
+});
+
+test('modern display metrics report the current frame size for Nemo path grids', () => {
+    const { DisplayType } = loadModule('engine/types/index.ts', {
+        '../components/callbacks': {}, '../../common/errors': { assert: assert.ok },
+        '../components/events': {}, '../../common/types': decorator, '../logging': {},
+    });
+    const sprite = { width: 20, height: 20 };
+    const object = { engine: { compat: createEngineCompat('nemo') }, getRenderObject: () => sprite,
+        __call: () => 'unsupported' };
+    assert.equal(DisplayType.prototype.GETHEIGHT.call(object), 20);
+    sprite.width = 740;
+    sprite.height = 480;
+    assert.equal(DisplayType.prototype.GETWIDTH.call(object), 740);
+    assert.equal(DisplayType.prototype.GETHEIGHT.call(object), 480);
+    object.engine.compat = createEngineCompat();
+    assert.equal(DisplayType.prototype.GETHEIGHT.call(object), 'unsupported');
+});
+
+test('modern database lookup advances through repeated dialogue rows and stops at the end', async () => {
+    const database = new Database({ compat: createEngineCompat('nemo') });
+    database.content = ['wstep', 'wstep', 'other'].map((value) => ({ GETFIELD: () => ({ getValue: async () => value }) }));
+    assert.equal(await database.FIND('ID', 'WSTEP', 0), 0);
+    assert.equal(await database.FIND('ID', 'WSTEP', 1), 1);
+    assert.equal(await database.FIND('ID', 'WSTEP', 2), -1);
+    assert.equal(await database.FIND('ID', 'WSTEP', 3), -1);
+    database.engine.compat = createEngineCompat();
+    database.content = ['wstep', 'wstep', 'other'].map((value) => ({ GETFIELD: () => ({ getValue: () => value }) }));
+    assert.equal(database.FIND('ID', 'wstep', 1), 3);
+});
+
+test('modern dynamic callbacks use CNV parameter types and accept caret separators', () => {
+    const { CallbacksComponent } = loadModule('engine/components/callbacks.ts', {
+        '../../common/errors': { assert: assert.ok }, '../../fileFormats/cnv/types': { structureDefinitions: {
+            INTEGER: { ONBRUTALCHANGED: { subType: { processor: (_object, _name, _param, value) => Number(value) } } },
+        } }, '../../interpreter/stacktrace': {}, '../../interpreter': {},
+    });
+    const callbacks = new CallbacksComponent({ compat: createEngineCompat('nemo') }, { definition: { TYPE: 'INTEGER' } });
+    callbacks.addBehaviour('ONBRUTALCHANGED^2', 'PATH');
+    assert.equal(callbacks.registry.get('ONBRUTALCHANGED').parametrized.get(2).behaviourReference, 'PATH');
+    callbacks.removeBehaviour('ONBRUTALCHANGED^2');
+    assert.equal(callbacks.has('ONBRUTALCHANGED'), false);
+    callbacks.addBehaviour('ONBRUTALCHANGED$3', 'PATH');
+    assert.equal(callbacks.registry.get('ONBRUTALCHANGED').parametrized.has(3), true);
+});
+
+test('modern doubles support the square-root operation used by Nemo pathfinding', async () => {
+    class Value extends FakeType { value = 25; setValue(value) { this.value = value; return value; } }
+    const { Double } = loadModule('engine/types/double.ts', {
+        './index': { ValueType: Value }, '../../common/types': decorator,
+    });
+    const number = new Double({ compat: createEngineCompat('nemo') });
+    assert.equal(await number.SQRT(), 5);
+    assert.equal(number.value, 5);
+    number.engine.compat = createEngineCompat();
+    number.__call = () => 'unsupported';
+    assert.equal(await number.SQRT(), 'unsupported');
+});

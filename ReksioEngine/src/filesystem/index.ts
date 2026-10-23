@@ -12,6 +12,7 @@ import { readSoundArchive } from '../fileFormats/archive/sound'
 import { loadJpegBackground } from '../engine/compatAssets'
 import { patchTimeMachineDefinitions } from '../engine/patches/timpului'
 import { patchOznSource } from '../engine/patches/ozn'
+import { patchNemoDefinitions } from '../engine/patches/nemo'
 
 const PIRATES_RIVER_THREE_PATH = 'dane/intro/mainmenu/09rzekac/rzeka3.cnv'
 const PIRATES_WIOSKA_PATH = 'dane/intro/mainmenu/10wioska/wioska10.cnv'
@@ -258,7 +259,8 @@ export default class Filesystem {
         }
         if (this.compat.packedSounds && !this.fileLoader.hasFile(path) && path.endsWith('.wav')) {
             const packed = await this.getPackedSound(path)
-            if (packed) return packed
+            // decodeAudioData detaches its input; the archive cache must keep its own copy.
+            if (packed) return packed.slice(0)
         }
         return this.fileLoader.getRawFile(path)
     }
@@ -298,7 +300,7 @@ export default class Filesystem {
 
     async getANNFile(filename: string) {
         const data = await this.getFile(filename)
-        return loadAnn(data)
+        return loadAnn(data, this.compat.trailingAnnFrameData)
     }
 
     async getFNTFile(filename: string) {
@@ -316,6 +318,7 @@ export default class Filesystem {
         console.debug(text)
         const definitions = parseCNV(text)
         if (this.compat.timeMachineDefinitions) patchTimeMachineDefinitions(filename, definitions)
+        if (this.compat.nemoDefinitions) patchNemoDefinitions(filename, definitions)
         return definitions
     }
 

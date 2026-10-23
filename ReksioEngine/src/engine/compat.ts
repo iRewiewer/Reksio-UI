@@ -12,6 +12,8 @@ export type EngineCompat = {
     scriptedCursor: boolean
     timeMachineDefinitions: boolean
     oznDefinitions: boolean
+    trailingAnnFrameData: boolean
+    nemoDefinitions: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -41,5 +43,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         scriptedCursor: name !== 'default',
         timeMachineDefinitions: name === 'timpului',
         oznDefinitions: name === 'ozn',
+        trailingAnnFrameData: name === 'nemo',
+        nemoDefinitions: name === 'nemo',
     }
 }

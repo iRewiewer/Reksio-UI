@@ -370,6 +370,9 @@ export class EngineDiagnostics {
         this.write('snapshot', {
             label,
             scene: scene.name,
+            scripts: scope.objects.filter((object) =>
+                /^(CNVLOADER|__LOAD_DB__|BEHCLICK|BEHSEQFINISHED|BEHINITSCRIPT|BEHPOSTINIT)/.test(object.name)
+            ).map((object) => object.name),
             values,
             animos,
             buttons,
@@ -381,7 +384,8 @@ export class EngineDiagnostics {
             return false
         }
 
-        return KEY_OBJECT_PATTERN.test(object.name)
+        return KEY_OBJECT_PATTERN.test(object.name) ||
+            /^(CNVLOADER|__LOAD_DB__|BEHCLICK|BEHSEQFINISHED|BEHLOADSEQARR|BEHSEQARRPLAY|BEHINITSCRIPT|BEHPOSTINIT)/.test(object.name)
     }
 
     private isCurrentSceneRelevant() {

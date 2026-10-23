@@ -60,6 +60,24 @@ export class Type<DefinitionType extends TypeDefinition> {
         return object.clones.indexOf(this) + 1
     }
 
+    @method()
+    RESETCLONES() {
+        if (!this.engine.compat.modernScripts) return this.__call('RESETCLONES', [])
+        this.clones = []
+    }
+
+    @method()
+    ADDBEHAVIOUR(callbackString: string, behaviourName: string) {
+        if (!this.engine.compat.modernScripts) return this.__call('ADDBEHAVIOUR', [callbackString, behaviourName])
+        this.callbacks.addBehaviour(callbackString, behaviourName)
+    }
+
+    @method()
+    REMOVEBEHAVIOUR(callbackString: string) {
+        if (!this.engine.compat.modernScripts) return this.__call('REMOVEBEHAVIOUR', [callbackString])
+        this.callbacks.removeBehaviour(callbackString)
+    }
+
     private async cloneObject(object: Type<any>) {
         const clone = await object.clone()
         object.clones.push(clone)
@@ -111,6 +129,22 @@ export class Type<DefinitionType extends TypeDefinition> {
 
 export class DisplayType<DefinitionType extends DisplayTypeDefinition> extends Type<DefinitionType> {
     private priority: number = 0
+
+    @method()
+    GETWIDTH() {
+        if (!this.engine.compat.modernScripts) return this.__call('GETWIDTH', [])
+        const renderObject = this.getRenderObject()
+        assert(renderObject !== null)
+        return renderObject.width
+    }
+
+    @method()
+    GETHEIGHT() {
+        if (!this.engine.compat.modernScripts) return this.__call('GETHEIGHT', [])
+        const renderObject = this.getRenderObject()
+        assert(renderObject !== null)
+        return renderObject.height
+    }
 
     @method()
     GETPRIORITY() {

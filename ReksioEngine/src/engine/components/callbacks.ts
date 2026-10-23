@@ -98,7 +98,7 @@ export class CallbacksComponent {
     }
 
     addBehaviour(callbackString: string, behaviourName: string) {
-        const [callbackName, callbackParam] = callbackString.split('$')
+        const [callbackName, callbackParam] = this.parseBehaviourCallback(callbackString)
 
         const newEntry = this.registry.get(callbackName) ?? {
             nonParametrized: null,
@@ -118,5 +118,26 @@ export class CallbacksComponent {
         }
 
         this.registry.set(callbackName, newEntry)
+    }
+
+    removeBehaviour(callbackString: string) {
+        const [callbackName, callbackParam] = this.parseBehaviourCallback(callbackString)
+        if (callbackParam === undefined) {
+            this.registry.delete(callbackName)
+        } else {
+            this.registry.get(callbackName)?.parametrized.delete(callbackParam)
+        }
+    }
+
+    private parseBehaviourCallback(callbackString: string): [string, any] {
+        if (!this.engine.compat.modernScripts) {
+            const [name, param] = callbackString.split('$')
+            return [name, param]
+        }
+        const [name, param] = callbackString.split(/[$^]/)
+        const field = structureDefinitions[this.object.definition.TYPE]?.[name] as FieldTypeEntry | undefined
+        return [name, param !== undefined && field?.subType
+            ? field.subType.processor(this.object.definition, name, param, param)
+            : param]
     }
 }

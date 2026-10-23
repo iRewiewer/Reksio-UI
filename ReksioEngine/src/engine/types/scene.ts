@@ -34,8 +34,26 @@ export class Scene extends ParentType<SceneDefinition> {
 
         for (let i = startingIdx - 1; i <= endingIdx - 1; i++) {
             const clone = baseObject.clones[i]
+            if (this.engine.compat.modernScripts && !clone?.isReady) continue
             await behaviour.RUN(clone)
         }
+    }
+
+    @method()
+    REMOVECLONES(baseObjectName: string, startingIdx: number, endingIdx: number) {
+        if (!this.engine.compat.modernScripts) return this.__call('REMOVECLONES', [baseObjectName, startingIdx, endingIdx])
+        const baseObject = this.getObject(baseObjectName)
+        if (!baseObject) return
+        const start = Math.max(1, startingIdx)
+        const end = endingIdx <= 0 ? baseObject.clones.length : Math.min(endingIdx, baseObject.clones.length)
+        for (let index = start - 1; index < end; index++) {
+            const clone = baseObject.clones[index]
+            if (!clone.isReady) continue
+            clone.isReady = false
+            clone.destroy()
+            clone.parentScope?.remove(clone.name)
+        }
+        // Keep numeric clone identities stable until the script calls RESETCLONES.
     }
 
     @method()

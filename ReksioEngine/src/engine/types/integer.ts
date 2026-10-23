@@ -93,8 +93,14 @@ export class Integer extends ValueType<IntegerDefinition, number> {
     }
 
     @method()
-    async RANDOM(offset: number, range: number) {
-        return Math.floor(Math.random() * range) + offset
+    async RANDOM(offset: number, range?: number) {
+        if (this.engine.compat.modernScripts && range === undefined) {
+            range = offset
+            offset = 0
+        }
+        const value = Math.floor(Math.random() * range!) + offset
+        if (this.engine.compat.modernScripts) await this.setValue(value)
+        return value
     }
 
     protected async valueChanged(oldValue: any, newValue: any) {

@@ -58,6 +58,12 @@ export class Keyboard extends Type<KeyboardDefinition> {
     }
 
     @method()
+    ENABLE() {
+        if (!this.engine.compat.modernScripts) return this.__call('ENABLE', [])
+        this.enabled = true
+    }
+
+    @method()
     ISKEYDOWN(keyName: string) {
         if (this.keysState.has(keyName)) {
             return this.keysState.get(keyName)!

@@ -9,6 +9,24 @@ export class ScopeManager {
     public scopes: Array<Scope> = []
     public localScopes: Array<Scope> = []
 
+    public destroy() {
+        const errors: unknown[] = []
+        const objects = new Set([...this.scopes, ...this.localScopes].flatMap((scope) => scope.objects))
+        for (const object of objects) {
+            // CLASS owns its instances and recursively releases their private scopes.
+            if (object.definition.TYPE === 'CLASS_INSTANCE') continue
+            try {
+                object.destroy()
+            } catch (error) {
+                errors.push(error)
+            }
+            object.isReady = false
+        }
+        this.scopes = []
+        this.localScopes = []
+        return errors
+    }
+
     public newScope(type: string) {
         const newScope = new Scope(type)
         this.scopes.push(newScope)

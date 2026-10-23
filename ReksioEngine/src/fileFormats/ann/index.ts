@@ -79,11 +79,11 @@ const parseHeader = (view: BinaryBuffer) => {
     return ann
 }
 
-const parseFrame = (view: BinaryBuffer) => {
+const parseFrame = (view: BinaryBuffer, trailingFrameData: boolean) => {
     const frame = {} as Frame
     frame.hasName = view.getUint32()
     const hasUnknownData = view.getUint32()
-    if (hasUnknownData !== 0) {
+    if (hasUnknownData !== 0 && !trailingFrameData) {
         const dataLen = view.getUint32()
         view.skip(dataLen)
     }
@@ -112,10 +112,16 @@ const parseFrame = (view: BinaryBuffer) => {
         frame.sounds = []
     }
 
+    if (hasUnknownData !== 0 && trailingFrameData) {
+        const dataLen = view.getUint32()
+        if (dataLen > view.size - view.offset) throw new Error('ANN frame extension exceeds file bounds')
+        view.skip(dataLen)
+    }
+
     return frame
 }
 
-const parseEvent = (view: BinaryBuffer) => {
+const parseEvent = (view: BinaryBuffer, trailingFrameData: boolean) => {
     const event = {} as Event
     event.name = stringUntilNull(decoder.decode(view.read(0x20)))
     event.framesCount = view.getUint16()
@@ -142,7 +148,7 @@ const parseEvent = (view: BinaryBuffer) => {
 
     event.frames = []
     for (let i = 0; i < event.framesCount; i++) {
-        event.frames.push(parseFrame(view))
+        event.frames.push(parseFrame(view, trailingFrameData))
     }
 
     return event
@@ -167,13 +173,13 @@ const parseAnnImage = (view: BinaryBuffer) => {
     return img
 }
 
-export const loadAnn = (data: ArrayBuffer) => {
+export const loadAnn = (data: ArrayBuffer, trailingFrameData = false) => {
     const buffer = new BinaryBuffer(new DataView(data))
     const header = parseHeader(buffer)
 
     const events: Event[] = []
     for (let i = 0; i < header.eventsCount; i++) {
-        events.push(parseEvent(buffer))
+        events.push(parseEvent(buffer, trailingFrameData))
     }
 
     const annImages: AnnImage[] = []
