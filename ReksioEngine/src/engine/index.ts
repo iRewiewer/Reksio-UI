@@ -22,7 +22,7 @@ import { setFormatsLogger } from '../fileFormats/logger'
 import { EngineDiagnostics } from './diagnostics'
 import { createEngineCompat } from './compat'
 import type { EngineCompat } from './compat'
-import { restoreNemoSaveDatabase } from './patches/nemo'
+import { captureNemoCheckpoint, restoreNemoSaveDatabase } from './patches/nemo'
 import { restoreMagicieniiTransitionState } from './patches/magicienii'
 
 export class Engine {
@@ -370,9 +370,17 @@ export class Engine {
         }
     }
 
-    captureCheckpoint(): SceneCheckpoint {
+    captureCheckpoint(): SceneCheckpoint | Promise<SceneCheckpoint> {
         if (!this.entryCheckpoint || this.changingScene)
             throw new Error('Wait for the scene to finish loading before saving a checkpoint.')
+        if (this.compat.persistedArcadeCheckpoints && this.entryCheckpoint.scene === 'ARCADE') {
+            const entry = this.entryCheckpoint
+            return captureNemoCheckpoint(this, entry).then((checkpoint) => {
+                if (this.entryCheckpoint !== entry || this.changingScene)
+                    throw new Error('The scene changed while capturing progress. Create the checkpoint again.')
+                return checkpoint
+            })
+        }
         return structuredClone(this.entryCheckpoint)
     }
 

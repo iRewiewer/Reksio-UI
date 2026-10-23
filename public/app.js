@@ -907,7 +907,7 @@ function renderSnapshots() {
             <div class="snapshot-title">${escapeHtml(snapshot.name)}</div>
             <div class="snapshot-meta">
               ${escapeHtml(formatDateTime(snapshot.createdAt))} - ${escapeHtml(formatBytes(snapshot.sizeBytes || 0))} - ${escapeHtml(String(snapshot.filesystemEntryCount || 0))} files
-              <br>${escapeHtml(snapshot.checkpoint ? `Scene entry: ${snapshot.checkpoint.scene}` : 'Legacy save files')}
+              <br>${escapeHtml(snapshot.checkpoint ? `${snapshot.checkpoint.captureKind === 'persisted' ? 'Saved progress' : 'Scene entry'}: ${snapshot.checkpoint.scene}` : 'Legacy save files')}
             </div>
           </div>
           <div class="snapshot-actions">
@@ -1009,7 +1009,7 @@ async function createCurrentSnapshot() {
   try {
     const bridge = nodes.gameFrame.contentWindow?.reksioSnapshots;
     if (!bridge || state.loadedId !== game.id) throw new Error('Start the game before creating a checkpoint.');
-    const checkpoint = bridge.capture();
+    const checkpoint = await bridge.capture();
     const filesystemEntries = checkpoint.filesystemEntries;
     const saveContent = JSON.stringify(checkpoint.saveData);
     const snapshot = {
