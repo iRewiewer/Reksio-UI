@@ -53,13 +53,11 @@ export class Database extends Type<DatabaseDefinition> {
 
     @method()
     FIND(column: string, value: any, offset: number) {
+        if (this.engine.compat.modernScripts || this.engine.compat.simpleWorldPathing) {
+            return this.findRow(column, value, offset)
+        }
         // Should be ok without await for getValue as these types don't have async get
-        const index = this.content.findIndex((entry) => {
-            const stored = entry.GETFIELD(column)?.getValue()
-            return this.engine.compat.modernScripts && typeof stored === 'string' && typeof value === 'string'
-                ? stored.toUpperCase() === value.toUpperCase()
-                : stored === value
-        })
+        const index = this.content.findIndex((entry) => entry.GETFIELD(column)?.getValue() === value)
         if (index == -1) {
             return -1
         }
@@ -70,6 +68,16 @@ export class Database extends Type<DatabaseDefinition> {
         }
 
         return index
+    }
+
+    private async findRow(column: string, value: any, offset: number) {
+        for (let index = 0; index < this.content.length; index++) {
+            const stored = await this.content[index].GETFIELD(column)?.getValue()
+            const matches = typeof stored === 'string' && typeof value === 'string'
+                ? stored.toUpperCase() === value.toUpperCase() : stored === value
+            if (matches) return index < offset ? this.content.length + index : index
+        }
+        return -1
     }
 
     @method()

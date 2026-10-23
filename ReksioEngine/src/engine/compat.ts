@@ -4,9 +4,12 @@ export type EngineCompat = {
     clearAnimoCacheOnLoad: boolean
     simpleWorldPathing: boolean
     modernScripts: boolean
+    sequenceSubevents: boolean
     jpegImages: boolean
     packedSounds: boolean
     serialTicks: boolean
+    imageInvalidation: boolean
+    scriptedCursor: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -27,9 +30,12 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
     return {
         clearAnimoCacheOnLoad: name !== 'default',
         simpleWorldPathing: name === 'magicienii',
-        modernScripts: name === 'nemo' || name === 'timpului',
+        modernScripts: name === 'magicienii' || name === 'nemo' || name === 'timpului',
+        sequenceSubevents: name === 'nemo' || name === 'timpului',
         jpegImages: name === 'nemo' || name === 'timpului',
         packedSounds: name === 'nemo',
         serialTicks: name !== 'default',
+        imageInvalidation: name !== 'default',
+        scriptedCursor: name !== 'default',
     }
 }

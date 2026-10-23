@@ -58,6 +58,8 @@ const KEY_OBJECT_PATTERN =
 
 export class EngineDiagnostics {
     private readonly traceScene: string
+    private noisyWindowStarted = 0
+    private noisyWindowCount = 0
 
     constructor(
         private readonly engine: Engine,
@@ -297,6 +299,7 @@ export class EngineDiagnostics {
 
             if (object.definition.TYPE === 'ANIMO') {
                 const renderObject = typeof anyObject.getRenderObject === 'function' ? anyObject.getRenderObject() : null
+                if ((!renderObject?.visible || renderObject.width <= 2) && !['ANNREX', 'ANNKRET', 'STRZAL'].includes(object.name)) continue
                 animos.push({
                     name: object.name,
                     visible: Boolean(renderObject?.visible),
@@ -418,6 +421,19 @@ export class EngineDiagnostics {
     private write(kind: string, payload: Record<string, unknown>) {
         if (!this.enabled) {
             return
+        }
+
+        // Leave room in the launcher's log budget for scene, input and path events.
+        const noisy = ['object-lookup', 'statement', 'condition', 'behaviour', 'display', 'timer'].includes(kind)
+            || (kind === 'callback' && ['ONFRAMECHANGED', 'ONTICK', 'ONMOVE'].includes(String(payload.type)))
+            || (kind === 'value' && /^(VARITEMP|VARDTEMP)/.test(String(payload.name)))
+        if (noisy) {
+            const now = Date.now()
+            if (now - this.noisyWindowStarted >= 1000) {
+                this.noisyWindowStarted = now
+                this.noisyWindowCount = 0
+            }
+            if (++this.noisyWindowCount > 30) return
         }
 
         console.info(`[trace:${kind}] ${JSON.stringify(payload)}`)

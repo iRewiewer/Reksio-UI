@@ -16,6 +16,12 @@ export class Double extends ValueType<DoubleDefinition, number> {
     }
 
     @method()
+    async DIV(value: number) {
+        if (!this.engine.compat.simpleWorldPathing && !this.engine.compat.modernScripts) return this.__call('DIV', [value])
+        return await this.setValue(this.value / value)
+    }
+
+    @method()
     async ADD(value: number) {
         return await this.setValue(this.value + value)
     }

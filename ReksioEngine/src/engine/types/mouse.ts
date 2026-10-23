@@ -150,7 +150,7 @@ export class Mouse extends Type<MouseDefinition> {
 
     @method()
     SETPOSITION(x: number, y: number) {
-        if (this.engine.compat.clearAnimoCacheOnLoad) {
+        if (this.engine.compat.scriptedCursor) {
             this.mousePosition.set(x, y)
             this.moved = true
             return

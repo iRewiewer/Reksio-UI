@@ -173,7 +173,7 @@ export class World extends Type<WorldDefinition> {
     }
 
     @method()
-    SETACTIVE(pathId: number, pointId?: number | boolean, active?: boolean) {
+    SETACTIVE(pathId: number, pointId?: number | boolean, active?: boolean | number) {
         this.ensurePathingEnabled()
     }
 
@@ -206,7 +206,7 @@ export class World extends Type<WorldDefinition> {
     }
 
     @method()
-    FINDPATH(id: number, pathId: number, targetX: number, targetY: number, targetZ: number) {
+    FINDPATH(id: number, pathId: number, targetX: number, targetY: number, targetZ: number, force?: boolean, signal?: boolean) {
         this.ensurePathingEnabled()
         const body = this.getBody(id)
         body.targetX = targetX

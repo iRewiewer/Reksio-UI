@@ -101,6 +101,10 @@ export class ArrayObject extends ValueType<ArrayDefinition, any[]> {
 
     @method()
     FIND(value: any) {
+        if (this.engine.compat.modernScripts) {
+            const target = valueAsString(value).toUpperCase()
+            return this.value.findIndex((entry) => valueAsString(entry).toUpperCase() === target)
+        }
         let position = this.value.indexOf(value)
         if (position == -1) {
             position = this.value.indexOf(valueAsString(value))
@@ -110,6 +114,13 @@ export class ArrayObject extends ValueType<ArrayDefinition, any[]> {
 
     @method()
     REVERSEFIND(value: any) {
+        if (this.engine.compat.modernScripts) {
+            const target = valueAsString(value).toUpperCase()
+            for (let index = this.value.length - 1; index >= 0; index--) {
+                if (valueAsString(this.value[index]).toUpperCase() === target) return index
+            }
+            return -1
+        }
         let position = this.value.lastIndexOf(value)
         if (position == -1) {
             position = this.value.lastIndexOf(valueAsString(value))

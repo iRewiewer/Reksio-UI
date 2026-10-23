@@ -73,12 +73,20 @@ test('SND indexes multiple names and preserves payload boundaries', () => {
     assert.throws(() => readSoundArchive(new ArrayBuffer(4)), /header/);
 });
 
-test('Nemo database lookup is case-insensitive without changing default profile', () => {
+test('Nemo database lookup is case-insensitive without changing default profile', async () => {
     const database = new Database({ compat: createEngineCompat('nemo') });
     database.content = [{ GETFIELD: () => ({ getValue: () => 'game_status' }) }];
-    assert.equal(database.FIND('NAME', 'GAME_STATUS', 0), 0);
+    assert.equal(await database.FIND('NAME', 'GAME_STATUS', 0), 0);
     database.engine.compat = createEngineCompat();
     assert.equal(database.FIND('NAME', 'GAME_STATUS', 0), -1);
+});
+
+test('Magicienii database lookup awaits INTEGER fields', async () => {
+    const database = new Database({ compat: createEngineCompat('magicienii') });
+    database.content = [101, 102, 104, 108].map((value) => ({ GETFIELD: () => ({ getValue: async () => value }) }));
+    assert.equal(await database.FIND('TYPE', 102, 0), 1);
+    assert.equal(await database.FIND('TYPE', 108, 0), 3);
+    assert.equal(await database.FIND('TYPE', 999, 0), -1);
 });
 
 test('Nemo cutscene table accepts an absent optional last column', async () => {
@@ -127,4 +135,93 @@ test('baseline sequences do not emit new subsection callbacks', async () => {
     sequence.advanceQueue = async () => { advances++; };
     await sequence.progressNext();
     assert.equal(advances, 1);
+});
+
+const { World } = loadModule('engine/types/world.ts', {
+    './index': { Type: FakeType },
+    '../../common/types': decorator,
+    '../../common/errors': { NotImplementedError: Error },
+});
+
+test('Magicienii path movement reaches its target and signals it only once', async () => {
+    const positions = [];
+    const signals = [];
+    const actor = {
+        SETPOSITION: (x, y) => { positions.push([x, y]); },
+        SIGNAL: (signal) => { signals.push(signal); },
+        GETPOSITIONX: () => 400,
+        GETPOSITIONY: () => 300,
+    };
+    const world = new World({ compat: createEngineCompat('magicienii'),
+        getObject: () => actor, diagnostics: { worldState() {} } });
+    world.LINK(100, 'ANNREX');
+    world.START();
+    world.FINDPATH(100, 9000, 200, 300, 0, false, false);
+    for (let i = 0; i < 90; i++) {
+        world.tick(1000 / 60);
+        await world.FOLLOWPATH(100, 20, 0.5, 300);
+    }
+    assert.deepEqual(positions.at(-1), [200, 300]);
+    assert.deepEqual(signals, ['ATGOAL']);
+    assert.equal(world.GETMOVEDISTANCE(100), 0);
+    const baseline = new World({ compat: createEngineCompat() });
+    assert.throws(() => baseline.START());
+});
+
+test('Magicienii double division preserves fractional directions', async () => {
+    class Value extends FakeType {
+        value = 0;
+        setValue(value) { this.value = value; }
+        __call() { return 'unsupported'; }
+    }
+    const { Double } = loadModule('engine/types/double.ts', {
+        './index': { ValueType: Value }, '../../common/types': decorator,
+    });
+    const value = new Double({ compat: createEngineCompat('magicienii') });
+    await value.SET(22.5);
+    await value.DIV(45);
+    assert.equal(value.GET(), 0.5);
+    value.engine.compat = createEngineCompat();
+    assert.equal(await value.DIV(45), 'unsupported');
+});
+
+test('Magicienii entrance arrays match NULL fields and script string names', () => {
+    const { ArrayObject } = loadModule('engine/types/array.ts', {
+        './index': { ValueType: FakeType },
+        '../../common/errors': { assert: assert.ok },
+        '../../common/types': { ...decorator, valueAsString: (value) => value === null ? 'NULL' : String(value) },
+        '../../filesystem/fileLoader': { FileNotFoundError: Error },
+        '../../fileFormats/archive/array': {},
+        '../logging': { logger: {} },
+    });
+    const entries = new ArrayObject({ compat: createEngineCompat('magicienii') });
+    entries.value = [null, 'LUSTRO', null];
+    assert.equal(entries.FIND('NULL'), 0);
+    assert.equal(entries.REVERSEFIND('NULL'), 2);
+    assert.equal(entries.FIND('lustro'), 1);
+    assert.equal(entries.FIND('missing'), -1);
+    entries.engine.compat = createEngineCompat();
+    assert.equal(entries.FIND('NULL'), -1);
+});
+
+test('Magicienii dialogue sequences resolve dynamically loaded SOUND objects', async () => {
+    const sequence = new Sequence({ compat: createEngineCompat('magicienii') });
+    const entry = { NAME: 'GADABLANK', TYPE: 'SPEAKING', ANIMOFN: 'ANNCHARACTER', WAVFN: 'SNDATGOAL', PREFIX: 'GADA' };
+    const actor = { definition: { FILENAME: 'ANNCHARACTER' }, hasEvent: () => false };
+    let onEnd;
+    let finished;
+    sequence.activeAnimo = actor;
+    sequence.sequenceName = 'GADABLANK';
+    sequence.queue = [entry];
+    sequence.getObject = (name) => name === 'SNDATGOAL' ? {
+        definition: { TYPE: 'SOUND' }, playForSequence: (callback) => { onEnd = callback; return { stop() {} }; },
+    } : null;
+    sequence.callbacks = { run: async (event, name) => { finished = [event, name]; } };
+    await sequence.advanceQueue();
+    assert.equal(typeof onEnd, 'function');
+    assert.equal(sequence.ISPLAYING(), true);
+    onEnd();
+    await sequence.tick(16);
+    assert.equal(sequence.ISPLAYING(), false);
+    assert.deepEqual(finished, ['ONFINISHED', 'GADABLANK']);
 });

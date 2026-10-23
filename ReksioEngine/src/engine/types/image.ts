@@ -144,6 +144,10 @@ export class Image extends DisplayType<ImageDefinition> {
 
     @method()
     INVALIDATE() {
+        if (this.engine.compat.imageInvalidation) {
+            // PIXI redraws each frame; LOAD has already replaced the image texture.
+            return
+        }
         throw new NotImplementedError()
     }
 

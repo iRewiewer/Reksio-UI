@@ -17,6 +17,7 @@ import { createObject } from '../../filesystem/definitionLoader'
 import { method } from '../../common/types'
 import { Sound, SoundInstance } from '../audio'
 import { logger } from '../logging'
+import type { Sound as SoundObject } from './sound'
 
 const paramsCharacterSet = '123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz{|}~'
 
@@ -111,6 +112,9 @@ export class Sequence extends Type<SequenceDefinition> {
 
         const sounds = await Promise.all(
             soundsNames.map(async (name: string): Promise<Sound | null> => {
+                if (this.engine.compat.modernScripts && this.getObject(name)?.definition.TYPE === 'SOUND') {
+                    return null
+                }
                 logger.debug(`Preloading sound ${name}...`, {
                     sequence: this,
                 })
@@ -150,7 +154,7 @@ export class Sequence extends Type<SequenceDefinition> {
 
         const subEntries = this.subEntries.get(this.parameterSequence.NAME)
         if (subEntries !== undefined && this.parametersMapping.has(sequenceName)) {
-            if (this.engine.compat.modernScripts) {
+            if (this.engine.compat.sequenceSubevents) {
                 this.paused = false
                 this.queue = []
                 this.runningSubSequence = null
@@ -193,7 +197,7 @@ export class Sequence extends Type<SequenceDefinition> {
 
     @method()
     PAUSE() {
-        if (!this.engine.compat.modernScripts) return this.__call('PAUSE', [])
+        if (!this.engine.compat.sequenceSubevents) return this.__call('PAUSE', [])
         this.paused = true
         if (this.runningSubSequence) this.activeAnimo?.PAUSE()
         this.playingSound?.pause()
@@ -201,7 +205,7 @@ export class Sequence extends Type<SequenceDefinition> {
 
     @method()
     async RESUME() {
-        if (!this.engine.compat.modernScripts) return this.__call('RESUME', [])
+        if (!this.engine.compat.sequenceSubevents) return this.__call('RESUME', [])
         this.paused = false
         if (this.runningSubSequence) {
             this.activeAnimo?.RESUME()
@@ -255,7 +259,7 @@ export class Sequence extends Type<SequenceDefinition> {
     }
 
     private async progressNext() {
-        if (this.engine.compat.modernScripts) {
+        if (this.engine.compat.sequenceSubevents) {
             if (this.advancing || this.paused) return
             this.advancing = true
             try {
@@ -311,13 +315,19 @@ export class Sequence extends Type<SequenceDefinition> {
                     sequence: this,
                 })
                 const sound = this.sounds.get(speaking.WAVFN)
-                if (sound) {
+                const soundObject = this.engine.compat.modernScripts
+                    ? this.getObject<SoundObject>(speaking.WAVFN) : null
+                if (soundObject?.definition.TYPE === 'SOUND') {
+                    this.playingSound = soundObject.playForSequence(() => {
+                        this.endedSpeakingSoundsQueue.push(speaking)
+                    })
+                } else if (sound) {
                     this.playingSound = sound.play({
                         onEnd: () => {
                             this.endedSpeakingSoundsQueue.push(speaking)
                         },
                     })
-                } else if (this.engine.compat.modernScripts) {
+                } else if (this.engine.compat.sequenceSubevents) {
                     logger.warn(`Sequence sound missing: ${speaking.WAVFN}`)
                     this.endedSpeakingSoundsQueue.push(speaking)
                 }

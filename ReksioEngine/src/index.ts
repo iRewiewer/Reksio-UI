@@ -19,6 +19,7 @@ export type GamePlayerOptions = {
     fileLoader: FileLoader
     storage: FileStorage
     startScene?: string
+    startSceneObject?: string
     saveFile?: SaveFile
     debug?: boolean
     trace?: boolean

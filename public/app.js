@@ -1192,6 +1192,12 @@ function buildLaunchUrl(game) {
     params.set('compatProfile', compatProfile);
   }
 
+  // A targeted scene override is useful for reproducing a bug without changing other games.
+  if (launcherParams.get('game') === game.id && launcherParams.has('scene')) {
+    params.set('scene', launcherParams.get('scene'));
+    if (launcherParams.has('sceneObject')) params.set('sceneObject', launcherParams.get('sceneObject'));
+  }
+
   if (state.traceEnabled) {
     params.set('trace', '1');
     params.set('traceScene', '*');

@@ -21,6 +21,7 @@ const traceScene = urlParams.get('traceScene') ?? 'CIEMNOSC'
 
 const baseOptions = {
     startScene: urlParams.get('scene') ?? undefined,
+    startSceneObject: urlParams.get('sceneObject') ?? undefined,
     debug: urlParams.has('debug') ? urlParams.get('debug') == 'true' : BUILD_VARS.debug,
     trace: traceEnabled,
     traceScene,

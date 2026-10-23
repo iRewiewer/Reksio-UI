@@ -101,6 +101,15 @@ export class Engine {
 
             await this.debug.fillSceneSelector()
             const checkpoint = this.options.checkpoint
+            if (!checkpoint && this.options.compatProfile === 'magicienii' &&
+                this.options.startScene === 'ARCADE' && this.options.startSceneObject) {
+                // The debug override must be applied after the menu loads GAME0.ARR.
+                this.currentScene = this.getObject<Scene>('ARCADE')
+                await this.getObject<Behaviour>('__GAME_INIT__')?.RUN()
+                const sceneObject = this.getObject<ValueType<any, string>>('G_SARCADEOBJECTS')
+                await sceneObject?.setValue(this.options.startSceneObject.toUpperCase())
+                this.currentScene = null
+            }
             if (checkpoint) {
                 // Recreate persistent UI classes before applying captured global values.
                 this.currentScene = this.getObject<Scene>(checkpoint.scene)

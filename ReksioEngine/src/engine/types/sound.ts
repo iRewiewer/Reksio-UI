@@ -35,10 +35,17 @@ export class Sound extends Type<SoundDefinition> {
     // This argument is "PLAY" for kurator in intro for some reason
     @method()
     PLAY(arg?: any) {
+        this.playForSequence()
+    }
+
+    playForSequence(onEnd?: () => void) {
         assert(this.sound !== null)
-        this.sound.play({
+        return this.sound.play({
             onStart: this.onStart.bind(this),
-            onEnd: this.onEnd.bind(this),
+            onEnd: () => {
+                this.onEnd()
+                onEnd?.()
+            },
         })
     }
 
