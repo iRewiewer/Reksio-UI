@@ -90,6 +90,8 @@ export class Database extends Type<DatabaseDefinition> {
     REMOVEALL() {
         this.content.forEach((item) => item.destroy())
         this.content = []
+        // Scene tables can be shorter than the table whose selected row was cleared.
+        if (this.engine.compat.resetDatabaseCursor) this.cursorPosition = 0
         this.updateCursorValue()
     }
 

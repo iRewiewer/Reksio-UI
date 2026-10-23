@@ -1,8 +1,25 @@
 import type { Engine } from '../index'
+import type { SequenceFile } from '../../fileFormats/seq'
 
 export function patchMagicieniiArray(filename: string, entries: any[]): any[] {
     if (filename !== 'dane/game/przygoda/arcade/telep_podworko/idle_kogut.arr') return entries
     return entries.map((entry) => entry === 'KUGUT_U103' ? 'KOGUT_U103' : entry)
+}
+
+export function patchMagicieniiSequence(filename: string, entries: SequenceFile): SequenceFile {
+    if (filename !== 'dane/game/przygoda/dialogs/blank.seq') return entries
+    const placeholder = entries.find((entry) =>
+        entry.NAME === 'NOWY' && entry.TYPE === 'SIMPLE' && entry.FILENAME === 'BOLEK.ANN'
+    )
+    if (!placeholder) return entries
+
+    // Dialogs only plays GADABLANK; the unused editor placeholder prevents eager sequence loading.
+    return entries.filter((entry) => entry !== placeholder).map((entry) => {
+        if (entry.TYPE !== 'SEQUENCE' || entry.MODE !== 'PARAMETER' || !entry.SEQEVENT) return entry
+        const events = new Map(entry.SEQEVENT)
+        events.delete('NOWY')
+        return { ...entry, SEQEVENT: events }
+    })
 }
 
 export function restoreMagicieniiTransitionState(engine: Engine) {

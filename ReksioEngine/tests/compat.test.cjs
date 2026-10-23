@@ -618,6 +618,95 @@ test('Magicienii database lookup awaits INTEGER fields', async () => {
     assert.equal(await database.FIND('TYPE', 999, 0), -1);
 });
 
+test('Magicienii dialogue sequence repair removes only its unused missing placeholder', () => {
+    const { patchMagicieniiSequence } = loadModule('engine/patches/magicienii.ts');
+    assert.equal(typeof patchMagicieniiSequence, 'function');
+    const root = { NAME: 'BLANK', TYPE: 'SEQUENCE', MODE: 'PARAMETER',
+        SEQEVENT: new Map([['GADABLANK', '1'], ['NOWY', '2']]) };
+    const speaking = { NAME: 'GADABLANK', TYPE: 'SPEAKING', ADD: 'BLANK',
+        ANIMOFN: 'ANNCHARACTER', WAVFN: 'SNDANSWER' };
+    const placeholder = { NAME: 'NOWY', TYPE: 'SIMPLE', ADD: 'BLANK', FILENAME: 'BOLEK.ANN', EVENT: 'NOWY' };
+    const entries = [root, speaking, placeholder];
+    const repaired = patchMagicieniiSequence('dane/game/przygoda/dialogs/blank.seq', entries);
+    assert.deepEqual(repaired.map((entry) => entry.NAME), ['BLANK', 'GADABLANK']);
+    assert.deepEqual([...repaired[0].SEQEVENT], [['GADABLANK', '1']]);
+    assert.equal(repaired[1], speaking);
+    assert.equal(root.SEQEVENT.has('NOWY'), true);
+    assert.equal(entries.length, 3);
+    assert.equal(patchMagicieniiSequence('dane/game/przygoda/arcade/blank.seq', entries), entries);
+    const valid = [root, speaking, { ...placeholder, FILENAME: 'PRESENT.ANN' }];
+    assert.equal(patchMagicieniiSequence('dane/game/przygoda/dialogs/blank.seq', valid), valid);
+});
+
+test('Magicienii clears a database cursor before loading a smaller scene table', async () => {
+    const { Scope } = loadModule('engine/scope.ts', { '../common/errors': { assert: assert.ok } });
+    const scope = new Scope('class_instance');
+    const database = new Database({
+        compat: createEngineCompat('magicienii'),
+        currentScene: { getRelativePath: async (filename) => filename },
+        filesystem: { getFile: async () => new TextEncoder().encode('office\r\n').buffer },
+    });
+    database.name = 'DBOBJECTS';
+    database.parentScope = scope;
+    let destroyed = 0;
+    database.content = Array.from({ length: 21 }, () => ({ destroy() { destroyed++; } }));
+    database.SELECT(20);
+    assert.equal(scope.get('DBOBJECTS_CURSOR'), database.content[20]);
+    database.REMOVEALL();
+    assert.equal(destroyed, 21);
+    assert.equal(database.GETCURSORPOS(), 0);
+    assert.equal(scope.get('DBOBJECTS_CURSOR'), null);
+
+    const row = { setField: async () => {}, isReady: true };
+    database.baseStruct = { structure: new Map([['NAME', 'STRING']]), clone: async () => row };
+    await database.LOAD('office.dta');
+    assert.equal(scope.get('DBOBJECTS_CURSOR'), row);
+    assert.deepEqual(scope.objects, [row]);
+    assert.ok(scope.objects.filter((object) => object.isReady).includes(row));
+});
+
+test('database cursor reset is Magicienii-only and does not change append loading', async () => {
+    for (const profile of ['magicienii', 'default', 'nemo', 'timpului', 'ozn']) {
+        const database = new Database({ compat: createEngineCompat(profile) });
+        database.parentScope = { set() {}, remove() {} };
+        database.content = Array.from({ length: 3 }, () => ({ destroy() {} }));
+        database.SELECT(2);
+        database.REMOVEALL();
+        assert.equal(database.GETCURSORPOS(), profile === 'magicienii' ? 0 : 2);
+    }
+    const rows = [];
+    let text = 'one\r\ntwo\r\nthree\r\n';
+    const scope = new Map();
+    const database = new Database({
+        compat: createEngineCompat('magicienii'),
+        currentScene: { getRelativePath: async (filename) => filename },
+        filesystem: { getFile: async () => new TextEncoder().encode(text).buffer },
+    });
+    database.name = 'DB';
+    database.parentScope = { set: (name, row) => scope.set(name, row), remove: (name) => scope.delete(name) };
+    database.baseStruct = {
+        structure: new Map([['NAME', 'STRING']]),
+        clone: async () => {
+            const row = { setField: async () => {}, destroy() {} };
+            rows.push(row);
+            return row;
+        },
+    };
+    await database.LOAD('first.dta');
+    database.SELECT(2);
+    text = 'four\r\nfive\r\n';
+    await database.LOAD('append.dta');
+    assert.equal(database.GETROWSNO(), 5);
+    assert.equal(database.GETCURSORPOS(), 2);
+    assert.equal(scope.get('DB_CURSOR'), rows[2]);
+    database.REMOVEALL();
+    text = '';
+    await database.LOAD('empty.dta');
+    assert.equal(database.GETCURSORPOS(), 0);
+    assert.equal(database.GETROWSNO(), 0);
+    assert.equal(scope.has('DB_CURSOR'), false);
+});
+
 test('Nemo cutscene table accepts an absent optional last column', async () => {
     const rows = [];
     const database = new Database({
