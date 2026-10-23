@@ -3,6 +3,7 @@ import * as PIXI from 'pixi.js'
 import { FileLoader } from './filesystem/fileLoader'
 import { SaveFile, SaveFileManager } from './engine/saveFile'
 import { FileStorage } from './filesystem/fileStorage'
+import type { CompatProfile } from './engine/compat'
 export * as FileLoaders from './filesystem/fileLoader'
 export { SaveFile, SaveFileManager, createSaveFileLocalStorageHandler } from './engine/saveFile'
 export { FileStorage, IndexedDBStorage } from './filesystem/fileStorage'
@@ -21,6 +22,7 @@ export type GamePlayerOptions = {
     debug?: boolean
     trace?: boolean
     traceScene?: string
+    compatProfile?: CompatProfile | string
     debugContainer?: HTMLElement | null
     onExit?: () => void
     onSceneChange?: (next: string, previous?: string) => void

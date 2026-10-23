@@ -23,6 +23,7 @@ const baseOptions = {
     debug: urlParams.has('debug') ? urlParams.get('debug') == 'true' : BUILD_VARS.debug,
     trace: traceEnabled,
     traceScene,
+    compatProfile: urlParams.get('compatProfile') ?? undefined,
     debugContainer: debugContainer,
     onExit: () => document.exitFullscreen(),
     saveFile: areSavesEnabled ? SaveFileManager.fromLocalStorage() : undefined,
@@ -132,6 +133,10 @@ const shouldForwardConsoleLog = (level: string) => {
 }
 
 const shouldPrintOriginalConsoleLog = (level: string) => {
+    if (traceEnabled && level === 'info') {
+        return true
+    }
+
     if (level !== 'warn' && level !== 'error') {
         return false
     }
@@ -230,6 +235,7 @@ console.info('ReksioEngine player booting', {
     buildTime: BUILD_VARS.buildTime,
     trace: traceEnabled,
     traceScene: traceEnabled ? traceScene : null,
+    compatProfile: urlParams.get('compatProfile'),
 })
 
 let config = {}

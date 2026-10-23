@@ -418,6 +418,7 @@ h2 {
   color: #fff;
 }
 
+.icon-button[aria-pressed="true"],
 .tool-button[aria-pressed="true"] {
   border-color: var(--gold);
   color: #f1d277;
@@ -448,6 +449,12 @@ h2 {
   border: 0;
   border-radius: 6px;
   background: #000;
+}
+
+.game-frame.cursor-hidden,
+.game-frame.cursor-hidden:hover,
+.game-frame.cursor-hidden:fullscreen {
+  cursor: none;
 }
 
 .stage-empty {

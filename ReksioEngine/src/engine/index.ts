@@ -18,6 +18,8 @@ import { globalAudio, SoundInstance } from './audio'
 import { logger } from './logging'
 import { setFormatsLogger } from '../fileFormats/logger'
 import { EngineDiagnostics } from './diagnostics'
+import { createEngineCompat } from './compat'
+import type { EngineCompat } from './compat'
 
 export class Engine {
     public debug: Debugging
@@ -36,12 +38,14 @@ export class Engine {
 
     public filesystem: Filesystem
     public music: SoundInstance | null = null
+    public readonly compat: EngineCompat
 
     constructor(
         public readonly app: Application,
         public readonly options: GamePlayerOptions
     ) {
         setFormatsLogger(logger)
+        this.compat = createEngineCompat(options.compatProfile)
         this.rendering = new RenderingManager(app)
         this.scopeManager = new ScopeManager()
         this.diagnostics = new EngineDiagnostics(this, this.options.trace ?? false, this.options.traceScene)

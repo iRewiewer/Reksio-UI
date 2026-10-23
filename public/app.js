@@ -32,6 +32,7 @@ const nodes = {
   fullscreenButton: document.getElementById('fullscreenButton'),
   gameFrame: document.getElementById('gameFrame'),
   gameList: document.getElementById('gameList'),
+  hideCursorButton: document.getElementById('hideCursorButton'),
   isoDropZone: document.getElementById('isoDropZone'),
   isoFileInput: document.getElementById('isoFileInput'),
   isoFileLabel: document.getElementById('isoFileLabel'),
@@ -87,6 +88,7 @@ const SNAPSHOT_STORE_NAME = 'snapshots';
 const SNAPSHOT_GAME_INDEX = 'gameId';
 const ENGINE_DB_NAME = 'reksio';
 const ENGINE_FILESYSTEM_STORE_NAME = 'filesystem';
+const GAME_CURSOR_STYLE_ID = 'reksio-launcher-hide-cursor-style';
 
 function icon(name) {
   return `<svg><use href="#icon-${name}"></use></svg>`;
@@ -483,6 +485,90 @@ function addLog(source, level, message, detail = '') {
 function renderTraceButton() {
   nodes.traceButton.setAttribute('aria-pressed', String(state.traceEnabled));
   nodes.traceButton.title = state.traceEnabled ? 'Engine trace enabled' : 'Enable engine trace';
+}
+
+function cursorHiddenKey(gameId) {
+  return `reksioLauncher.hideCursor.${gameId}`;
+}
+
+function gamePrefersHiddenCursor(game) {
+  const label = [game.id, game.title, game.originalTitle]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return /(magicien|magicians|czarodzieje)/.test(label);
+}
+
+function isGameCursorHidden(game) {
+  const stored = localStorage.getItem(cursorHiddenKey(game.id));
+  return stored === null ? gamePrefersHiddenCursor(game) : stored === 'true';
+}
+
+function setGameCursorHidden(game, isHidden) {
+  localStorage.setItem(cursorHiddenKey(game.id), String(isHidden));
+}
+
+function applyCursorPreferenceToFrame(isHidden) {
+  nodes.gameFrame.classList.toggle('cursor-hidden', isHidden);
+
+  try {
+    const doc = nodes.gameFrame.contentDocument;
+
+    if (!doc) {
+      return;
+    }
+
+    const existingStyle = doc.getElementById(GAME_CURSOR_STYLE_ID);
+
+    if (!isHidden) {
+      existingStyle?.remove();
+      return;
+    }
+
+    if (existingStyle) {
+      return;
+    }
+
+    const style = doc.createElement('style');
+    style.id = GAME_CURSOR_STYLE_ID;
+    style.textContent = 'html, body, body *, canvas { cursor: none !important; }';
+    (doc.head || doc.documentElement).appendChild(style);
+  } catch (error) {
+    addLog('launcher', 'warn', 'Failed to apply game cursor preference', error);
+  }
+}
+
+function renderHideCursorButton() {
+  const game = getSelectedGame();
+  const isHidden = Boolean(game && isGameCursorHidden(game));
+
+  nodes.hideCursorButton.disabled = !game;
+  nodes.hideCursorButton.setAttribute('aria-pressed', String(isHidden));
+  const label = isHidden
+    ? 'Show system cursor over game'
+    : 'Hide system cursor over game';
+  nodes.hideCursorButton.title = label;
+  nodes.hideCursorButton.setAttribute('aria-label', label);
+  applyCursorPreferenceToFrame(isHidden);
+}
+
+function toggleHiddenCursor() {
+  const game = getSelectedGame();
+
+  if (!game) {
+    return;
+  }
+
+  const nextValue = !isGameCursorHidden(game);
+  setGameCursorHidden(game, nextValue);
+  renderHideCursorButton();
+  addLog(
+    'launcher',
+    'info',
+    nextValue ? 'System cursor hidden over game' : 'System cursor visible over game',
+    game.title
+  );
 }
 
 function toggleTrace() {
@@ -1029,6 +1115,19 @@ function languageCode(game) {
   return (game.locale || game.language || 'custom').slice(0, 2).toUpperCase();
 }
 
+function compatProfileForGame(game) {
+  const label = [game.id, game.title, game.originalTitle]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (/(magicien|magicians|czarodzieje)/.test(label)) {
+    return 'magicienii';
+  }
+
+  return '';
+}
+
 function buildLaunchUrl(game) {
   if (game.type !== 'iso') {
     throw new Error(`Unsupported game type: ${game.type}`);
@@ -1041,6 +1140,11 @@ function buildLaunchUrl(game) {
   } else {
     params.set('loader', 'iso-remote');
     params.set('source', absoluteUrl(game.isoUrl));
+  }
+
+  const compatProfile = compatProfileForGame(game);
+  if (compatProfile) {
+    params.set('compatProfile', compatProfile);
   }
 
   if (state.traceEnabled) {
@@ -1310,11 +1414,13 @@ function renderDetails() {
     nodes.metaList.innerHTML = '';
     nodes.stageEmpty.hidden = false;
     nodes.gameFrame.hidden = true;
+    nodes.hideCursorButton.disabled = true;
     nodes.traceButton.disabled = true;
     nodes.fullscreenButton.disabled = true;
     nodes.snapshotsButton.disabled = true;
     nodes.resetSaveButton.disabled = true;
     nodes.deleteGameButton.disabled = true;
+    renderHideCursorButton();
     return;
   }
 
@@ -1341,6 +1447,7 @@ function renderDetails() {
 
   nodes.stageEmpty.hidden = true;
   nodes.gameFrame.hidden = false;
+  renderHideCursorButton();
   nodes.traceButton.disabled = false;
   nodes.fullscreenButton.disabled = false;
   nodes.snapshotsButton.disabled = false;
@@ -1661,6 +1768,7 @@ nodes.isoDropZone.addEventListener('drop', (event) => {
 });
 
 nodes.isoForm.addEventListener('submit', uploadIso);
+nodes.hideCursorButton.addEventListener('click', toggleHiddenCursor);
 nodes.traceButton.addEventListener('click', toggleTrace);
 nodes.fullscreenButton.addEventListener('click', () => {
   if (nodes.gameFrame.requestFullscreen) {
@@ -1676,6 +1784,7 @@ nodes.deleteGameButton.addEventListener('click', () => {
 nodes.resetSaveButton.addEventListener('click', resetSelectedSave);
 nodes.gameFrame.addEventListener('load', () => {
   syncCurrentSave();
+  renderHideCursorButton();
   addLog('launcher', 'info', 'Game iframe loaded', nodes.gameFrame.src);
 });
 window.addEventListener('message', handleEngineMessage);

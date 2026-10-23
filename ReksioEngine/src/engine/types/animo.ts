@@ -414,6 +414,12 @@ export class Animo extends DisplayType<AnimoDefinition> {
         await this.events?.trigger('ONSTARTED', index)
     }
 
+    @method()
+    async SIGNAL(name: string) {
+        await this.callbacks.run('ONSIGNAL', name.toUpperCase())
+        await this.events?.trigger('ONSIGNAL', name.toUpperCase())
+    }
+
     // For some reason there is sometimes a string passed
     @method()
     async STOP(shouldSignal?: boolean | string) {
@@ -766,6 +772,10 @@ export class Animo extends DisplayType<AnimoDefinition> {
     @method()
     async LOAD(path: string) {
         this.destroy()
+        if (this.engine.compat.clearAnimoCacheOnLoad) {
+            this.textures = new Map()
+            this.hitmaps = new Map()
+        }
         this.annFile = await this.loadAnimation(path)
         await this.initSprite()
     }

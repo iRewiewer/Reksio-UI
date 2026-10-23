@@ -126,6 +126,7 @@ export class DisplayType<DefinitionType extends DisplayTypeDefinition> extends T
         renderObject.zIndex = priority
         this.engine.rendering.putAtZindex(renderObject, priority)
         this.engine.rendering.sortObjects()
+        this.engine.diagnostics.displayState(this, 'SETPRIORITY')
     }
 
     getRenderObject(): AdvancedSprite | null {
