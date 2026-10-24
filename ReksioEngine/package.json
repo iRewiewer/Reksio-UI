@@ -16,6 +16,7 @@
     "dependencies": {
         "@pixi/devtools": "^2.0.1",
         "antlr4": "^4.13.1-patch-1",
+        "cannon-es": "0.20.0",
         "idb": "^8.0.3",
         "ini": "^5.0.0",
         "lzo-ts": "^0.2.3",

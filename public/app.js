@@ -1245,6 +1245,10 @@ function buildLaunchUrl(game) {
     if (launcherParams.has('sceneObject')) params.set('sceneObject', launcherParams.get('sceneObject'));
   }
 
+  if (launcherParams.get('game') === game.id && launcherParams.get('debug') === 'true') {
+    params.set('debug', 'true');
+  }
+
   if (state.traceEnabled) {
     params.set('trace', '1');
     params.set('traceScene', '*');

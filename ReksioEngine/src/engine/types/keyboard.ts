@@ -99,6 +99,7 @@ export class Keyboard extends Type<KeyboardDefinition> {
 
     private setKeyState(keyCode: string, value: boolean) {
         const mapped = keysMapping[keyCode]
+        if (this.engine.compat.underwaterPhysics) this.engine.diagnostics.keyboardState(mapped ?? keyCode, value)
         if (!mapped) {
             logger.warn(`Unsupported keyboard key code ${keyCode}`, {
                 supportedKeys: Object.keys(keysMapping),

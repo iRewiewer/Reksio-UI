@@ -33,6 +33,7 @@ export type EngineCompat = {
     persistedArcadeCheckpoints: boolean
     backgroundImagePositions: boolean
     linkedBodyPositions: boolean
+    underwaterPhysics: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -83,5 +84,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         persistedArcadeCheckpoints: name === 'nemo',
         backgroundImagePositions: name === 'magicienii',
         linkedBodyPositions: name === 'timpului',
+        underwaterPhysics: name === 'timpului',
     }
 }

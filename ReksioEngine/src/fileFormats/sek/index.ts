@@ -5,9 +5,10 @@ export type SekPath = {
     nodes: SekNode[]
     edges: { from: number; to: number; flags: number }[]
 }
-export type SekWorld = { bodies: { id: number; position: SekPoint }[]; paths: SekPath[] }
+export type SekGeometry = { flags: number; triangles: [SekPoint, SekPoint, SekPoint][] }
+export type SekWorld = { bodies: { id: number; position: SekPoint; geometry?: SekGeometry }[]; paths: SekPath[] }
 
-export function readSekWorld(buffer: ArrayBuffer): SekWorld {
+export function readSekWorld(buffer: ArrayBuffer, includeGeometry = false): SekWorld {
     const view = new DataView(buffer)
     const bytes = new Uint8Array(buffer)
     let offset = 0
@@ -66,12 +67,21 @@ export function readSekWorld(buffer: ArrayBuffer): SekWorld {
         // Known section sizes omit parts of the records in shipped files. The native
         // loader also reads known sections structurally and only seeks unknown ones.
         if (type === 1) {
-            const body = entity()
-            uint()
+            const body: SekWorld['bodies'][number] = entity()
+            const flags = uint()
             const triangles = uint()
+            if (includeGeometry) body.geometry = { flags, triangles: [] }
             for (let j = 0; j < triangles; j++) {
                 string()
-                skip(108)
+                if (body.geometry) {
+                    const vertices = Array.from({ length: 3 }, () => {
+                        const vertex = point()
+                        skip(20) // Normal and texture coordinates follow each position.
+                        return vertex
+                    }) as [SekPoint, SekPoint, SekPoint]
+                    body.geometry.triangles.push(vertices)
+                    skip(12) // Face color.
+                } else skip(108)
             }
             world.bodies.push(body)
         } else if (type === 4) {

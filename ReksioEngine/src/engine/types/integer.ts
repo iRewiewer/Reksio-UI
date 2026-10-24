@@ -93,6 +93,12 @@ export class Integer extends ValueType<IntegerDefinition, number> {
     }
 
     @method()
+    async ARCTANEX(y: number, x: number) {
+        if (!this.engine.compat.underwaterPhysics) return this.__call('ARCTANEX', [y, x])
+        return this.setValue((Math.atan2(y, x) * 180 / Math.PI + 360) % 360)
+    }
+
+    @method()
     async RANDOM(offset: number, range?: number) {
         if (this.engine.compat.modernScripts && range === undefined) {
             range = offset

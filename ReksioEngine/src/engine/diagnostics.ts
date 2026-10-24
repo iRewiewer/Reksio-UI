@@ -312,6 +312,11 @@ export class EngineDiagnostics {
         })
     }
 
+    keyboardState(name: string, down: boolean) {
+        if (!this.isCurrentSceneRelevant()) return
+        this.write('keyboard', { name, down })
+    }
+
     mousePosition(object: Type<any>, action: string, position: { x: number; y: number }) {
         if (!this.shouldTraceObject(object)) {
             return
@@ -491,6 +496,7 @@ export class EngineDiagnostics {
         }
 
         return KEY_OBJECT_PATTERN.test(object.name) || KEY_VALUES.has(object.name) ||
+            (this.engine.compat.underwaterPhysics && /^(WTEST|DMM_RUNNERSHOW|VARB_SCENEREADY|VARB_MAGNESSTATE)$/.test(object.name)) ||
             (this.engine.options.compatProfile === 'ozn' && /^(MAT|ANN_MOLE|BEHKEYB.*|BEHKILLED|BEHSUCCES)$/.test(object.name)) ||
             (this.engine.options.compatProfile === 'nemo' && /^(ROZWIN|ADD|PLACEGFX|ENABLEBUTTONS|BFITMP145|ANNRUNNER|ANNSLOT(?:_\d+)?|ANNITEM(?:_\d+)?)$/.test(object.name)) ||
             /^(CNVLOADER|__LOAD_DB__|BEHCLICK|BEHSEQFINISHED|BEHLOADSEQARR|BEHSEQARRPLAY|BEHINITSCRIPT|BEHPOSTINIT|BFITMP9$)/.test(object.name)

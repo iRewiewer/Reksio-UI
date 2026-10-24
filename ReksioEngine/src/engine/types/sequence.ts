@@ -173,6 +173,12 @@ export class Sequence extends Type<SequenceDefinition> {
     }
 
     @method()
+    GETEVENTNAME() {
+        if (!this.engine.compat.underwaterPhysics) return this.__call('GETEVENTNAME', [])
+        return this.sequenceName ?? ''
+    }
+
+    @method()
     HIDE() {
         assert(this.sequenceFile !== null)
 

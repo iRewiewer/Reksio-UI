@@ -10,6 +10,28 @@ import { logger } from '../logging'
 import { ClassInstance } from './class'
 
 export class CanvasObserver extends Type<CanvasObserverDefinition> {
+    private notifyFocus = false
+    private focused = false
+
+    @method()
+    ENABLENOTIFY(enabled: boolean) {
+        if (!this.engine.compat.underwaterPhysics) return this.__call('ENABLENOTIFY', [enabled])
+        this.notifyFocus = enabled
+        this.focused = document.hasFocus()
+    }
+
+    async tick() {
+        if (!this.notifyFocus || this.focused === document.hasFocus()) return
+        this.focused = document.hasFocus()
+        await this.callbacks.run(this.focused ? 'ONWINDOWFOCUSON' : 'ONWINDOWFOCUSOFF')
+    }
+
+    @method()
+    SETBKGPOS(x: number, y: number) {
+        if (!this.engine.compat.underwaterPhysics) return this.__call('SETBKGPOS', [x, y])
+        this.engine.rendering.canvasBackground.position.set(-x, -y)
+    }
+
     @method()
     async SETBACKGROUND(filename: string) {
         const relativePath = await this.engine.currentScene?.getRelativePath(filename)

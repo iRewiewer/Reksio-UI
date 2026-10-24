@@ -41,6 +41,7 @@ export class Image extends DisplayType<ImageDefinition> {
 
     destroy() {
         assert(this.sprite !== null)
+        this.releaseUnderwaterMask()
         this.engine.rendering.removeFromStage(this.sprite)
     }
 
@@ -96,10 +97,13 @@ export class Image extends DisplayType<ImageDefinition> {
 
     private maskContainer: Container | null = null
     private otherObjectsAlphaSpriteCache = new Map<string, Sprite>()
+    private underwaterMask: { container: Container; sprite: Sprite; texture: PIXI.RenderTexture;
+        lights: Map<string, Sprite> } | null = null
 
     @method()
     MERGEALPHA(x: number, y: number, name: string) {
         assert(this.sprite !== null)
+        if (this.engine.compat.underwaterPhysics) return this.mergeUnderwaterAlpha(x, y, name)
 
         if (this.maskContainer === null) {
             const maskGraphics = new Graphics()
@@ -132,9 +136,53 @@ export class Image extends DisplayType<ImageDefinition> {
         this.sprite.mask = new Sprite(this.engine.app.renderer.generateTexture(this.maskContainer))
     }
 
+    private mergeUnderwaterAlpha(x: number, y: number, name: string) {
+        assert(this.sprite !== null)
+        if (!this.underwaterMask) {
+            const container = new Container()
+            const background = new Sprite(PIXI.Texture.WHITE)
+            background.width = this.sprite.width
+            background.height = this.sprite.height
+            container.addChild(background)
+            const texture = PIXI.RenderTexture.create({ width: this.sprite.width, height: this.sprite.height })
+            const sprite = new Sprite(texture)
+            this.engine.rendering.addToStage(sprite)
+            this.underwaterMask = { container, texture, sprite, lights: new Map() }
+            this.sprite.mask = sprite
+        }
+        const mask = this.underwaterMask
+        let light = mask.lights.get(name)
+        if (!light) {
+            const object = this.getObject<DisplayType<any>>(name)
+            const renderObject = object?.getRenderObject()
+            assert(renderObject instanceof AdvancedSprite)
+            light = new Sprite(this.generateMaskTexture(renderObject))
+            // White outside the cone preserves the water; black inside reveals it.
+            light.blendMode = PIXI.BLEND_MODES.MULTIPLY
+            mask.container.addChild(light)
+            mask.lights.set(name, light)
+        }
+        light.position.set(x, y)
+        mask.sprite.position.copyFrom(this.sprite.position)
+        this.engine.app.renderer.render(mask.container, { renderTexture: mask.texture, clear: true })
+    }
+
+    private releaseUnderwaterMask() {
+        const mask = this.underwaterMask
+        if (!mask) return
+        if (this.sprite) this.sprite.mask = null
+        this.engine.rendering.removeFromStage(mask.sprite)
+        mask.sprite.destroy()
+        mask.texture.destroy(true)
+        for (const light of mask.lights.values()) light.texture.destroy(true)
+        mask.container.destroy({ children: true })
+        this.underwaterMask = null
+    }
+
     @method()
     async LOAD(path: string) {
         assert(this.sprite !== null)
+        this.releaseUnderwaterMask()
         const newSprite = await this.load(path)
         this.sprite.texture = newSprite.texture
         this.sprite.x = newSprite.x

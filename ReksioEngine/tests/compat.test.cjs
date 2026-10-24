@@ -21,6 +21,7 @@ function loadModule(file, dependencies = {}) {
 const { createEngineCompat, normalizeCompatProfile } = loadModule('engine/compat.ts');
 const { OznMatrixSimulation } = loadModule('engine/compat/oznMatrix.ts');
 const { readSekWorld } = loadModule('fileFormats/sek/index.ts');
+const { TimeMachinePhysics } = loadModule('engine/compat/timeMachinePhysics.ts', { 'cannon-es': require('cannon-es') });
 const { SekaiNavigation } = loadModule('engine/compat/sekaiNavigation.ts', {
     'ngraph.graph': { default: require('ngraph.graph') }, 'ngraph.path': require('ngraph.path'),
 });
@@ -636,6 +637,59 @@ test('OZN image clones join the renderer at their original priority without chan
     assert.equal(added.length, 1);
 });
 
+test('Time Machine light masks multiply alpha, follow scrolling and reuse their GPU resources', () => {
+    let allocations = 0;
+    const textures = [];
+    class Texture {
+        constructor() { textures.push(this); }
+        destroy() { this.destroyed = true; }
+        static WHITE = {};
+    }
+    class Sprite {
+        constructor(texture) {
+            this.texture = texture;
+            this.position = { x: 0, y: 0, set(x,y) { this.x=x; this.y=y; },
+                copyFrom(p) { this.x=p.x; this.y=p.y; } };
+        }
+        destroy() { this.destroyed = true; }
+    }
+    class Container {
+        children = [];
+        addChild(child) { this.children.push(child); }
+        destroy() { this.destroyed = true; }
+    }
+    const pixi = { Sprite, Container, Texture, BLEND_MODES: { MULTIPLY: 2 },
+        RenderTexture: { create: () => { allocations++; return new Texture(); } },
+        BaseTexture: { fromBuffer: () => ({}) } };
+    const { Image } = loadModule('engine/types/image.ts', {
+        './index': { DisplayType: FakeType }, '../../common/errors': { assert: assert.ok },
+        'pixi.js': pixi, '../../filesystem/assetsLoader': {},
+        '../rendering': { AdvancedSprite: Sprite }, '../../common/types': decorator,
+    });
+    const added = [], removed = [], rendered = [];
+    const image = new Image({ compat: createEngineCompat('timpului'),
+        rendering: { addToStage: s => added.push(s), removeFromStage: s => removed.push(s) },
+        app: { renderer: { render: (container, options) => rendered.push([container, options]) } } });
+    image.sprite = new Sprite(new Texture());
+    image.sprite.width = 800; image.sprite.height = 1200; image.sprite.position.set(0, -400);
+    const light = new Sprite({}); light.width = 1; light.height = 1; light.hitmap = Uint8Array.of(0);
+    image.getObject = () => ({ getRenderObject: () => light });
+    image.MERGEALPHA(100, 300, 'LIGHT'); image.MERGEALPHA(150, 350, 'LIGHT');
+    assert.equal(allocations, 1);
+    assert.equal(added.length, 1);
+    assert.equal(rendered.length, 2);
+    assert.equal(rendered[0][1].renderTexture, rendered[1][1].renderTexture);
+    const cone = rendered[0][0].children[1];
+    assert.equal(cone.blendMode, 2);
+    assert.equal(cone.position.x, 150);
+    assert.equal(image.sprite.mask.position.y, -400);
+    image.destroy();
+    assert.equal(image.sprite.mask, null);
+    assert.equal(removed.length, 2);
+    assert.equal(rendered[0][1].renderTexture.destroyed, true);
+    assert.equal(cone.texture.destroyed, true);
+});
+
 test('Nemo refreshes invisible hotspot transforms without changing Pirates hit tests', () => {
     const pixi = require('pixi.js');
     const { AdvancedSprite } = loadModule('engine/rendering.ts', {
@@ -1149,6 +1203,7 @@ const { World } = loadModule('engine/types/world.ts', {
     '../../common/errors': { NotImplementedError: Error },
     '../../fileFormats/sek': { readSekWorld },
     '../compat/sekaiNavigation': { SekaiNavigation },
+    '../compat/timeMachinePhysics': { TimeMachinePhysics },
 });
 
 function sekFixture() {
@@ -1163,7 +1218,12 @@ function sekFixture() {
     };
     parts.push(Buffer.from('SEKAI81080701915004'));
     uint(3);
-    uint(1); uint(1); entity(100); uint(0); uint(1); string('Default'); parts.push(Buffer.alloc(108));
+    uint(1); uint(1); entity(100); uint(2); uint(1); string('Default');
+    for (const vertex of [[1, 2, 3], [4, 5, 6], [7, 8, 9]]) {
+        for (const component of vertex) float(component);
+        for (let i = 0; i < 5; i++) float(99);
+    }
+    for (let i = 0; i < 3; i++) float(1);
     uint(99); uint(3); parts.push(Buffer.from([1, 2, 3]));
     uint(4); uint(1); entity(9000); uint(4); uint(3);
     for (const [x, y, group] of [[0, 0, 0], [0, 100, 1], [100, 100, 0], [100, 0, 0]]) {
@@ -1198,6 +1258,148 @@ test('SEKAI navigation follows graph links around obstacles and can disable wayp
     assert.equal(nav.find(start, target, false), null);
     nav.setActive(1, true);
     assert.equal(nav.find(start, target, false).length, 4);
+});
+
+test('SEKAI collision parsing reads vertex stride without applying entity transforms twice', () => {
+    assert.deepEqual(readSekWorld(sekFixture(), true).bodies[0].geometry, { flags: 2, triangles: [[
+        { x: 1, y: 2, z: 3 }, { x: 4, y: 5, z: 6 }, { x: 7, y: 8, z: 9 },
+    ]] });
+    assert.equal(readSekWorld(sekFixture()).bodies[0].geometry, undefined);
+});
+
+const emptyPhysics = () => new TimeMachinePhysics({ bodies: [], paths: [] });
+const sphere = (world, id, x, y, mass = 1, dynamic = true) => {
+    world.addSphere(id, mass, 0, 0, 100, dynamic, 5);
+    world.setPosition(id, x, y, 0);
+};
+
+test('Time Machine physics integrates forces in seconds, caps stalls and respects planar limits', () => {
+    const world = emptyPhysics();
+    sphere(world, 501, 400, 300, 8);
+    world.setGravity(0, -100, 0);
+    world.addForce(501, 0, 1600, 0);
+    assert.equal(world.step(1000).elapsed, 1);
+    assert.ok(world.position(501).y < 300);
+    const moved = world.position(501).y;
+    for (let i = 0; i < 60; i++) world.step(1000 / 60);
+    assert.ok(world.position(501).y > moved);
+    assert.ok(world.speed(501) <= 100);
+    assert.equal(world.rotation(501), 0);
+    world.setLimit(501, 390, 290, 0, 410, 310, 0);
+    world.setVelocity(501, 100, 100, 100);
+    for (let i = 0; i < 60; i++) world.step(1000 / 60);
+    const p = world.position(501);
+    assert.ok(p.x <= 410 && p.x >= 390 && p.y <= 310 && p.y >= 290);
+    assert.equal(p.z, 0);
+});
+
+test('Time Machine magnetic centers attract bodies only when enabled and not excluded', () => {
+    const world = emptyPhysics();
+    sphere(world, 501, 400, 300, 8);
+    sphere(world, 101, 500, 300);
+    world.setG(501, 280000);
+    world.setMagnetic(501, true);
+    world.step(16);
+    assert.ok(world.position(101).x < 500);
+    world.setVelocity(101, 0, 0, 0); world.setPosition(101, 500, 300, 0);
+    world.excludeGravity(101, 501, true); world.step(16);
+    assert.equal(world.position(101).x, 500);
+    world.excludeGravity(101, 501, false); world.setMagnetic(501, false); world.step(16);
+    assert.equal(world.position(101).x, 500);
+});
+
+test('Time Machine physical camera clamps to native background bounds', () => {
+    const world = emptyPhysics(); sphere(world, 501, 400, -150);
+    world.setBackgroundSize(0, 800, -200, 800);
+    world.setReference(501); world.setMoveFlags(false, true); world.step(16);
+    assert.equal(world.backgroundY, -200);
+    assert.equal(world.position(501).y, 50);
+    world.setPosition(501, 400, 400, 0); world.step(16);
+    assert.equal(world.backgroundY, 100);
+    assert.equal(world.position(501).y, 300);
+    world.setPosition(501, 400, 750, 0); world.step(16);
+    assert.equal(world.backgroundY, 200);
+    assert.equal(world.position(501).y, 550);
+});
+
+test('Only Time Machine NUREK loads physics automatically and links in camera coordinates', async () => {
+    for (const profile of ['default', 'magicienii', 'timpului']) {
+        const files = [], positions = [];
+        const world = new World({ compat: createEngineCompat(profile),
+            currentScene: { getRelativePath: async file => file },
+            filesystem: { getFile: async file => { files.push(file); return sekFixture(); } },
+            getObject: () => ({ SETPOSITION: (x, y) => positions.push([x, y]) }),
+            diagnostics: { worldState() {} } });
+        world.definition = { FILENAME: 'NUREK.SEK' };
+        await world.init();
+        if (profile !== 'timpului') { assert.deepEqual(files, []); continue; }
+        assert.deepEqual(files, ['NUREK.SEK']);
+        world.ADDBODY(501, 8, 0, 0, 0, 0, 100, 1, 2, 16, 16, 16);
+        await world.LINK(501, 'MAGNET');
+        await world.SETPOSITION(501, 400, -150, 0);
+        assert.deepEqual(positions, []);
+        world.SETBKGSIZE(0, 800, -200, 800); world.SETREFOBJECT(501); world.SETMOVEFLAGS(false, true);
+        world.START(); world.tick(16);
+        assert.equal(await world.MOVEOBJECTS(), .016);
+        assert.deepEqual(positions.at(-1), [400, 50]);
+        assert.equal(world.GETBKGPOSY(), -200);
+        assert.equal(world.GETSPEED(501), 0);
+        world.UNLINK(501);
+        for (let i = 0; i < 4; i++) world.tick(16);
+        assert.equal(await world.MOVEOBJECTS(), .064);
+        assert.equal(positions.length, 1);
+        world.REMOVEOBJECT(501); world.STOP();
+        assert.equal(await world.MOVEOBJECTS(), 0);
+    }
+});
+
+test('Time Machine dynamic overlays release their own objects and restore replaced helpers', async () => {
+    const destroyed = [];
+    const object = name => ({ name, clones: [], isReady: true, destroy: () => destroyed.push(name) });
+    const original = object('HELPER'), overlay = object('HELPER'), image = object('OVERLAY_IMAGE');
+    const scope = { content: new Map([['HELPER', original]]), get(name) { return this.content.get(name); },
+        remove(name) { this.content.delete(name); }, set(name, value) { this.content.set(name, value); } };
+    const { CNVLoader } = loadModule('engine/types/cnvloader.ts', {
+        './index': { Type: FakeType }, '../../common/errors': { assert: assert.ok }, '../../common/types': decorator,
+        '../../filesystem/definitionLoader': {
+            loadDefinition: async () => { scope.set('HELPER', overlay); scope.set('OVERLAY_IMAGE', image); },
+            doReady: async () => {},
+        },
+    });
+    const loader = new CNVLoader({ compat: createEngineCompat('timpului'),
+        currentScene: { getRelativePath: async file => file }, filesystem: { getCNVFile: async () => ({}) } });
+    loader.parent = { scope };
+    await loader.LOAD('Surface.cnv');
+    assert.equal(scope.get('HELPER'), overlay);
+    loader.RELEASE('SURFACE.CNV');
+    assert.equal(scope.get('HELPER'), original);
+    assert.equal(scope.get('OVERLAY_IMAGE'), undefined);
+    assert.deepEqual(destroyed, ['HELPER', 'OVERLAY_IMAGE']);
+    loader.RELEASE('surface.cnv');
+    assert.equal(destroyed.length, 2);
+});
+
+test('Time Machine joints retain their anchors, and removing a member releases its constraints', () => {
+    const world = emptyPhysics();
+    sphere(world, 1, 400, 300, 1, false); sphere(world, 2, 400, 320);
+    world.join(1, 2, 400, 310, 0); world.setGravity(0, -100, 0);
+    for (let i = 0; i < 120; i++) world.step(1000 / 60);
+    assert.ok(Math.abs(world.position(2).y - 320) < 1);
+    world.remove(1);
+    for (let i = 0; i < 60; i++) world.step(1000 / 60);
+    assert.ok(world.position(2).y > 350);
+});
+
+test('Time Machine spheres collide with original SEK triangles and report contacts once', () => {
+    const world = new TimeMachinePhysics({ paths: [], bodies: [{ id: 1, position: { x: 0, y: 123, z: 0 },
+        geometry: { flags: 0, triangles: [[{ x: -100, y: -20, z: -100 },
+            { x: 0, y: -20, z: 100 }, { x: 100, y: -20, z: -100 }]] } }] });
+    sphere(world, 101, 400, 300); world.setGravity(0, -100, 0);
+    const hits = [];
+    for (let i = 0; i < 120; i++) hits.push(...world.step(1000 / 60).collisions);
+    assert.ok(Math.abs(world.position(101).y - 315) < 1);
+    assert.ok(hits.some(pair => pair.includes(101) && pair.includes(1)));
+    assert.equal(world.step(16).collisions.length, 0);
 });
 
 test('SEKAI navigation honors directional edge flags and native exact endpoint behavior', () => {
