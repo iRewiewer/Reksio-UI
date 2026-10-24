@@ -83,9 +83,8 @@ export class TimeMachinePhysics {
     speed(id: number) { return this.bodies.get(id)?.body.velocity.length() ?? 0 }
     angle(id: number) { return this.bodies.get(id)?.angle ?? 0 }
     rotation(id: number) {
-        const angles = new Vec3()
-        this.bodies.get(id)?.body.quaternion.toEuler(angles)
-        return ((angles.z * 180 / Math.PI) % 360 + 360) % 360
+        const forward = this.bodies.get(id)?.body.quaternion.vmult(new Vec3(1, 0, 0))
+        return forward ? (Math.atan2(forward.y, forward.x) * 180 / Math.PI + 360) % 360 : 0
     }
     setLimit(id: number, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) {
         const entry = this.bodies.get(id)
@@ -203,5 +202,9 @@ export class TimeMachinePhysics {
         if (!ref) return
         this.backgroundX = this.moveX ? clamp(ref.x, this.bounds.x0, this.bounds.x1 - 800) : 0
         this.backgroundY = this.moveY ? clamp(-ref.y, this.bounds.y0, this.bounds.y1 - 600) : 0
+    }
+
+    destroy() {
+        for (const id of this.bodies.keys()) this.remove(id)
     }
 }

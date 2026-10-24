@@ -1,4 +1,17 @@
 import type { CNV } from '../../fileFormats/cnv/parser'
+import type { Engine } from '../index'
+import type { ValueType } from '../types'
+
+export async function prepareTimeMachineVehicleDebugScene(engine: Pick<Engine, 'compat' | 'getObject'>,
+    scene: string, wheels: string[]) {
+    if (!engine.compat.vehiclePhysics || scene !== 'SAMOCHODZIK') return
+    if (wheels.length !== 4 || wheels.some(wheel => !/^[AKS]$/.test(wheel))) {
+        throw new Error('A vehicle requires four valid wheel choices')
+    }
+    const parameters = engine.getObject<ValueType<any, string>>('G_SARCADESCENEPARAM')
+    if (!parameters) throw new Error('Vehicle scene parameters are not ready')
+    await parameters.setValue(`${wheels.join('')}0`)
+}
 
 export function patchTimeMachineDefinitions(filename: string, definitions: CNV) {
     if (filename === 'dane/game/przygoda/arcade/arcade.cnv' && definitions.ANNREX?.FILENAME === 'REX.ANN') {

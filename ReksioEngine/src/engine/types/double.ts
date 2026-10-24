@@ -32,6 +32,12 @@ export class Double extends ValueType<DoubleDefinition, number> {
     }
 
     @method()
+    async ABS(value: number) {
+        if (!this.engine.compat.vehiclePhysics) return this.__call('ABS', [value])
+        return this.setValue(Math.abs(value))
+    }
+
+    @method()
     async SET(newValue: number) {
         await this.setValue(newValue)
     }

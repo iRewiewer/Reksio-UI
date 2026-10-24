@@ -36,6 +36,7 @@ export type EngineCompat = {
     underwaterPhysics: boolean
     namedSequencePlayback: boolean
     flightPhysics: boolean
+    vehiclePhysics: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -89,5 +90,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         underwaterPhysics: name === 'timpului',
         namedSequencePlayback: name === 'timpului',
         flightPhysics: name === 'timpului',
+        vehiclePhysics: name === 'timpului',
     }
 }

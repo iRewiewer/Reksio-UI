@@ -285,6 +285,11 @@
   dependencies:
     "@jridgewell/trace-mapping" "0.3.9"
 
+"@dimforge/rapier3d-compat@0.21.0":
+  version "0.21.0"
+  resolved "https://registry.yarnpkg.com/@dimforge/rapier3d-compat/-/rapier3d-compat-0.21.0.tgz#5b2636e7fcf7360db7ad6d2caf44adc8a75cbfdc"
+  integrity sha512-tCl1HPGwOhn5aCQbgqWbOH+Nx/5fnr3IPAnzQuR7zIhC/raqi2yxC6LhvZqjdI2El5hQgY5RDAwDrAjAi2FdPA==
+
 "@discoveryjs/json-ext@^0.5.0":
   version "0.5.7"
   resolved "https://registry.yarnpkg.com/@discoveryjs/json-ext/-/json-ext-0.5.7.tgz#1d572bfbbe14b7704e0ba0f39b74815b84870d70"

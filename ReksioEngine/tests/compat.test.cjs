@@ -22,6 +22,9 @@ const { createEngineCompat, normalizeCompatProfile } = loadModule('engine/compat
 const { OznMatrixSimulation } = loadModule('engine/compat/oznMatrix.ts');
 const { readSekWorld } = loadModule('fileFormats/sek/index.ts');
 const { TimeMachinePhysics } = loadModule('engine/compat/timeMachinePhysics.ts', { 'cannon-es': require('cannon-es') });
+const { TimeMachineVehiclePhysics } = loadModule('engine/compat/timeMachineVehiclePhysics.ts', {
+    '@dimforge/rapier3d-compat': require('@dimforge/rapier3d-compat'), 'cannon-es': require('cannon-es'),
+});
 const { SekaiNavigation } = loadModule('engine/compat/sekaiNavigation.ts', {
     'ngraph.graph': { default: require('ngraph.graph') }, 'ngraph.path': require('ngraph.path'),
 });
@@ -1204,6 +1207,7 @@ const { World } = loadModule('engine/types/world.ts', {
     '../../fileFormats/sek': { readSekWorld },
     '../compat/sekaiNavigation': { SekaiNavigation },
     '../compat/timeMachinePhysics': { TimeMachinePhysics },
+    '../compat/timeMachineVehiclePhysics': { TimeMachineVehiclePhysics },
 });
 
 function sekFixture() {
@@ -1390,9 +1394,9 @@ test('Only Time Machine NUREK loads physics automatically and links in camera co
     }
 });
 
-test('Flight terrain physics is enabled only for Time Machine SAMOLOCIK', async () => {
+test('Terrain physics is enabled only for the three Time Machine vehicle scenes', async () => {
     for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
-        for (const scene of ['SAMOLOCIK', 'SAMOCHODZIK', 'ARCADE']) {
+        for (const scene of ['SAMOLOCIK', 'SAMOCHODZIK', 'PIESZO', 'ARCADE']) {
             const files = [];
             const world = new World({ compat: createEngineCompat(profile),
                 currentScene: { name: scene, getRelativePath: async file => file },
@@ -1400,7 +1404,7 @@ test('Flight terrain physics is enabled only for Time Machine SAMOLOCIK', async 
                 diagnostics: { worldState() {} } });
             world.definition = { FILENAME: 'TEREN.SEK' };
             await world.init();
-            const enabled = profile === 'timpului' && scene === 'SAMOLOCIK';
+            const enabled = profile === 'timpului' && scene !== 'ARCADE';
             assert.deepEqual(files, enabled ? ['TEREN.SEK'] : []);
             if (!enabled) continue;
             world.ADDBODY(501, 1, 0, 0, 0, 0, 100, 1, 2, 5, 5, 5);
@@ -1411,8 +1415,113 @@ test('Flight terrain physics is enabled only for Time Machine SAMOLOCIK', async 
             await world.MOVEOBJECTS();
             assert.equal(world.GETANGLE(501), 90);
             assert.ok(world.physics.position(501).z < 120);
+            world.destroy();
         }
     }
+});
+
+test('Vehicle boxes use their full dimensions and collide with original terrain triangles', async () => {
+    const world = await TimeMachineVehiclePhysics.create({ paths: [], bodies: [{ id: 1, position: { x: 0, y: 0, z: 0 },
+        geometry: { flags: 0, triangles: [
+            [{ x: -200, y: -200, z: 0 }, { x: 200, y: -200, z: 0 }, { x: 200, y: 200, z: 0 }],
+            [{ x: -200, y: -200, z: 0 }, { x: 200, y: 200, z: 0 }, { x: -200, y: 200, z: 0 }],
+        ] } }] });
+    try {
+        world.addBox(501, 0.1, 0, 0, 170, true, 35, 22, 1);
+        world.setPosition(501, 400, 300, 20);
+        world.setGravity(0, 0, -200);
+        for (let i = 0; i < 240; i++) world.step(1000 / 60);
+        assert.ok(Math.abs(world.position(501).z - 0.5) < 0.2);
+        assert.ok(Math.abs(world.bodies.get(501).body.mass() - 0.1) < 1e-6);
+        assert.deepEqual({ ...world.bodies.get(501).collider.halfExtents() }, { x: 17.5, y: 11, z: 0.5 });
+    } finally { world.destroy(); world.destroy(); }
+});
+
+test('Joined vehicle wheels drive and steer the chassis without separating', async () => {
+    const world = await TimeMachineVehiclePhysics.create({ bodies: [], paths: [] });
+    try {
+        world.addBox(501, 0.1, 0, 0, 170, true, 35, 22, 1);
+        world.setPosition(501, 400, 300, 6);
+        const wheels = [[502, 12, 15], [503, 12, -15], [504, -12, 15], [505, -12, -15]];
+        for (const [id, x, y] of wheels) {
+            world.addSphere(id, .1, .2, 0, 170, true, 6);
+            world.setPosition(id, 400 + x, 300 + y, 6);
+            world.join(id, 501, 400 + x, 300 + y * 2 / 3, 0);
+        }
+        for (let i = 0; i < 120; i++) {
+            for (const [id] of wheels) world.addForce(id, 80, 0, 0);
+            world.step(1000 / 60);
+        }
+        assert.ok(world.position(501).x > 600);
+        assert.ok(world.speed(501) <= 171);
+        for (const [id] of wheels) {
+            const p = world.position(id), center = world.position(501);
+            assert.ok(Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z) < 30);
+        }
+        for (const [id, x] of wheels) world.addForce(id, 0, x > 0 ? 80 : -80, 0);
+        for (let i = 0; i < 30; i++) world.step(1000 / 60);
+        assert.ok(Math.abs(world.rotation(501)) > 1);
+        world.remove(501);
+        for (let i = 0; i < 30; i++) world.step(1000 / 60);
+        for (const [id] of wheels) assert.ok(Number.isFinite(world.position(id).x));
+    } finally { world.destroy(); }
+});
+
+test('Vehicle trigger contacts are nonblocking, and camera limits remain in native coordinates', async () => {
+    const world = await TimeMachineVehiclePhysics.create({ bodies: [], paths: [] });
+    try {
+        world.addBox(12, 0, 0, 0, 0, false, 10, 100, 100);
+        world.setPosition(12, 450, 300, 10);
+        world.setActive(12, false);
+        world.addBox(501, 1, 0, 0, 100, true, 10, 10, 10);
+        world.setPosition(501, 400, 300, 10); world.setVelocity(501, 100, 0, 0);
+        const collisions = [];
+        for (let i = 0; i < 60; i++) collisions.push(...world.step(1000 / 60).collisions);
+        assert.ok(world.position(501).x > 490);
+        assert.deepEqual(collisions.map(pair => [...pair].sort((a, b) => a - b)), [[12, 501]]);
+        world.setVelocity(501, 0, 0, 0);
+        world.setPosition(501, 1068, 828, 120);
+        world.setBackgroundSize(-400, 1200, -300, 900);
+        world.setReference(501); world.setMoveFlags(true, true); world.step(16);
+        assert.deepEqual(world.position(501), { x: 668, y: 528, z: 120 });
+    } finally { world.destroy(); }
+});
+
+test('Vehicle gravity centers honor exclusions and do not accumulate force between frames', async () => {
+    const world = await TimeMachineVehiclePhysics.create({ bodies: [], paths: [] });
+    try {
+        for (const [id, x] of [[501, 400], [520, 500], [502, 550]]) {
+            world.addSphere(id, 1, 0, 0, 100, true, 5); world.setPosition(id, x, 300, 0);
+        }
+        world.setMagnetic(501, true); world.setG(501, 6000000);
+        world.excludeGravity(502, 501, true);
+        world.step(16);
+        assert.ok(world.position(520).x < 500);
+        assert.equal(world.position(502).x, 550);
+        world.setMagnetic(501, false); world.setVelocity(520, 0, 0, 0);
+        const x = world.position(520).x; world.step(16);
+        assert.equal(world.position(520).x, x);
+        world.addForce(502, 100, 0, 0); world.step(16);
+        world.setVelocity(502, 0, 0, 0);
+        const afterForce = world.position(502).x; world.step(16);
+        assert.equal(world.position(502).x, afterForce);
+    } finally { world.destroy(); }
+});
+
+test('Time Machine body rotation preserves all four yaw quadrants instead of folding at 90 degrees', async () => {
+    const vehicle = await TimeMachineVehiclePhysics.create({ bodies: [], paths: [] });
+    const planar = emptyPhysics();
+    try {
+        sphere(planar, 501, 400, 300);
+        vehicle.addBox(501, 1, 0, 0, 100, true, 35, 22, 1);
+        for (const angle of [0, 45, 90, 135, 180, 225, 270, 315]) {
+            const half = angle * Math.PI / 360;
+            planar.bodies.get(501).body.quaternion.set(0, 0, Math.sin(half), Math.cos(half));
+            vehicle.bodies.get(501).body.setRotation({ x: 0, y: 0, z: Math.sin(half), w: Math.cos(half) }, true);
+            assert.ok(Math.abs(planar.rotation(501) - angle) < 1e-4);
+            assert.ok(Math.abs(vehicle.rotation(501) - angle) < 1e-4);
+        }
+    } finally { planar.destroy(); vehicle.destroy(); }
 });
 
 test('Time Machine dynamic overlays release their own objects and restore replaced helpers', async () => {
@@ -1716,6 +1825,42 @@ test('Time Machine keeps its dynamically loaded Reksio object alive with a valid
     patchTimeMachineDefinitions('dane/game/przygoda/arcade/arcade.cnv', definitions);
     assert.equal(definitions.ANNREX.FILENAME, 'TEMPLATE.ANN');
     assert.equal(definitions.OTHER.FILENAME, 'REX.ANN');
+});
+
+test('Time Machine floating-point absolute values preserve chassis tilt fractions', async () => {
+    class Value extends FakeType {
+        value = 0;
+        setValue(value) { this.value = value; return value; }
+    }
+    const { Double } = loadModule('engine/types/double.ts', {
+        './index': { ValueType: Value }, '../../common/types': decorator,
+    });
+    const number = new Double({ compat: createEngineCompat('timpului') });
+    assert.equal(await number.ABS(-0.75), 0.75);
+    assert.equal(number.value, 0.75);
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo']) {
+        number.engine.compat = createEngineCompat(profile);
+        number.__call = (method, args) => ({ method, args });
+        assert.deepEqual(await number.ABS(-3), { method: 'ABS', args: [-3] });
+        assert.equal(number.value, .75);
+    }
+});
+
+test('Time Machine debug car entry supplies validated wheel parameters without changing story jumps or other games', async () => {
+    const { prepareTimeMachineVehicleDebugScene } = loadModule('engine/patches/timpului.ts');
+    const values = [];
+    const engine = { compat: createEngineCompat('timpului'),
+        getObject: name => { assert.equal(name, 'G_SARCADESCENEPARAM'); return { setValue: value => values.push(value) }; } };
+    await prepareTimeMachineVehicleDebugScene(engine, 'SAMOCHODZIK', ['A', 'K', 'S', 'A']);
+    assert.deepEqual(values, ['AKSA0']);
+    await assert.rejects(prepareTimeMachineVehicleDebugScene(engine, 'SAMOCHODZIK', ['A']), /four valid/);
+    await assert.rejects(prepareTimeMachineVehicleDebugScene(engine, 'SAMOCHODZIK', ['A', 'K', 'S', 'X']), /four valid/);
+    await prepareTimeMachineVehicleDebugScene(engine, 'PIESZO', []);
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo']) {
+        engine.compat = createEngineCompat(profile);
+        await prepareTimeMachineVehicleDebugScene(engine, 'SAMOCHODZIK', []);
+    }
+    assert.deepEqual(values, ['AKSA0']);
 });
 
 test('modern scripts can assign struct fields without enabling this for Pirates', async () => {

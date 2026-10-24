@@ -5,6 +5,7 @@ import { NotImplementedError } from '../../common/errors'
 import { readSekWorld, SekPoint } from '../../fileFormats/sek'
 import { SekaiNavigation } from '../compat/sekaiNavigation'
 import { TimeMachinePhysics } from '../compat/timeMachinePhysics'
+import type { TimeMachineVehiclePhysics } from '../compat/timeMachineVehiclePhysics'
 
 type WorldBody = {
     x: number
@@ -35,7 +36,7 @@ export class World extends Type<WorldDefinition> {
     private refObjectId: number | null = null
     private loadedFilename = ''
     private paths = new Map<number, SekaiNavigation>()
-    private physics: TimeMachinePhysics | null = null
+    private physics: TimeMachinePhysics | TimeMachineVehiclePhysics | null = null
     private physicsElapsedMS = 0
 
     async init() {
@@ -44,12 +45,24 @@ export class World extends Type<WorldDefinition> {
 
     private usesPhysics(filename: string) {
         return (this.engine.compat.underwaterPhysics && /(?:^|[\\/])NUREK\.SEK$/i.test(filename ?? '')) ||
-            this.usesFlightPhysics(filename)
+            this.usesFlightPhysics(filename) || this.usesVehiclePhysics(filename)
     }
 
     private usesFlightPhysics(filename: string) {
         return this.engine.compat.flightPhysics && this.engine.currentScene?.name === 'SAMOLOCIK' &&
             /(?:^|[\\/])TEREN\.SEK$/i.test(filename ?? '')
+    }
+
+    private usesVehiclePhysics(filename: string) {
+        return this.engine.compat.vehiclePhysics && ['SAMOCHODZIK', 'PIESZO'].includes(this.engine.currentScene?.name ?? '') &&
+            /(?:^|[\\/])TEREN\.SEK$/i.test(filename ?? '')
+    }
+
+    destroy() {
+        this.physics?.destroy()
+        this.physics = null
+        this.bodies.clear()
+        this.paths.clear()
     }
 
     private ensurePathingEnabled() {
@@ -98,7 +111,14 @@ export class World extends Type<WorldDefinition> {
         const path = await scene.getRelativePath(filename)
         const physical = this.usesPhysics(filename)
         const world = readSekWorld(await this.engine.filesystem.getFile(path), physical)
-        this.physics = physical ? new TimeMachinePhysics(world, !this.usesFlightPhysics(filename)) : null
+        this.physics?.destroy()
+        this.physics = null
+        if (this.usesVehiclePhysics(filename)) {
+            const { TimeMachineVehiclePhysics } = await import('../compat/timeMachineVehiclePhysics')
+            this.physics = await TimeMachineVehiclePhysics.create(world)
+        } else if (physical) {
+            this.physics = new TimeMachinePhysics(world, !this.usesFlightPhysics(filename))
+        }
         this.paths = new Map(world.paths.map((path) => [path.id, new SekaiNavigation(path)]))
         for (const { id, position } of world.bodies) {
             const body = this.getBody(id)
@@ -144,8 +164,11 @@ export class World extends Type<WorldDefinition> {
         const body = this.getBody(id)
         body.speed = maxVel
         if (this.physics) {
-            if (geomType !== 2) throw new Error(`Unsupported Time Machine geometry type ${geomType}`)
-            this.physics.addSphere(id, density, mu, bounce, maxVel, bodyType !== 0, radiusX)
+            if (geomType === 0 && 'addBox' in this.physics) {
+                this.physics.addBox(id, density, mu, bounce, maxVel, bodyType !== 0, radiusX, radiusY, radiusZ)
+            } else if (geomType === 2) {
+                this.physics.addSphere(id, density, mu, bounce, maxVel, bodyType !== 0, radiusX)
+            } else throw new Error(`Unsupported Time Machine geometry type ${geomType}`)
         }
     }
 
@@ -381,6 +404,12 @@ export class World extends Type<WorldDefinition> {
     GETPOSITIONY(id: number) {
         this.ensurePathingEnabled()
         return this.physics?.position(id).y ?? this.getBody(id).y
+    }
+
+    @method()
+    GETPOSITIONZ(id: number) {
+        if (!this.engine.compat.vehiclePhysics || !this.physics) return this.__call('GETPOSITIONZ', [id])
+        return this.physics.position(id).z
     }
 
     @method()

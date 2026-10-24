@@ -12,6 +12,7 @@ import debuggingTemplate from './debugging.html'
 import { Scene } from './types/scene'
 import { globalAudio } from './audio'
 import { printStackTrace } from '../interpreter/stacktrace'
+import { prepareTimeMachineVehicleDebugScene } from './patches/timpului'
 
 export class Debugging {
     private readonly engine: Engine
@@ -61,6 +62,31 @@ export class Debugging {
         const exportSave = debugTools.querySelector('#exportSave')!
         const enableSaveFiles: HTMLInputElement = debugTools.querySelector('#enableSaveFiles')!
         const muteMusic: HTMLInputElement = debugTools.querySelector('#muteMusic')!
+
+        const vehicleWheels: HTMLSelectElement[] = []
+        if (this.engine.compat.vehiclePhysics) {
+            const field = document.createElement('fieldset')
+            const legend = document.createElement('legend')
+            legend.textContent = 'Car Wheels'
+            field.appendChild(legend)
+            for (const [index, position] of ['Front left', 'Front right', 'Rear left', 'Rear right'].entries()) {
+                const label = document.createElement('label')
+                label.textContent = position
+                const choice = document.createElement('select')
+                choice.id = `vehicleWheel${index}`
+                for (const [value, name] of [['A', 'Ammonite'], ['K', 'Vertebra'], ['S', 'Square']]) {
+                    const option = document.createElement('option')
+                    option.value = value
+                    option.textContent = name
+                    choice.appendChild(option)
+                }
+                choice.value = 'S'
+                label.appendChild(choice)
+                field.appendChild(label)
+                vehicleWheels.push(choice)
+            }
+            sceneSelector.parentElement!.after(field)
+        }
 
         const setSpeed = (speed: number) => {
             this.engine.speed = speed
@@ -117,6 +143,7 @@ export class Debugging {
 
         sceneSelector.addEventListener('change', async () => {
             try {
+                await prepareTimeMachineVehicleDebugScene(this.engine, sceneSelector.value, vehicleWheels.map(wheel => wheel.value))
                 await this.engine.changeScene(sceneSelector.value)
             } catch (err) {
                 console.error(err)
