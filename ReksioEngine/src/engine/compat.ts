@@ -34,6 +34,7 @@ export type EngineCompat = {
     backgroundImagePositions: boolean
     linkedBodyPositions: boolean
     underwaterPhysics: boolean
+    namedSequencePlayback: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -85,5 +86,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         backgroundImagePositions: name === 'magicienii',
         linkedBodyPositions: name === 'timpului',
         underwaterPhysics: name === 'timpului',
+        namedSequencePlayback: name === 'timpului',
     }
 }

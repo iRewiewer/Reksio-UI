@@ -150,17 +150,25 @@ export class Sequence extends Type<SequenceDefinition> {
 
     @method()
     async PLAY(sequenceName: string) {
-        assert(this.parameterSequence !== null && this.subEntries !== null)
+        let entry: SequenceFileEntry | undefined
+        if (this.parameterSequence !== null) {
+            const subEntries = this.subEntries.get(this.parameterSequence.NAME)
+            if (subEntries !== undefined && this.parametersMapping.has(sequenceName)) {
+                entry = subEntries[this.parametersMapping.get(sequenceName)!]
+            }
+        } else if (this.engine.compat.namedSequencePlayback) {
+            // Time Machine cutscenes also name a normal SEQUENCE root directly.
+            entry = this.sequenceFile?.find((candidate) => candidate.NAME === sequenceName)
+        } else {
+            assert(this.parameterSequence !== null)
+        }
 
-        const subEntries = this.subEntries.get(this.parameterSequence.NAME)
-        if (subEntries !== undefined && this.parametersMapping.has(sequenceName)) {
+        if (entry !== undefined) {
             if (this.engine.compat.sequenceSubevents) {
                 this.paused = false
                 this.queue = []
                 this.runningSubSequence = null
             }
-            const entryIndex = this.parametersMapping.get(sequenceName)!
-            const entry = subEntries[entryIndex]
             this.sequenceName = sequenceName
             this.fillQueue(entry)
             await this.progressNext()

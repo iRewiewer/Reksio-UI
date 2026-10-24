@@ -1596,6 +1596,40 @@ test('Time Machine sequence completion can start the next sequence immediately',
     assert.equal(sequence.sequenceName, 'NEXT');
 });
 
+test('Time Machine plays a named non-parameterized cutscene root and completes it once', async () => {
+    const sequence = new Sequence({ compat: createEngineCompat('timpului') });
+    const root = { NAME: 'DIVE', TYPE: 'SEQUENCE', MODE: 'SEQUENCE' };
+    const first = { NAME: 'NARRATOR', TYPE: 'SIMPLE', FILENAME: 'actor', EVENT: 'FIRST' };
+    const second = { NAME: 'KRETES', TYPE: 'SIMPLE', FILENAME: 'actor', EVENT: 'SECOND' };
+    sequence.sequenceFile = [root, first, second];
+    sequence.subEntries.set('DIVE', [first, second]);
+    const played = [], finished = [];
+    sequence.activeAnimo = { definition: { FILENAME: 'actor' }, hasEvent: () => true,
+        playEvent: async (event) => played.push(event) };
+    sequence.callbacks = { hasParametrized: () => false,
+        run: async (event, name) => finished.push([event, name]) };
+    await sequence.PLAY('UNKNOWN');
+    assert.equal(sequence.ISPLAYING(), false);
+    await sequence.PLAY('DIVE');
+    assert.equal(sequence.ISPLAYING(), true);
+    assert.deepEqual(played, ['FIRST']);
+    await sequence.onAnimoEventFinished('FIRST');
+    assert.deepEqual(played, ['FIRST', 'SECOND']);
+    await sequence.onAnimoEventFinished('SECOND');
+    assert.equal(sequence.ISPLAYING(), false);
+    await sequence.progressNext();
+    assert.deepEqual(finished, [['ONFINISHED', 'DIVE']]);
+});
+
+test('Named non-parameterized sequence playback stays disabled for other profiles', async () => {
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo']) {
+        const sequence = new Sequence({ compat: createEngineCompat(profile) });
+        sequence.sequenceFile = [{ NAME: 'DIVE', TYPE: 'SEQUENCE', MODE: 'SEQUENCE' }];
+        await assert.rejects(sequence.PLAY('DIVE'));
+        assert.equal(createEngineCompat(profile).namedSequencePlayback, false);
+    }
+});
+
 test('Time Machine music-name patch is confined to its episode helpers', () => {
     const { patchTimeMachineDefinitions } = loadModule('engine/patches/timpului.ts');
     const definitions = {
