@@ -99,6 +99,12 @@ export class Integer extends ValueType<IntegerDefinition, number> {
     }
 
     @method()
+    async LENGTH(x: number, y: number) {
+        if (!this.engine.compat.flightPhysics) return this.__call('LENGTH', [x, y])
+        return this.setValue(Math.hypot(x, y))
+    }
+
+    @method()
     async RANDOM(offset: number, range?: number) {
         if (this.engine.compat.modernScripts && range === undefined) {
             range = offset

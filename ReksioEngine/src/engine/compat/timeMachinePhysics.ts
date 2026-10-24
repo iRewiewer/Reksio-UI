@@ -8,6 +8,7 @@ type PhysicsBody = {
     g: number
     excludedCenters: Set<number>
     force: Vec3
+    angle: number
     limit?: { min: Vec3; max: Vec3 }
 }
 
@@ -15,7 +16,7 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 const toWorld = (x: number, y: number, z = 0) => new Vec3(x - 400, 300 - y, z)
 
 // The native WORLD bridge uses a centered, Y-up world and exposes camera-relative
-// screen positions. Only NUREK opts into this backend; navigation remains separate.
+// screen positions. Scene-specific callers opt in; navigation remains separate.
 export class TimeMachinePhysics {
     private world = new World({ allowSleep: false })
     private bodies = new Map<number, PhysicsBody>()
@@ -29,7 +30,7 @@ export class TimeMachinePhysics {
     backgroundX = 0
     backgroundY = 0
 
-    constructor(source: SekWorld) {
+    constructor(source: SekWorld, private planar = true) {
         const solver = this.world.solver as GSSolver
         solver.iterations = 30
         solver.tolerance = 1e-7
@@ -45,15 +46,17 @@ export class TimeMachinePhysics {
         if (this.bodies.has(id)) this.remove(id)
         this.world.addBody(body)
         this.ids.set(body, id)
-        this.bodies.set(id, { body, maxSpeed, magnetic: false, g: 0, excludedCenters: new Set(), force: new Vec3() })
+        this.bodies.set(id, { body, maxSpeed, magnetic: false, g: 0, excludedCenters: new Set(), force: new Vec3(), angle: 0 })
     }
 
     addSphere(id: number, mass: number, friction: number, bounce: number, maxSpeed: number,
         dynamic: boolean, radius: number) {
         const body = new Body({ mass: dynamic ? mass : 0, shape: new Sphere(radius),
             material: new Material({ friction, restitution: bounce }), linearDamping: 0, angularDamping: 0 })
-        body.linearFactor.set(1, 1, 0)
-        body.angularFactor.set(0, 0, 1)
+        if (this.planar) {
+            body.linearFactor.set(1, 1, 0)
+            body.angularFactor.set(0, 0, 1)
+        }
         this.add(id, body, maxSpeed)
     }
 
@@ -78,6 +81,7 @@ export class TimeMachinePhysics {
         if (entry) entry.maxSpeed = speed
     }
     speed(id: number) { return this.bodies.get(id)?.body.velocity.length() ?? 0 }
+    angle(id: number) { return this.bodies.get(id)?.angle ?? 0 }
     rotation(id: number) {
         const angles = new Vec3()
         this.bodies.get(id)?.body.quaternion.toEuler(angles)
@@ -162,6 +166,8 @@ export class TimeMachinePhysics {
             this.world.step(dt)
             for (const entry of this.bodies.values()) {
                 this.limitVelocity(entry)
+                const { x, y } = entry.body.velocity
+                if (Math.hypot(x, y) > 1e-6) entry.angle = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
                 if (!entry.limit) continue
                 const { position, velocity } = entry.body
                 for (const axis of ['x', 'y', 'z'] as const) {

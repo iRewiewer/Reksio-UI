@@ -1308,6 +1308,43 @@ test('Time Machine magnetic centers attract bodies only when enabled and not exc
     assert.equal(world.position(101).x, 500);
 });
 
+test('Time Machine flight physics supports height, ground collision and a fixed flying altitude', () => {
+    const world = new TimeMachinePhysics({ paths: [], bodies: [{ id: 1, position: { x: 0, y: 0, z: 0 },
+        geometry: { flags: 0, triangles: [
+            [{ x: -200, y: -200, z: 0 }, { x: 200, y: -200, z: 0 }, { x: 200, y: 200, z: 0 }],
+            [{ x: -200, y: -200, z: 0 }, { x: 200, y: 200, z: 0 }, { x: -200, y: 200, z: 0 }],
+        ] } }] }, false);
+    sphere(world, 520, 400, 300);
+    world.setPosition(520, 400, 300, 100);
+    sphere(world, 501, 450, 350);
+    world.setPosition(501, 450, 350, 120);
+    world.setLimit(501, -400, -300, 120, 1200, 900, 120);
+    world.setGravity(0, 0, -200);
+    for (let i = 0; i < 180; i++) world.step(1000 / 60);
+    assert.ok(Math.abs(world.position(520).z - 5) < 0.1);
+    assert.equal(world.position(501).z, 120);
+    world.setVelocity(501, 0, 100, 0); world.step(16);
+    assert.equal(world.angle(501), 90);
+    world.setVelocity(501, 0, 0, 0); world.step(16);
+    assert.equal(world.angle(501), 90);
+});
+
+test('Time Machine flight camera scrolls both axes without changing world-space forces', () => {
+    const world = new TimeMachinePhysics({ bodies: [], paths: [] }, false);
+    sphere(world, 501, 1068, 828);
+    world.setPosition(501, 1068, 828, 120);
+    world.setBackgroundSize(-400, 1200, -300, 900);
+    world.setReference(501); world.setMoveFlags(true, true); world.step(16);
+    assert.deepEqual(world.position(501), { x: 668, y: 528, z: 120 });
+    assert.equal(world.backgroundX, 400);
+    assert.equal(world.backgroundY, 300);
+    world.setPosition(501, 500, 450, 120); world.step(16);
+    assert.deepEqual(world.position(501), { x: 400, y: 300, z: 120 });
+    world.addForce(501, -100, 0, 0); world.step(16);
+    assert.ok(world.backgroundX < 100);
+    assert.equal(world.position(501).x, 400);
+});
+
 test('Time Machine physical camera clamps to native background bounds', () => {
     const world = emptyPhysics(); sphere(world, 501, 400, -150);
     world.setBackgroundSize(0, 800, -200, 800);
@@ -1350,6 +1387,31 @@ test('Only Time Machine NUREK loads physics automatically and links in camera co
         assert.equal(positions.length, 1);
         world.REMOVEOBJECT(501); world.STOP();
         assert.equal(await world.MOVEOBJECTS(), 0);
+    }
+});
+
+test('Flight terrain physics is enabled only for Time Machine SAMOLOCIK', async () => {
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        for (const scene of ['SAMOLOCIK', 'SAMOCHODZIK', 'ARCADE']) {
+            const files = [];
+            const world = new World({ compat: createEngineCompat(profile),
+                currentScene: { name: scene, getRelativePath: async file => file },
+                filesystem: { getFile: async file => { files.push(file); return sekFixture(); } },
+                diagnostics: { worldState() {} } });
+            world.definition = { FILENAME: 'TEREN.SEK' };
+            await world.init();
+            const enabled = profile === 'timpului' && scene === 'SAMOLOCIK';
+            assert.deepEqual(files, enabled ? ['TEREN.SEK'] : []);
+            if (!enabled) continue;
+            world.ADDBODY(501, 1, 0, 0, 0, 0, 100, 1, 2, 5, 5, 5);
+            await world.SETPOSITION(501, 400, 300, 120);
+            world.SETGRAVITY(0, 0, -100);
+            world.SETVELOCITY(501, 0, 10, 0);
+            world.START(); world.tick(16);
+            await world.MOVEOBJECTS();
+            assert.equal(world.GETANGLE(501), 90);
+            assert.ok(world.physics.position(501).z < 120);
+        }
     }
 });
 
@@ -1750,6 +1812,28 @@ test('modern INTEGER RANDOM assigns its result while the baseline only returns i
     assert.equal(await integer.RANDOM(7, 1), 7);
     assert.equal(integer.value, 0);
     assert.equal(Number.isNaN(await integer.RANDOM(1)), true);
+});
+
+test('Time Machine integer vector lengths assign floored distances without enabling other profiles', async () => {
+    class Value extends FakeType {
+        value = 0;
+        setValue(value) { this.value = value; return value; }
+    }
+    const { Integer } = loadModule('engine/types/integer.ts', {
+        './index': { ValueType: Value }, '../../common/types': decorator,
+    });
+    const integer = new Integer({ compat: createEngineCompat('timpului') });
+    assert.equal(await integer.LENGTH(-3, 4), 5);
+    assert.equal(integer.value, 5);
+    assert.equal(await integer.LENGTH(1, 1), 1);
+    assert.equal(integer.value, 1);
+    assert.equal(await integer.LENGTH(0, 0), 0);
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo']) {
+        integer.engine.compat = createEngineCompat(profile);
+        integer.__call = (method, args) => ({ method, args });
+        assert.deepEqual(await integer.LENGTH(3, 4), { method: 'LENGTH', args: [3, 4] });
+        assert.equal(integer.value, 0);
+    }
 });
 
 test('modern keyboard input can be re-enabled after a transition', () => {

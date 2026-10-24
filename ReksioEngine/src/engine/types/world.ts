@@ -43,7 +43,13 @@ export class World extends Type<WorldDefinition> {
     }
 
     private usesPhysics(filename: string) {
-        return this.engine.compat.underwaterPhysics && /(?:^|[\\/])NUREK\.SEK$/i.test(filename ?? '')
+        return (this.engine.compat.underwaterPhysics && /(?:^|[\\/])NUREK\.SEK$/i.test(filename ?? '')) ||
+            this.usesFlightPhysics(filename)
+    }
+
+    private usesFlightPhysics(filename: string) {
+        return this.engine.compat.flightPhysics && this.engine.currentScene?.name === 'SAMOLOCIK' &&
+            /(?:^|[\\/])TEREN\.SEK$/i.test(filename ?? '')
     }
 
     private ensurePathingEnabled() {
@@ -92,7 +98,7 @@ export class World extends Type<WorldDefinition> {
         const path = await scene.getRelativePath(filename)
         const physical = this.usesPhysics(filename)
         const world = readSekWorld(await this.engine.filesystem.getFile(path), physical)
-        this.physics = physical ? new TimeMachinePhysics(world) : null
+        this.physics = physical ? new TimeMachinePhysics(world, !this.usesFlightPhysics(filename)) : null
         this.paths = new Map(world.paths.map((path) => [path.id, new SekaiNavigation(path)]))
         for (const { id, position } of world.bodies) {
             const body = this.getBody(id)
@@ -138,7 +144,7 @@ export class World extends Type<WorldDefinition> {
         const body = this.getBody(id)
         body.speed = maxVel
         if (this.physics) {
-            if (geomType !== 2) throw new Error(`Unsupported NUREK geometry type ${geomType}`)
+            if (geomType !== 2) throw new Error(`Unsupported Time Machine geometry type ${geomType}`)
             this.physics.addSphere(id, density, mu, bounce, maxVel, bodyType !== 0, radiusX)
         }
     }
@@ -380,7 +386,7 @@ export class World extends Type<WorldDefinition> {
     @method()
     GETANGLE(id: number) {
         this.ensurePathingEnabled()
-        return this.getBody(id).angle
+        return this.physics?.angle(id) ?? this.getBody(id).angle
     }
 
     @method()
