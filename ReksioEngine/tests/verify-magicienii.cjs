@@ -1041,6 +1041,130 @@ async function verifyMazePuzzleInitialization() {
     console.log(`MAZE PUZZLES: full image/animation startup, ${plates} plate updates, ${switches} linked switches, save round-trip and ${exits} exit decisions passed`);
 }
 
+async function verifyMazeFirstRoute() {
+    const previousWindow = globalThis.window, assetLoader = load('filesystem/assetsLoader.ts'), previousSound = assetLoader.loadSound;
+    globalThis.window = new EventTarget();
+    const { engine, parent, scope, defs, get, stage, backgrounds, memory } = await createMazePuzzleFixture(0);
+    const voices = [], audio = [], routes = [], screenshots = [];
+    let walked = 0, crossings = 0, teleports = 0;
+    try {
+        const voice = (filename, onEnd) => {
+            assert.ok(fs.existsSync(path.join(assets, filename)), `Original maze voice: ${filename}`);
+            const instance = { isPlaying: true, stop() { this.isPlaying = false; }, pause() {}, resume() {} };
+            audio.push(filename.toLowerCase());
+            voices.push(() => { if (instance.isPlaying) { instance.isPlaying = false; onEnd?.(); } });
+            return instance;
+        };
+        // Audio duration and GPU rendering are boundaries; actors, masks, enemies and sequence callbacks remain live.
+        assetLoader.loadSound = async (_filesystem, filename) => ({ play: options => voice(filename, options?.onEnd) });
+        for (const object of scope.objects.filter(object => object.definition.TYPE === 'SOUND')) {
+            object.playForSequence = onEnd => voice(`wavs/${object.definition.FILENAME}`, onEnd);
+        }
+        const pixel = new Animo(engine, parent, { TYPE: 'ANIMO', NAME: '__MAZE_ROUTE_PIXEL__',
+            FILENAME: '$\\COMMON\\PIXEL.ANN', TOCANVAS: true, VISIBLE: true });
+        pixel.loadSfx = async () => {}; scope.set(pixel.name, pixel);
+        await pixel.init(); await pixel.applyDefaults(); await pixel.ready();
+        const sequence = new Sequence(engine, parent, defs.SEQLAB);
+        sequence.getAnimo = async filename => { assert.equal(filename, '$\\COMMON\\PIXEL.ANN'); return pixel; };
+        scope.set(sequence.name, sequence); await sequence.init();
+        const keyboard = new Keyboard(engine, parent, defs.KEYBOARD);
+        scope.set(keyboard.name, keyboard); await keyboard.ready(); keyboard.SETAUTOREPEAT(false);
+        const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+        episode.GOTO = name => routes.push(name); scope.set(episode.name, episode);
+        const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+        screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+        const teleportSound = get('SNDTELE'), playTeleport = teleportSound.PLAY.bind(teleportSound);
+        teleportSound.PLAY = (...args) => { teleports++; return playTeleport(...args); };
+        const ast = load('interpreter/parser.ts').parseCode(defs.__INIT__.CODE.code);
+        const start = ast.findIndex(entry => entry.target?.ref?.name === 'BEHINITPLAYERS');
+        assert.ok(start >= 0);
+        await new Interpreter(new RuntimeContext(engine, null, defs.__INIT__.CODE.code)).execute(ast.slice(start + 1));
+        const key = async (code, character, down) => {
+            const event = new Event(down ? 'keydown' : 'keyup'); Object.assign(event, { code, key: character });
+            window.dispatchEvent(event); await keyboard.tick();
+        };
+        const step = async () => {
+            if (voices.length) voices.shift()();
+            for (const object of scope.objects) await object.tick(1000 / 30);
+            assert.ok(get('VARREXZYCIA').value > 0 && get('VARKRETZYCIA').value > 0, 'Both characters must survive the route');
+            assert.deepEqual(routes, [], 'Walking must not enter the failure/restart route');
+        };
+        const arrow = (direction, down) => key(`Arrow${direction[0]}${direction.slice(1).toLowerCase()}`, direction, down);
+        const walk = async (actor, direction) => {
+            const before = [actor.GETCENTERX(), actor.GETCENTERY()], beforeTeleports = teleports;
+            await arrow(direction, true);
+            let tick = 0;
+            for (; tick < 60 && actor.GETCENTERX() === before[0] && actor.GETCENTERY() === before[1]; tick++) await step();
+            await arrow(direction, false);
+            for (; tick < 90; tick++) { await step(); if (actor.GETEVENTNAME().startsWith('IDLE')) break; }
+            assert.ok(tick < 90, 'Each arrow input must finish at the original idle animation');
+            const after = [actor.GETCENTERX(), actor.GETCENTERY()];
+            if (beforeTeleports === teleports) {
+                const [dx, dy] = { UP: [0, -40], DOWN: [0, 40], LEFT: [-40, 0], RIGHT: [40, 0] }[direction];
+                assert.deepEqual(after, [before[0] + dx, before[1] + dy], 'Each ordinary move must finish one authored tile');
+            } else assert.notDeepEqual(after, before, 'The original teleport callback must move its selected actor');
+            walked++;
+        };
+        const ferry = async (actor, column) => {
+            const boat = get('ANNLODKA'), startX = actor.GETCENTERX(), endX = column * 40 + 20, right = endX > startX;
+            assert.equal(actor.GETCENTERY(), 460);
+            let tick = 0;
+            for (; tick < 1800; tick++) {
+                const x = boat.GETCENTERX();
+                if (right ? boat.GETEVENTNAME() === '4' && x >= startX - 24 && x <= startX - 8
+                    : boat.GETEVENTNAME() === '-4' && x <= startX + 24 && x >= startX + 8) break;
+                await step();
+            }
+            assert.ok(tick < 1800, 'Wait for the moving ferry to approach the boarding platform');
+            await arrow('DOWN', true);
+            for (tick = 0; tick < 60 && actor.GETCENTERY() === 460; tick++) await step();
+            await arrow('DOWN', false);
+            for (; tick < 90; tick++) { await step(); if (actor.GETEVENTNAME().startsWith('IDLE')) break; }
+            assert.equal(actor.GETCENTERY(), 500, 'Board the ferry through normal downward movement');
+            for (tick = 0; tick < 1800 && Math.abs(actor.GETCENTERX() - endX) > 30; tick++) await step();
+            assert.ok(tick < 1800, 'The original ferry callback must carry the actor toward the destination');
+            await arrow('UP', true);
+            for (tick = 0; tick < 1800 && actor.GETCENTERY() === 500; tick++) await step();
+            await arrow('UP', false);
+            for (; tick < 1830; tick++) { await step(); if (actor.GETEVENTNAME().startsWith('IDLE')) break; }
+            assert.deepEqual([actor.GETCENTERX(), actor.GETCENTERY()], [endX, 460], 'Disembark through the original collision guard');
+            crossings++;
+        };
+        // Numbers are ferry landing columns. Kretes must leave the entrance first to unblock Reksio.
+        const paths = [
+            { number: 2, moves: ['DOWN', 'DOWN', 'DOWN', 'DOWN', 'LEFT', 'DOWN', 'DOWN', 'DOWN', 'DOWN', 'RIGHT', 'DOWN',
+                16, 4, 16, 4, 16, 14, 'UP', 'UP', 'RIGHT', 'UP', 'UP', 'RIGHT', 'UP', 'DOWN', 'LEFT', 'DOWN', 'DOWN',
+                'LEFT', 'DOWN', 'DOWN', 16, 4, 16, 14, 'UP', 'UP', 'UP', 'UP', 'UP', 'UP', 'UP', 'UP', 'UP', 'LEFT',
+                'DOWN', 'RIGHT', 'LEFT', 'DOWN', 'LEFT', 'RIGHT', 'UP', 'DOWN', 'DOWN', 'RIGHT', 'RIGHT', 'RIGHT', 'UP', 'UP', 'RIGHT'] },
+            { number: 1, moves: ['RIGHT', 'DOWN', 'DOWN', 'DOWN', 'DOWN', 'LEFT', 'DOWN', 'DOWN', 'DOWN', 'DOWN', 'RIGHT',
+                'DOWN', 14, 'UP', 'UP', 'UP', 'UP', 'UP', 'UP', 'UP', 'RIGHT', 'RIGHT', 'RIGHT', 'UP', 'UP'] },
+        ];
+        for (const { number, moves } of paths) {
+            await key(`Digit${number}`, String(number), true); await key(`Digit${number}`, String(number), false);
+            const actor = get(`ANNPLAYER${number - 1}`);
+            assert.equal(get('VARPLAYERNAME').value, actor.name);
+            for (const move of moves) typeof move === 'number' ? await ferry(actor, move) : await walk(actor, move);
+        }
+        assert.equal(get('BTNEXIT1').logic.enabled, true, 'Both characters must reach the far exit naturally');
+        assert.deepEqual(get('ANNSWITCHMASK').clones.map(wall => wall.GETCFRAMEINEVENT()), [1, 1, 1, 1, 0, 0, 1]);
+        assert.deepEqual([get('VARREXZYCIA').value, get('VARKRETZYCIA').value], [2, 2]);
+        assert.deepEqual([walked, crossings, teleports], [74, 11, 4]);
+        assert.ok(audio.includes('wavs/rex_r042.wav') && audio.includes('wavs/kretes_d047.wav'));
+        const button = get('BTNEXIT1'), sprite = get(button.definition.GFXSTANDARD.objectName).getRenderObject();
+        for (const event of ['pointerover', 'pointerdown', 'pointerup']) sprite.emit(event);
+        await button.tick();
+        assert.deepEqual(routes, ['ARCADE']); assert.equal(get('G_SARCADEOBJECTS').value, 'UNIVPIWNICA');
+        assert.equal(screenshots.length, 1);
+        assert.deepEqual(deserializeArray(memory.get('common/maze_fixture0.arr')), [0, 1, 1, 1, 1, 1, 0, 0, 1]);
+        console.log(`MAZE 0 ROUTE: ${walked} keyboard tile moves, ${crossings} live ferry rides, ${teleports} teleports, linked switches, moving enemies and original saved exit passed`);
+    } finally {
+        assetLoader.loadSound = previousSound;
+        assert.deepEqual(engine.scopeManager.destroy(), [], 'Maze route cleanup'); assert.equal(stage.children.length, 0);
+        backgrounds.forEach(texture => texture.destroy(true));
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+    }
+}
+
 async function verifyMazeRecovery() {
     const previousWindow = globalThis.window, assetLoader = load('filesystem/assetsLoader.ts');
     const loadSound = assetLoader.loadSound;
@@ -2898,6 +3022,7 @@ async function main() {
     await verifyMazeEnemies();
     await verifyMazePlayers();
     await verifyMazePuzzleInitialization();
+    await verifyMazeFirstRoute();
     await verifyMazeRecovery();
     await verifyFredRoute();
     await verifyFredRecovery();
