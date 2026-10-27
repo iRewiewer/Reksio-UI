@@ -75,6 +75,8 @@ const { default: Filesystem, normalizePath } = load('filesystem/index.ts');
 const { FileNotFoundError } = load('filesystem/fileLoader.ts');
 const { deserializeArray, serializeArray } = load('fileFormats/archive/array.ts');
 const { Container, Rectangle, Texture, BaseTexture } = require('pixi.js');
+const createGraph = require('ngraph.graph');
+const { aStar } = require('ngraph.path');
 const constructors = Object.fromEntries([
     ['INTEGER', 'integer', 'Integer'], ['DOUBLE', 'double', 'Double'], ['STRING', 'string', 'String'],
     ['BOOL', 'bool', 'Bool'], ['ARRAY', 'array', 'ArrayObject'], ['BEHAVIOUR', 'behaviour', 'Behaviour'],
@@ -491,6 +493,72 @@ async function verifyBarandalfRecovery() {
         } finally { dispose(); }
     }
     console.log('BARANDALF: three real-asset overlay initializers, restart voices, frozen controls/crossing and original reload requests passed');
+}
+
+function planBarandalfRoute(fixture, level) {
+    const { get, world, directory } = fixture;
+    const source = load('fileFormats/sek/index.ts').readSekWorld(bytes(path.join(directory, `level${level}.sek`)), true);
+    const radius = world.physics.world.bodies.find(body => body.mass > 0).shapes[0].radius;
+    const obstacles = source.bodies.filter(body => body.geometry?.triangles.length).map(body => {
+        const points = body.geometry.triangles.flat();
+        return { x0: Math.min(...points.map(point => point.x)) + 400, x1: Math.max(...points.map(point => point.x)) + 400,
+            y0: 300 - Math.max(...points.map(point => point.y)), y1: 300 - Math.min(...points.map(point => point.y)),
+            z0: Math.min(...points.map(point => point.z)), z1: Math.max(...points.map(point => point.z)) };
+    });
+    // Conservative inflated bounds are used only by the test controller, not by game physics.
+    const free = (x, y) => !obstacles.some(box => box.z0 <= radius && box.z1 >= -radius &&
+        x > box.x0 - radius - 4 && x < box.x1 + radius + 4 && y > box.y0 - radius - 4 && y < box.y1 + radius + 4);
+    const graph = createGraph();
+    for (let x = 20; x <= 780; x += 10) for (let y = 20; y <= 580; y += 10) {
+        if (free(x, y)) graph.addNode(`${x},${y}`, { x, y });
+    }
+    graph.forEachNode(node => {
+        const { x, y } = node.data;
+        for (const [dx, dy] of [[10, 0], [0, 10], [10, 10], [10, -10]]) {
+            if (!graph.getNode(`${x + dx},${y + dy}`) || !free(x + dx / 2, y + dy / 2)) continue;
+            if (dx && dy && (!graph.getNode(`${x + dx},${y}`) || !graph.getNode(`${x},${y + dy}`))) continue;
+            graph.addLink(node.id, `${x + dx},${y + dy}`);
+        }
+    });
+    const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    let start, best = Infinity;
+    const position = { x: world.GETPOSITIONX(100), y: world.GETPOSITIONY(100) }, goals = [];
+    graph.forEachNode(node => {
+        const d = distance(position, node.data);
+        if (d < best) { best = d; start = node; }
+        if (get('CANVASOBSERVER').GETGRAPHICSAT(node.data.x, node.data.y, false, 300, 300, false) === 'IMGEXIT') goals.push(node);
+    });
+    assert.ok(start && goals.length, `Barandalf ${level} must have an accessible opaque exit pixel`);
+    const sprite = get('IMGEXIT').getRenderObject(), center = { x: sprite.x + sprite.width / 2, y: sprite.y + sprite.height / 2 };
+    const end = goals.sort((a, b) => distance(a.data, center) - distance(b.data, center))[0];
+    const plan = aStar(graph, { distance: (a, b) => distance(a.data, b.data), heuristic: (a, b) => distance(a.data, b.data) })
+        .find(start.id, end.id).reverse().map(node => node.data);
+    assert.ok(plan.length > 1, `Barandalf ${level} collision bounds must admit a route`);
+    // Aim past the exit: the original character stops within ten pixels of the mouse.
+    const last = plan.at(-1), previous = plan.at(-2), length = distance(last, previous);
+    plan.push({ x: last.x + 20 * (last.x - previous.x) / length, y: last.y + 20 * (last.y - previous.y) / length });
+    return plan;
+}
+
+async function verifyBarandalfRoutes() {
+    for (const level of [0, 2]) {
+        const fixture = await createBarandalfFixture(level), { get, world, step, routes, screenshots, dispose } = fixture;
+        try {
+            const plan = planBarandalfRoute(fixture, level);
+            let index = 0;
+            for (let tick = 0; tick < 6000 && !routes.length; tick++) {
+                const x = world.GETPOSITIONX(100), y = world.GETPOSITIONY(100);
+                while (index < plan.length - 1 && Math.hypot(x - plan[index].x, y - plan[index].y) < 12) index++;
+                get('MOUSE').onMouseMove({ button: 0, screen: plan[index] });
+                await step();
+            }
+            assert.deepEqual(routes, [level === 0 ? 'BARANDALF' : 'ARCADE']);
+            assert.equal(get('G_SARCADEOBJECTS').value, level === 0 ? '1' : 'BARANMIOT');
+            assert.equal(get('VARLEVEL').value, level + 1); assert.equal(screenshots.length, 1);
+            assert.equal(world.started, false);
+            console.log(`BARANDALF ${level}: full mouse-follow route, ${plan.length} collision-planned points, hidden exit and original story transition passed`);
+        } finally { dispose(); }
+    }
 }
 
 async function verifyMazeEnemies() {
@@ -2743,6 +2811,7 @@ async function main() {
     await verifyBarandalf();
     await verifyBarandalfBoat();
     await verifyBarandalfRecovery();
+    await verifyBarandalfRoutes();
     await verifyMazeEnemies();
     await verifyMazePlayers();
     await verifyMazePuzzleInitialization();
