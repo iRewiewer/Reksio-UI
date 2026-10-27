@@ -1268,6 +1268,27 @@ function handleEngineMessage(event) {
     return;
   }
 
+  if (data.type === 'reksio:exit' && event.source === nodes.gameFrame.contentWindow) {
+    const game = state.games.find((entry) => entry.id === state.loadedId);
+    if (!game || compatProfileForGame(game) !== 'magicienii') return;
+    syncCurrentSave();
+    if (document.fullscreenElement === nodes.gameFrame) {
+      document.exitFullscreen().catch((error) => addLog('launcher', 'warn', 'Could not leave fullscreen', error.message));
+    }
+    stopLoadedGame();
+    state.selectedId = null;
+    renderGames();
+    renderDetails();
+    const url = new URL(window.location.href);
+    for (const parameter of ['game', 'scene', 'sceneObject']) {
+      url.searchParams.delete(parameter);
+      launcherParams.delete(parameter);
+    }
+    window.history.replaceState(null, '', url);
+    addLog('launcher', 'info', 'Game closed', game.title);
+    return;
+  }
+
   if (data.type === 'reksio:console-batch') {
     const entries = Array.isArray(data.entries) ? data.entries : [];
     queueLogEntries(entries.map((entry) => createClientLogEntryFromPayload(entry)));
@@ -1511,7 +1532,7 @@ function renderDetails() {
     nodes.selectedSource.textContent = 'Library';
     nodes.selectedBadges.innerHTML = '';
     nodes.detailTitle.textContent = 'Game details';
-    nodes.detailNotes.textContent = 'Your library is empty.';
+    nodes.detailNotes.textContent = state.games.length ? 'No game selected.' : 'Your library is empty.';
     nodes.detailCover.textContent = 'R';
     nodes.metaList.innerHTML = '';
     nodes.stageEmpty.hidden = false;

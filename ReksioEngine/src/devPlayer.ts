@@ -28,7 +28,13 @@ const baseOptions = {
     compatProfile: urlParams.get('compatProfile') ?? undefined,
     checkpointsEnabled: true,
     debugContainer: debugContainer,
-    onExit: () => document.exitFullscreen(),
+    onExit: () => {
+        if (urlParams.get('compatProfile') !== 'magicienii') return document.exitFullscreen()
+        flushLauncherConsoleLogs()
+        postLauncherMessage({ type: 'reksio:exit' })
+        // The launcher may own fullscreen; a standalone player can only leave its own.
+        if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+    },
     saveFile: areSavesEnabled ? SaveFileManager.fromLocalStorage() : undefined,
     storage: new IndexedDBStorage(urlParams.get('storage') ?? 'reksio',
         urlParams.get('storage') && urlParams.get('compatProfile') === 'magicienii' ? 'reksio' : undefined),

@@ -1792,6 +1792,73 @@ async function verifyDragonFlight() {
     } finally { dispose(); }
 }
 
+function planDragonRoute(get) {
+    const heights = Array.from({ length: 30 }, (_, index) => -20 + index * 15), costs = [], parents = [];
+    // Plan from the real map pixels, allowing limited height change between horizontal samples.
+    for (let x = 0; x <= 15200; x += 80) {
+        const row = [], previous = costs.at(-1), links = [];
+        for (let index = 0; index < heights.length; index++) {
+            const y = heights[index]; let hazard = 0;
+            for (const [cx, dy] of [[297, 45], [372, 75], [305, 122]]) {
+                for (const margin of [-18, 0, 18]) {
+                    if (get('PATTERNBKG').GETGRAPHICSAT(x + cx, y + dy + margin, true, false, 0) !== 'UNKNOWN') hazard += 100;
+                    if (get('PATTERNFIRE').GETGRAPHICSAT(x + cx, y + dy + margin, false, false, 0) !== 'UNKNOWN') hazard += 2;
+                }
+            }
+            let best = previous ? Infinity : Math.abs(y - 200) * 0.1, last = -1;
+            if (previous) for (let from = Math.max(0, index - 4); from <= Math.min(heights.length - 1, index + 4); from++) {
+                const score = previous[from] + Math.abs(y - heights[from]) * 0.04;
+                if (score < best) { best = score; last = from; }
+            }
+            row.push(best + hazard + Math.abs(415 - y) * 0.0001); links.push(last);
+        }
+        costs.push(row); parents.push(links);
+    }
+    const route = []; let index = costs.at(-1).indexOf(Math.min(...costs.at(-1)));
+    for (let x = costs.length - 1; x >= 0; x--) { route[x] = heights[index]; index = parents[x][index]; }
+    return route;
+}
+
+async function verifyLaterDragonFlights() {
+    for (const [level, destination, room] of [[1, 'LEBIODKA', 'DRAGON'], [2, 'ARCADE', 'PRZYSTAN'],
+        [3, 'ARCADE', 'WMWEJSCIE'], [4, 'ARCADE', 'PRZYSTAN']]) {
+        const { get, routes, memory, screenshots, key, step, dispose } = await createDragonFixture(level);
+        const heights = [], mouse = get('MOUSE'), pointer = (x, y) => ({ screen: { x, y }, button: 0 });
+        let spraying = false, sprays = 0, strokes = 0, extinguishedInAir = 0;
+        try {
+            const plan = planDragonRoute(get);
+            for (let tick = 0; tick < 7000 && !routes.length; tick++) {
+                const wings = get('ANNSKRZYDLA'), fire = get('ANNDRAGONFIRE'), y = get('VARPOSY').value;
+                const wasBurning = fire.ISPLAYING('PLAY'), wasAirborne = get('VARSTARTOWANIE').value === 0;
+                const target = plan[Math.min(plan.length - 1, Math.max(0, Math.round((get('VARPOSX').value + 160) / 80)))];
+                heights.push(y); if (heights.length > 10) heights.shift();
+                const predictedY = y + (y - heights[0]) * 4;
+                if (wasBurning && wasAirborne) {
+                    const position = pointer(fire.GETCENTERX(), fire.GETCENTERY()); mouse.onMouseMove(position);
+                    if (!spraying) { mouse.handleClickEvent(position, 'click'); spraying = true; sprays++; }
+                } else if (spraying) {
+                    mouse.handleClickEvent(pointer(400, 300), 'release'); spraying = false;
+                }
+                if (get('VARENERGY').value > 0 && predictedY > target &&
+                    ((get('VARDIR').value === 'B' && wings.GETCFRAMEINEVENT() <= 1) ||
+                        ['PLYNIE', 'SZYB'].includes(wings.GETEVENTNAME()))) {
+                    await key(true); await step(); await key(false); strokes++;
+                } else await step();
+                if (wasBurning && wasAirborne && get('VARSTARTOWANIE').value === 0 && !fire.ISPLAYING('PLAY')) extinguishedInAir++;
+            }
+            assert.deepEqual(routes, [destination], `Dragon ${level} full-flight destination`);
+            assert.equal(get('G_SARCADEOBJECTS').value, room);
+            assert.ok(get('VARPOSX').value > 15000 && get('VARENERGY').value > 0);
+            assert.ok(strokes > 0 && sprays > 0 && extinguishedInAir > 0);
+            assert.deepEqual(deserializeArray(memory.get('common/dragon0.arr')), [level, 0]);
+            assert.equal(screenshots.length, 1);
+            assert.equal(get('KEYBOARD').ISENABLED(), true);
+            if (level === 2) assert.equal(get('G_SLASTOBJECTS').value, 'DRAGON2');
+            console.log(`DRAGON ${level}: full flight, ${strokes} strokes, ${sprays} water bursts, ${extinguishedInAir} airborne extinguishings; ${get('VARENERGY').value} energy, return to ${destination}/${room}`);
+        } finally { dispose(); }
+    }
+}
+
 async function verifyDragonRecoveryAndExits() {
     const failure = await createDragonFixture(1);
     try {
@@ -1870,6 +1937,100 @@ async function verifyLebiodkaCutscene() {
         assetLoader.loadSound = previousLoadSound;
         assert.deepEqual(engine.scopeManager.destroy(), []);
         assert.equal(stage.children.length, 0);
+    }
+}
+
+async function verifyMagicieniiEndings() {
+    const { Sound } = load('engine/types/sound.ts'), { Application } = load('engine/types/application.ts');
+    const expected = [
+        ['OUTRO_2', 'kretes_f087', 'nar_f088', 'kretes_f089', 'kogut_f090'],
+        ['OUTRO_3', 'kogut_f092', 'kretes_f093', 'rex_r090', 'kurator_f094', 'kretes_f095'],
+        ['OUTRO_4', 'nar_f099', 'nar_f100', 'nar_f101', 'k_uniwersytet_02', 'nar_f104',
+            'k_uniwersytet_03', 'nar_f103', 'k_uniwersytet_05', 'nar_f102', 'nar_f105'],
+        ['OUTRO_5', 'kogut_f096', 'kretes_f097', 'nar_f107', 'nar_f108', 'nar_f109', 'nar_f111', 'nar_f112', 'jp02'],
+        ['OUTRO_7', 'kre03', 'jp04', 'mal05', 'jp06', 'kre07', 'jp08', 'mal09', 'jp10', 'mal11'],
+        ['OUTRO_7', 'mal12', 'kre13', 'reg05', 'mal14', 'kre19', 'reg09', 'reg07', 'mal17',
+            'kre15', 'jp16', 'reg02', 'reg10', 'reg04', 'reg06', 'mal22'],
+        ['EXIT', 'susel30', 'marzajac31', 'susel32', 'kapelu33', 'susel34', 'marzajac35',
+            'susel36', 'marzajac37', 'kapelu38', 'susel39'],
+    ];
+    for (let level = 1; level <= 7; level++) {
+        const { engine, parent, scope, defs, get } =
+            await createArcadeFixture(`OUTRO_${level}`, `Outro/outro${level}`, `outro_${level}.cnv`);
+        const base = `dane/game/przygoda/outro/outro${level}`, stage = engine.app.stage;
+        const backgrounds = [], voices = [], audio = [], routes = [], screenshots = [];
+        engine.resolvePath = async (name, base = '') => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
+        parent.getRelativePath = name => engine.resolvePath(name, base);
+        engine.filesystem = new Filesystem({
+            hasFile: name => fs.existsSync(path.join(assets, name)), registerLogicalFilenames() {},
+            getRawFile: async name => bytes(path.join(assets, name)),
+        }, { get: async () => null, has: async () => false }, engine.compat);
+        engine.rendering.addToStage = sprite => stage.addChild(sprite);
+        engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+        engine.rendering.setBackground = texture => backgrounds.push(texture);
+        const assetLoader = load('filesystem/assetsLoader.ts'), previousLoadSound = assetLoader.loadSound;
+        assetLoader.loadSound = async (filesystem, filename) => {
+            if (!fs.existsSync(path.join(assets, normalizePath(filename)))) throw new FileNotFoundError(filename);
+            const sound = { isPlaying: false, stop() { this.isPlaying = false; }, play(options = {}) {
+                if (!options.loop) audio.push(path.posix.basename(normalizePath(filename)));
+                this.isPlaying = true; options.onStart?.();
+                const instance = { volume: 1, stop() { sound.isPlaying = false; }, pause() {}, resume() {} };
+                if (!options.loop) voices.push(() => { if (sound.isPlaying) { sound.isPlaying = false; options.onEnd?.(); } });
+                return instance;
+            } };
+            return sound;
+        };
+        engine.music = { volume: 1, stop() {} };
+        engine.options = { onExit: () => routes.push('EXIT') };
+        try {
+            for (const def of Object.values(defs)) {
+                if (['ANIMO', 'IMAGE'].includes(def.TYPE)) {
+                    const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+                    if (actor instanceof Animo) actor.loadSfx = async () => {};
+                    scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+                } else if (def.TYPE === 'SOUND') {
+                    const sound = new Sound(engine, parent, def); scope.set(sound.name, sound); await sound.init();
+                } else if (def.TYPE === 'TIMER') scope.set(def.NAME, new Timer(engine, parent, def));
+            }
+            for (const def of Object.values(defs).filter(def => def.TYPE === 'SEQUENCE')) {
+                const sequence = new Sequence(engine, parent, def); scope.set(sequence.name, sequence); await sequence.init();
+            }
+            const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+            episode.GOTO = scene => routes.push(scene); scope.set(episode.name, episode);
+            const application = new Application(engine, null, { TYPE: 'APPLICATION', NAME: 'GAME' });
+            scope.set(application.name, application);
+            const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+            screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+            const flip = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__FLIP__' });
+            flip.RUN = () => {}; scope.set(flip.name, flip);
+            scope.set('G_ITKTPM', new constructors.INTEGER(engine, parent, { TYPE: 'INTEGER', NAME: 'G_ITKTPM', VALUE: 0 }));
+            for (const name of ['G_ANNPAGE', 'G_STLPAGE']) {
+                const page = new Type(engine, parent, { TYPE: 'ANIMO', NAME: name });
+                page.HIDE = () => {}; page.PLAY = () => {}; scope.set(name, page);
+            }
+            // Global menu/cursor/page effects and voice duration are outside this scene-owned test.
+            const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
+            await new Interpreter(new RuntimeContext(engine, null, code)).execute(ast.filter(entry =>
+                !['G_CURSOR', 'G_MENU', 'G_AMBIENT'].includes(entry.target?.ref?.name)));
+            for (let tick = 0; tick < 24000 && !routes.length; tick++) {
+                if (voices.length) voices.shift()();
+                for (const object of scope.objects) await object.tick(1000 / 60);
+            }
+            const [destination, ...filenames] = expected[level - 1];
+            assert.deepEqual(routes, [destination], `Outro ${level} destination`);
+            assert.deepEqual(audio, filenames.map(name => `${name}.wav`), `Outro ${level} voice order`);
+            if (level === 1) assert.equal(get('VAR_OUTRO1').value, 5);
+            if (level === 3) {
+                assert.equal(get('VARO_PRZEB').value, 20); assert.equal(get('VARO_KLATKA').value, 19);
+                assert.equal(screenshots.length, 19);
+            }
+            console.log(`OUTRO ${level}: ${audio.length} original voices, animation/timer chain and ${destination} request passed`);
+        } finally {
+            engine.music?.stop(); assetLoader.loadSound = previousLoadSound;
+            assert.deepEqual(engine.scopeManager.destroy(), [], `Outro ${level} cleanup`);
+            backgrounds.forEach(texture => texture.destroy(true));
+            assert.equal(stage.children.length, 0);
+        }
     }
 }
 
@@ -2276,8 +2437,10 @@ async function main() {
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();
     await verifyDragonFlight();
+    await verifyLaterDragonFlights();
     await verifyDragonRecoveryAndExits();
     await verifyLebiodkaCutscene();
+    await verifyMagicieniiEndings();
     await verifyAlchemy();
     assert.deepEqual(errors, [], 'The original scripts must not call unsupported methods');
 }
