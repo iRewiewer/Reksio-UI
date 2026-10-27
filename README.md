@@ -1,8 +1,8 @@
 # Reksio UI
 
-An AI-first project focused on making all five romanian Reksio games playable with tentative support for the original polish ones. 
+This began as an independent, AI-first effort to use and improve [ReksioEngine](https://github.com/ReksioEngine/ReksioEngine), separate from the upstream project.
 
-The project began as an independent effort to build on and improve [ReksioEngine](https://github.com/ReksioEngine/ReksioEngine). Its focus has since shifted towards practical compatibility, prioritising working games over strict fidelity to the original engine. Game-specific fixes and compatibility patches are part of that approach.
+The goal now is to make all five Romanian Reksio games playable by whatever practical fixes are needed, rather than faithfully recreating the original engine. That includes game-by-game compatibility patches, developed AI-first, with tentative support for the original Polish versions.
 
 ## Games
 
