@@ -10,6 +10,8 @@ module.exports = async function createAdventureFixture(runtime, options = {}) {
     const fixture = await require('./verify-magicienii-piklibia.cjs').createFixture(runtime, { ...options, initialize: false });
     const { engine, parent, scope, defs, get } = fixture;
     const assetLoader = load('filesystem/assetsLoader.ts'), originalSound = assetLoader.loadSound;
+    const { IgnorableError } = load('common/errors.ts');
+    class SceneTransition extends IgnorableError {}
     const voices = [], audio = [], backgrounds = [], routes = [];
     let elapsed = 0;
     const dispose = () => {
@@ -97,7 +99,8 @@ module.exports = async function createAdventureFixture(runtime, options = {}) {
         get('G_MENU').ADDEXP = amount => fixture.calls.push(['ADDEXP', amount]);
         const cnv = boundary('CNVLOADER', ['LOAD']);
         cnv.LOAD = filename => assert.equal(filename, `${room.toUpperCase()}.CNV`);
-        const episode = boundary('PRZYGODA', ['GOTO']); episode.GOTO = scene => routes.push(scene);
+        const episode = boundary('PRZYGODA', ['GOTO']);
+        episode.GOTO = scene => { routes.push(scene); throw new SceneTransition(); };
         for (const [name, type, value] of [['SCENENAME', 'STRING', dialogs ? 'DIALOGS' : 'ARCADE'], ['G_IKRETACTIVE', 'INTEGER', 1], ['G_IFLIPPAGE', 'INTEGER', 0]]) {
             scope.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name, VALUE: value }));
         }
@@ -109,8 +112,10 @@ module.exports = async function createAdventureFixture(runtime, options = {}) {
         await get('MOUSE').ready(); await get('__INIT__').RUN();
         const step = async (count, check) => {
             for (let tick = 0; tick < count; tick++) {
-                if (voices.length) voices.shift()();
-                for (const object of [...scope.objects]) await object.tick(1000 / 30);
+                try {
+                    if (voices.length) voices.shift()();
+                    for (const object of [...scope.objects]) await object.tick(1000 / 30);
+                } catch (error) { if (!(error instanceof SceneTransition)) throw error; }
                 elapsed++; await check?.();
                 if (routes.length) break;
             }
@@ -134,7 +139,10 @@ module.exports = async function createAdventureFixture(runtime, options = {}) {
             const button = dialogs ? buttonAt(x, y)?.area : null;
             button?.emit('pointerover', pointer); button?.emit('pointerdown', pointer);
             mouse.lastClicksTime = {}; mouse.onMouseMove(pointer); mouse.handleClickEvent(pointer, 'click');
-            await mouse.tick(16); await step(duration);
+            try { await mouse.tick(16); }
+            catch (error) { if (!(error instanceof SceneTransition)) throw error; }
+            if (routes.length) return;
+            await step(duration); if (routes.length) return;
             button?.emit('pointerup', pointer); if (button) await step(1);
         };
         const findPixel = name => {

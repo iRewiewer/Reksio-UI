@@ -1,8 +1,8 @@
 const assert = require('node:assert/strict');
 
-module.exports = async function verifyPiklibiaLive(runtime) {
+module.exports = async function verifyPiklibiaLive(runtime, options = {}) {
     const recording = require('./fixtures/magicienii-piklibia-puzzle.json');
-    const fixture = await require('./magicienii-adventure-fixture.cjs')(runtime);
+    const fixture = await require('./magicienii-adventure-fixture.cjs')(runtime, options);
     const { get, missing, routes, audio, backgrounds } = fixture;
     const switches = new Set();
     let elapsed = 0, saved;

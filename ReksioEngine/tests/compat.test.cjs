@@ -535,6 +535,31 @@ test('Magicienii repairs only the spell lesson drawing wand event references', (
         'BEHPLAYRANDSOUND^RUN();OTHER^PLAY();');
 });
 
+test('Only Magicienii level-up saves to the shared spellbook instead of a scene-local DTA file', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'common/classes/mainmenu.class';
+    const source = 'G_ARRREXSPELLS^SAVE("SPELLS0.DTA");OTHER^SAVE("SPELLS0.DTA");';
+    const expected = 'G_ARRREXSPELLS^SAVE("$COMMON\\SPELLS0.ARR");OTHER^SAVE("SPELLS0.DTA");';
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    for (const other of ['common/classes/other.class', 'other/mainmenu.class', 'dane/game/przygoda/magic/magic.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
+test('Only Magicienii Magic Return performs the guarded native spellbook save before its transition', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/magic/magic.cnv';
+    const source = 'BTNEXIT:ONCLICKED={G_SLASTOBJECTS^SET(["MAGIC_"+S_SMAGICPLACE+S_IMAGICFIGHTER]);' +
+        'G_SARCADEOBJECTS^SET(VARSRETURNTO);__SCREENSHOT__^RUN();PRZYGODA^GOTO("ARCADE");@BREAK();}';
+    const expected = `BTNEXIT:ONCLICKED={@IF("VARIWINNER>-1||VARITUTORIAL'1","BFITMP47","");BFITMP53^RUN();}`;
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    for (const other of ['dane/game/przygoda/magic/magic2.cnv', 'other/magic.cnv', 'dane/game/przygoda/arcade/arcade.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
 test('Magicienii adventure initialization derives DEFAULT walking destinations from each positioned image', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const file = 'dane/game/przygoda/arcade/arcade.cnv';
@@ -556,18 +581,6 @@ test('Only Magicienii Przepasc skips its absent first-visit dialogue and retains
         'BFITMP1023:CODE={SOBJECT|IPARAM0^SET(1);BEHUPDATEOBJECTS^RUN();}\n');
     assert.equal(patchMagicieniiSource(file, repaired), repaired);
     for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/domspiel.cnv', 'other/przepasc.cnv']) {
-        assert.equal(patchMagicieniiSource(other, source), source);
-    }
-});
-
-test('Only Magicienii Domspiel suppresses its absent character arrival cue while preserving dialogue entry', () => {
-    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
-    const file = 'dane/game/przygoda/arcade/domspiel.cnv';
-    const source = 'BEHCLICK_SPIELMAUSTER:CODE={G_SDIALOGCHARACTER^SET("SPIELMAUSTER");__SCREENSHOT__^RUN();PRZYGODA^GOTO("DIALOGS");}';
-    const expected = source.replace('CODE={G_SDIALOGCHARACTER', 'CODE={VARSLASTFOCUS^SET("NULL");G_SDIALOGCHARACTER');
-    assert.equal(patchMagicieniiSource(file, source), expected);
-    assert.equal(patchMagicieniiSource(file, expected), expected);
-    for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/piklibia.cnv', 'other/domspiel.cnv']) {
         assert.equal(patchMagicieniiSource(other, source), source);
     }
 });

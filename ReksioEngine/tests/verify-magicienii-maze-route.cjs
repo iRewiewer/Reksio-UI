@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 
-module.exports = async function verifyMazeRoute(runtime, level) {
+module.exports = async function verifyMazeRoute(runtime, level, options = {}) {
     assert.ok(level === 1 || level === 2);
     const rescue = level === 1;
     const { assets, createMazePuzzleFixture, load, Keyboard, Mouse, Interpreter, RuntimeContext,
@@ -50,7 +50,14 @@ module.exports = async function verifyMazeRoute(runtime, level) {
         const cursor = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_CURSOR' });
         cursor.SETPOSITIONNOCALL = () => {}; scope.set(cursor.name, cursor);
         const book = new constructors.ARRAY(engine, parent, { TYPE: 'ARRAY', NAME: 'G_ARRREXSPELLS' });
-        book.restoreCheckpointValue(Array(12).fill(1)); scope.set(book.name, book);
+        if (rescue) book.restoreCheckpointValue(Array(12).fill(1));
+        else {
+            assert.ok(options.spellbookFile instanceof ArrayBuffer, 'The card maze must receive the spellbook saved by a completed lesson');
+            const saved = runtime.deserializeArray(options.spellbookFile);
+            assert.equal(saved[5], 1); assert.ok(saved.slice(0, 12).some(value => value === 0), 'Do not replace the earned book with all spells unlocked');
+            book.restoreCheckpointValue(saved);
+        }
+        scope.set(book.name, book);
         const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
         episode.GETCURRENTSCENE = () => 'LABIRYNT'; episode.GOTO = scene => routes.push(scene);
         scope.set(episode.name, episode);
@@ -71,6 +78,7 @@ module.exports = async function verifyMazeRoute(runtime, level) {
             assert.deepEqual(routes, [], 'Normal maze inputs must not enter a failure/restart route');
         };
         const draw = async spell => {
+            assert.equal(book.GET(spell), 1, 'The recorded route may only draw a learned spell');
             let x = 400, y = 300;
             const pointer = () => ({ button: 0, screen: { x, y } });
             mouse.onMouseMove(pointer()); mouse.SETPOSITION(x, y); await mouse.tick(16);
@@ -140,7 +148,9 @@ module.exports = async function verifyMazeRoute(runtime, level) {
         await button.tick();
         assert.deepEqual(routes, ['ARCADE']); assert.equal(get('G_SARCADEOBJECTS').value, rescue ? 'CALINECZKA' : 'PIKLIBIA');
         assert.equal(screenshots.length, 1);
+        if (!rescue) assert.deepEqual(book.value, runtime.deserializeArray(options.spellbookFile), 'The maze must not grant extra spells to complete its route');
         console.log(`MAZE ${level} ${rescue ? 'RESCUE' : 'CARD'}: ${waypoints} natural-input waypoints, ${drawn} drawn spells, ${rescue ? 'all seven prisoners' : 'all 26 gates and card collection/return'}, live guards, pressure hand-offs, original dialogue and story exit passed`);
+        if (!rescue) console.log('MAZE CARD SPELLBOOK: the persisted darkness lesson, without unlocking the other ten spells, completes all 48 recorded casts');
     } finally {
         assetLoader.loadSound = previousSound;
         assert.deepEqual(engine.scopeManager.destroy(), [], 'Maze route cleanup'); assert.equal(stage.children.length, 0);

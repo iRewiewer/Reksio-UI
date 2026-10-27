@@ -160,7 +160,7 @@ async function createFixture() {
         VARIDEFTOPRACTICE: -1,
     })) await set(name, data);
     get('STL10').playing = false;
-    return { get, value, set, wand, audio };
+    return { engine, parent, scope, defs, get, value, set, wand, audio };
 }
 
 async function createArcadeFixture(scene, folder, filename, overlay) {
@@ -218,13 +218,18 @@ async function verifyPiklibia() {
         Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray });
 }
 
-async function verifyPiklibiaLive() {
+async function verifyLessonProgress() {
+    return await require('./verify-magicienii-lesson-progress.cjs')({ assets, createFixture, load, Filesystem, normalizePath,
+        Struct, Database, Type, Animo, Button, CanvasObserver, constructors, serializeArray, deserializeArray });
+}
+
+async function verifyPiklibiaLive(files) {
     const runtime = { assets, createArcadeFixture, Filesystem, normalizePath,
         Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray, load,
         CanvasObserver, Mouse, StaticFilter, Sequence };
-    const checkpoint = await require('./verify-magicienii-piklibia-live.cjs')(runtime);
+    const checkpoint = await require('./verify-magicienii-piklibia-live.cjs')(runtime, { files });
     const rescued = await require('./verify-magicienii-domspiel.cjs')(runtime, checkpoint);
-    await require('./verify-magicienii-spielmauster.cjs')(runtime, rescued);
+    return await require('./verify-magicienii-spielmauster.cjs')(runtime, rescued);
 }
 
 async function verifyBarandalf() {
@@ -1216,9 +1221,11 @@ async function verifyMazeRescueRoute() {
         Interpreter, RuntimeContext, Type, Animo, Sequence, constructors }, 1);
 }
 
-async function verifyMazeCardRoute() {
+async function verifyMazeCardRoute(entrance) {
+    assert.equal(entrance.destination, 'LABIRYNT'); assert.equal(entrance.arcade, '2');
+    const spellbookFile = entrance.files.find(([name]) => name === 'common/spells0.arr')?.[1];
     await require('./verify-magicienii-maze-route.cjs')({ assets, createMazePuzzleFixture, load, Keyboard, Mouse,
-        Interpreter, RuntimeContext, Type, Animo, Sequence, constructors }, 2);
+        Interpreter, RuntimeContext, Type, Animo, Sequence, constructors, deserializeArray }, 2, { spellbookFile });
 }
 
 async function verifyMazeSpellControls() {
@@ -3202,6 +3209,7 @@ async function main() {
     await get('SNDTUT11').callbacks.run('ONFINISHED');
     assert.equal(value('VARITUTORIAL'), 5);
     console.log('LESSON: three casts, target defeat, completion voice callbacks, learned flag and effect reset passed');
+    const learnedSpellbook = await verifyLessonProgress();
     for (let spell = 0; spell < 12; spell++) {
         for (const rotation of [0, 25, 50]) {
             const fixture = await createFixture();
@@ -3245,9 +3253,9 @@ async function main() {
     await verifyMazePuzzleInitialization();
     await verifyMazeFirstRoute();
     await verifyMazeRescueRoute();
-    await verifyMazeCardRoute();
     await verifyPiklibia();
-    await verifyPiklibiaLive();
+    const mazeEntrance = await verifyPiklibiaLive(learnedSpellbook.files);
+    await verifyMazeCardRoute(mazeEntrance);
     await verifyMazeSpellControls();
     await verifyMazeEnemySpellHits();
     await verifyMazeRecovery();

@@ -36,6 +36,11 @@ export function patchMagicieniiAnimation(filename: string, animation: ANN): ANN 
 }
 
 export function patchMagicieniiSource(filename: string, source: string): string {
+    if (filename === 'common/classes/mainmenu.class') {
+        // Level-up progress belongs in the same shared spellbook that lessons reload on exit.
+        return source.replaceAll('G_ARRREXSPELLS^SAVE("SPELLS0.DTA");',
+            'G_ARRREXSPELLS^SAVE("$COMMON\\SPELLS0.ARR");')
+    }
     if (['labirynt.cnv', 'cnvlevel0.cnv', 'cnvlevel1.cnv', 'cnvlevel2.cnv'].some((name) =>
         filename === `dane/game/przygoda/labirynt/${name}`)) {
         // Quantize through an INTEGER temporary before multiplying back to the tile center.
@@ -129,11 +134,6 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         return source + '\nOBJECT=BFITMP1023\nBFITMP1023:TYPE=BEHAVIOUR\n' +
             'BFITMP1023:CODE={SOBJECT|IPARAM0^SET(1);BEHUPDATEOBJECTS^RUN();}\n'
     }
-    if (filename === 'dane/game/przygoda/arcade/domspiel.cnv') {
-        // Dialogue owns this interaction; there is no separate in-room SPIELMAUSTER.ARR cue.
-        return source.replaceAll('BEHCLICK_SPIELMAUSTER:CODE={G_SDIALOGCHARACTER',
-            'BEHCLICK_SPIELMAUSTER:CODE={VARSLASTFOCUS^SET("NULL");G_SDIALOGCHARACTER')
-    }
     if (filename === 'dane/game/przygoda/arcade/piklibia.cnv') {
         // Animation nodes are zero-based, while ARRAY clone names start at one.
         for (const index of ['_I_', 'ARRKNIGHTFRAME^GET(VARITER)', 'VARITEMP1']) {
@@ -157,8 +157,12 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         return source.replaceAll('BEHADDITEM^RUN("KARTA_BUT");', 'BEHADDITEM^RUN("KARTA_BUT",-1);')
     }
     if (filename !== 'dane/game/przygoda/magic/magic.cnv') return source
+    const exit = 'BTNEXIT:ONCLICKED={G_SLASTOBJECTS^SET(["MAGIC_"+S_SMAGICPLACE+S_IMAGICFIGHTER]);' +
+        'G_SARCADEOBJECTS^SET(VARSRETURNTO);__SCREENSHOT__^RUN();PRZYGODA^GOTO("ARCADE");@BREAK();}'
     // The wand's drawing event is CZARUJE (event 1), not the absent PLAY alias.
     return source
+        // BUTTON ticks before MOUSE, so its transition must perform the guarded spellbook save itself.
+        .replaceAll(exit, `BTNEXIT:ONCLICKED={@IF("VARIWINNER>-1||VARITUTORIAL'1","BFITMP47","");BFITMP53^RUN();}`)
         .replaceAll('ANNWAND0^SETFRAME("PLAY",VARIDEBUG)', 'ANNWAND0^SETFRAME("CZARUJE",VARIDEBUG)')
         .replaceAll('ANNWAND0^GETNOFINEVENT(1)', 'ANNWAND0^GETNOFINEVENT("CZARUJE")')
         .replaceAll('BEHPLAYRANDSOUND^PLAY()', 'BEHPLAYRANDSOUND^RUN()')
