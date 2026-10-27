@@ -3185,8 +3185,8 @@ test('Other profiles retain legacy keyboard mapping and never emit ONCHAR', asyn
     }
 });
 
-test('Nemo persisted checkpoints wait for the active tick and copy current slot, values and files', async () => {
-    const { captureNemoCheckpoint } = loadModule('engine/patches/nemo.ts');
+test('Persisted checkpoints wait for the active tick and copy current slot, values and files', async () => {
+    const { captureSavedProgressCheckpoint } = loadModule('engine/checkpoint.ts');
     const entry = { version: 1, scene: 'ARCADE', previousScene: 'CUTSCENKI',
         globals: [{ parent: 'GAME', name: 'SGSLOTNAME', type: 'STRING', value: '0' }],
         saveData: { old: true }, filesystemEntries: [] };
@@ -3207,7 +3207,7 @@ test('Nemo persisted checkpoints wait for the active tick and copy current slot,
             snapshot: async () => { calls.push('files'); return [{ key: 'SLOT2.DTA', value: bytes }]; },
         } },
     };
-    const pending = captureNemoCheckpoint(engine, entry);
+    const pending = captureSavedProgressCheckpoint(engine, entry);
     assert.deepEqual(calls, ['stop']);
     finishTick();
     const captured = await pending;
@@ -3224,19 +3224,42 @@ test('Nemo persisted checkpoints wait for the active tick and copy current slot,
     assert.equal(entry.captureKind, undefined);
 });
 
-test('Nemo checkpoint capture preserves a paused player and resumes after storage errors', async () => {
-    const { captureNemoCheckpoint } = loadModule('engine/patches/nemo.ts');
+test('Persisted checkpoint capture preserves a paused player and resumes after storage errors', async () => {
+    const { captureSavedProgressCheckpoint } = loadModule('engine/checkpoint.ts');
     for (const running of [false, true]) {
         let resumes = 0;
         const engine = { app: { ticker: { started: running, start: () => { resumes++; } } },
             stopForRestart: async () => {}, scopeManager: { scopes: [] }, saveFile: { toObject: () => ({}) },
             options: { storage: { snapshot: async () => { throw new Error('storage unavailable'); } } } };
-        await assert.rejects(captureNemoCheckpoint(engine, { globals: [] }), /storage unavailable/);
+        await assert.rejects(captureSavedProgressCheckpoint(engine, { globals: [] }), /storage unavailable/);
         assert.equal(resumes, running ? 1 : 0);
     }
 });
 
-test('Only Nemo arcade captures current progress; other checkpoints stay synchronous and scene changes reject capture', async () => {
+test('Only restored Magicienii Cat hides boots already present in its selected inventory file', async () => {
+    const { restoreMagicieniiSavedProgress } = loadModule('engine/patches/magicienii.ts');
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        for (const scene of ['CAT', 'ARCADE', 'MAGIC']) {
+            for (const owned of [false, true]) {
+                const calls = [];
+                const inventory = { REMOVEALL() { calls.push('clear'); }, LOAD: async file => calls.push(file),
+                    FIND: async (...args) => { assert.deepEqual(args, ['NAME', 'BUTY_BUT', 0]); return owned ? 2 : -1; } };
+                const engine = { compat: createEngineCompat(profile), currentScene: { name: scene },
+                    getObject: name => name === 'G_IGAMESLOT' ? { getValue: async () => 3 }
+                        : name === 'DBITEMS' ? inventory : { HIDE() { calls.push('hide'); } },
+                    resolvePath: async name => { assert.equal(name, '$COMMON\\ITEMS3.DTA'); return 'common/items3.dta'; },
+                    filesystem: { hasFile: async file => { assert.equal(file, 'common/items3.dta'); return true; } } };
+                await restoreMagicieniiSavedProgress(engine);
+                assert.deepEqual(calls, profile === 'magicienii' && scene === 'CAT'
+                    ? ['clear', '$COMMON\\ITEMS3.DTA', ...(owned ? ['hide'] : [])] : []);
+                engine.filesystem.hasFile = async () => false; calls.length = 0;
+                await restoreMagicieniiSavedProgress(engine); assert.deepEqual(calls, []);
+            }
+        }
+    }
+});
+
+test('Only Nemo arcade and Magicienii Cat capture current progress; other checkpoints stay synchronous and scene changes reject capture', async () => {
     let finishCapture;
     const { Engine } = loadModule('engine/index.ts', {
         './scripting': {}, '../filesystem/definitionLoader': {}, 'pixi.js': {}, './types/scene': {},
@@ -3244,14 +3267,15 @@ test('Only Nemo arcade captures current progress; other checkpoints stay synchro
         '@pixi/devtools': {}, './rendering': {}, '../index': {}, './scope': {}, './types/episode': {},
         './types': {}, './types/behaviour': {}, '../filesystem': {}, './audio': {}, './logging': {},
         '../fileFormats/logger': {}, './diagnostics': {}, './compat': {}, './patches/magicienii': {},
-        './patches/nemo': { captureNemoCheckpoint: () => new Promise((resolve) => { finishCapture = resolve; }) },
+        './patches/nemo': {},
+        './checkpoint': { captureSavedProgressCheckpoint: () => new Promise((resolve) => { finishCapture = resolve; }) },
     });
     for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
-        for (const scene of ['ARCADE', 'CUTSCENKI']) {
+        for (const scene of ['ARCADE', 'CAT', 'LABIRYNT', 'MAGIC', 'CUTSCENKI']) {
             const entry = { version: 1, scene, globals: [], filesystemEntries: [] };
             const engine = { compat: createEngineCompat(profile), entryCheckpoint: entry, changingScene: false };
             const captured = Engine.prototype.captureCheckpoint.call(engine);
-            if (profile === 'nemo' && scene === 'ARCADE') {
+            if ((profile === 'nemo' && scene === 'ARCADE') || (profile === 'magicienii' && scene === 'CAT')) {
                 assert.ok(captured instanceof Promise);
                 engine.entryCheckpoint = { ...entry };
                 finishCapture(entry);

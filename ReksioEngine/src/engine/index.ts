@@ -14,6 +14,7 @@ import { Scope, ScopeManager } from './scope'
 import { Episode } from './types/episode'
 import { Type, ValueType } from './types'
 import type { SceneCheckpoint } from './checkpoint'
+import { captureSavedProgressCheckpoint } from './checkpoint'
 import { Behaviour } from './types/behaviour'
 import Filesystem, { pathJoin } from '../filesystem'
 import { globalAudio, SoundInstance } from './audio'
@@ -22,8 +23,8 @@ import { setFormatsLogger } from '../fileFormats/logger'
 import { EngineDiagnostics } from './diagnostics'
 import { createEngineCompat } from './compat'
 import type { EngineCompat } from './compat'
-import { captureNemoCheckpoint, restoreNemoSaveDatabase } from './patches/nemo'
-import { restoreMagicieniiTransitionState } from './patches/magicienii'
+import { restoreNemoSaveDatabase } from './patches/nemo'
+import { restoreMagicieniiSavedProgress, restoreMagicieniiTransitionState } from './patches/magicienii'
 
 export class Engine {
     public debug: Debugging
@@ -136,6 +137,8 @@ export class Engine {
                 this.currentScene = checkpoint.previousScene ? this.getObject<Scene>(checkpoint.previousScene) : null
             }
             await this.changeScene(checkpoint?.scene ?? this.options.startScene ?? episode.definition.STARTWITH)
+            if (checkpoint?.captureKind === 'persisted' && this.compat.persistedCatCheckpoints)
+                await restoreMagicieniiSavedProgress(this)
 
             this.startupComplete = true
             this.app.ticker.start()
@@ -374,9 +377,10 @@ export class Engine {
     captureCheckpoint(): SceneCheckpoint | Promise<SceneCheckpoint> {
         if (!this.entryCheckpoint || this.changingScene)
             throw new Error('Wait for the scene to finish loading before saving a checkpoint.')
-        if (this.compat.persistedArcadeCheckpoints && this.entryCheckpoint.scene === 'ARCADE') {
+        if ((this.compat.persistedArcadeCheckpoints && this.entryCheckpoint.scene === 'ARCADE') ||
+            (this.compat.persistedCatCheckpoints && this.entryCheckpoint.scene === 'CAT')) {
             const entry = this.entryCheckpoint
-            return captureNemoCheckpoint(this, entry).then((checkpoint) => {
+            return captureSavedProgressCheckpoint(this, entry).then((checkpoint) => {
                 if (this.entryCheckpoint !== entry || this.changingScene)
                     throw new Error('The scene changed while capturing progress. Create the checkpoint again.')
                 return checkpoint

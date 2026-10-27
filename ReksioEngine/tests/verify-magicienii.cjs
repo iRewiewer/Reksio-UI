@@ -50,7 +50,7 @@ const { ScopeManager } = load('engine/scope.ts');
 const { ScriptingManager } = load('engine/scripting.ts');
 Callbacks = load('engine/components/callbacks.ts', true).CallbacksComponent;
 const { parseCNV, decryptCNV } = load('fileFormats/cnv/index.ts');
-const { patchMagicieniiSource } = load('engine/patches/magicienii.ts');
+const { patchMagicieniiSource, restoreMagicieniiSavedProgress } = load('engine/patches/magicienii.ts');
 const { Interpreter, RuntimeContext } = load('interpreter/interpreter.ts');
 const { loadAnn } = load('fileFormats/ann/index.ts');
 const { Animo } = load('engine/types/animo.ts');
@@ -67,6 +67,7 @@ const { Image } = load('engine/types/image.ts');
 const { Button } = load('engine/types/button.ts');
 const { StaticFilter } = load('engine/types/staticfilter.ts');
 const { Database } = load('engine/types/database.ts');
+const { captureSavedProgressCheckpoint } = load('engine/checkpoint.ts');
 const { loadImage } = load('fileFormats/img/index.ts');
 const { loadSprite } = load('filesystem/assetsLoader.ts');
 const { default: Filesystem, normalizePath } = load('filesystem/index.ts');
@@ -879,17 +880,24 @@ async function verifyBroomPhysics() {
     }
 }
 
-async function createCatFixture() {
+async function createCatFixture(filesystemEntries = []) {
     const fixture = await createArcadeFixture('CAT', 'Cat', 'Cat.cnv');
     const { engine, parent, scope, directory, defs, world, get } = fixture;
     const stage = engine.app.stage, saves = [];
+    const files = new Map(structuredClone(filesystemEntries).map(({ key, value }) => [key, value]));
+    const savePath = path.join(directory, 'cat-fixture.arr'), inventoryPath = path.join(directory, 'cat-fixture-items.dta');
     engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
     engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
     engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
     engine.filesystem.getANNFile = async filename => loadAnn(bytes(filename));
     engine.filesystem.getIMGFile = async filename => loadImage(bytes(filename));
+    engine.filesystem.getFile = async filename => files.get(filename) ?? bytes(filename);
+    engine.filesystem.hasFile = async filename => files.has(filename) || fs.existsSync(filename);
+    engine.filesystem.getARRFile = async filename => deserializeArray(await engine.filesystem.getFile(filename));
     engine.filesystem.saveFile = async (filename, data) => {
-        assert.equal(filename, path.join(directory, 'cat-fixture.arr')); saves.push(deserializeArray(data));
+        assert.ok([savePath, inventoryPath].includes(filename), 'Fixture must not modify game assets');
+        files.set(filename, structuredClone(data));
+        if (filename === savePath) saves.push(deserializeArray(data));
     };
     for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
         const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
@@ -897,7 +905,9 @@ async function createCatFixture() {
         scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
     }
     const mouse = new Mouse(engine, parent, defs.MOUSE); scope.set(mouse.name, mouse);
-    get('ARRAYSAVE').restoreCheckpointValue([0, 0]); await get('VARSAVENAME').SET('cat-fixture.arr');
+    await get('VARSAVENAME').SET('cat-fixture.arr');
+    if (files.has(savePath)) await get('ARRAYSAVE').LOAD('cat-fixture.arr');
+    else get('ARRAYSAVE').restoreCheckpointValue([0, 0]);
     const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
     const first = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'BEHINITLEVEL');
     assert.ok(first >= 0);
@@ -915,7 +925,7 @@ async function createCatFixture() {
         const pointer = { button: 0, screen: { x, y } };
         mouse.handleClickEvent(pointer, 'click'); mouse.handleClickEvent(pointer, 'release'); await mouse.tick(16);
     };
-    return { ...fixture, stage, saves, step, click };
+    return { ...fixture, stage, saves, step, click, files };
 }
 
 async function verifyStartupCursor() {
@@ -1021,8 +1031,8 @@ async function verifyCat() {
     }
 }
 
-async function verifyCatReward({ engine, parent, scope, directory, defs, get, step, click }) {
-    // Supply an empty inventory and the value-field factory; LOAD/SAVE and pickup scripts remain real.
+function installCatInventory({ engine, parent, scope, directory, defs, files }) {
+    // Supply the value-field factory; database parsing, serialization and pickup scripts remain real.
     const makeItem = () => {
         const item = new Struct(engine, parent, defs.SITEM);
         for (const [name, type] of item.structure) {
@@ -1039,12 +1049,18 @@ async function verifyCatReward({ engine, parent, scope, directory, defs, get, st
     parent.getRelativePath = async name => name === '$COMMON\\ITEMS0.DTA' ? inventoryPath : relativePath(name);
     engine.resolvePath = parent.getRelativePath;
     const read = engine.filesystem.getFile, write = engine.filesystem.saveFile;
-    let inventory = Buffer.from(Array.from({ length: 10 }, (_, index) => `${index}|NULL|-1|NULL|0\r\n`).join(''));
+    let inventory = files.get(inventoryPath) ?? Buffer.from(Array.from({ length: 10 }, (_, index) => `${index}|NULL|-1|NULL|0\r\n`).join(''));
     engine.filesystem.getFile = async name => name === inventoryPath ? inventory : read(name);
     engine.filesystem.saveFile = async (name, data) => {
         if (name !== inventoryPath) return write(name, data);
         inventory = Buffer.from(data); itemSaves.push(inventory.toString());
+        await write(name, data);
     };
+    return { database, itemSaves };
+}
+
+async function verifyCatReward(fixture) {
+    const { get, step, click } = fixture, { itemSaves } = installCatInventory(fixture);
     const boots = get('ANNBUTY').getRenderObject(), bounds = boots.getBounds();
     const pixel = boots.hitmap.findIndex(alpha => alpha > 0);
     assert.ok(pixel >= 0);
@@ -1059,12 +1075,14 @@ async function verifyCatReward({ engine, parent, scope, directory, defs, get, st
     assert.equal(itemSaves.length, 1, 'An existing boots item must not be awarded twice');
 }
 
+const catHiveRoute = [[300, 540, 240], [400, 540, 240], [400, 480, 240], [400, 520, 360],
+    [650, 400, 240], [650, 270, 240], [650, 150, 180], [450, 130, 240]];
+
 async function verifyCatHerding() {
     const fixture = await createCatFixture(), { engine, parent, scope, stage, get, step, click, saves } = fixture;
     try {
         // Only normal mouse destinations and elapsed ticks: no body/flag/animation relocation after entry.
-        for (const [x, y, ticks] of [[300, 540, 240], [400, 540, 240], [400, 480, 240], [400, 520, 360],
-            [650, 400, 240], [650, 270, 240], [650, 150, 180], [450, 130, 240]]) {
+        for (const [x, y, ticks] of catHiveRoute) {
             await click(x, y); await step(ticks);
         }
         assert.deepEqual(saves, [[1, 0]], 'The normal route must knock down the beehive before dropping the boots');
@@ -1092,6 +1110,57 @@ async function verifyCatHerding() {
         console.log('CAT HERDING: normal click-only route knocks down the hive, lands the cat on honey, collects the boots and requests the original JAGA adventure return');
     } finally {
         assert.deepEqual(engine.scopeManager.destroy(), [], 'Cat herding cleanup'); assert.equal(stage.children.length, 0);
+    }
+}
+
+async function verifyCatSavedProgress() {
+    const fixtures = [];
+    const capture = async fixture => {
+        const { engine, parent, scope, files } = fixture;
+        scope.set('G_SARCADEOBJECTS', new constructors.STRING(engine, parent, { TYPE: 'STRING', NAME: 'G_SARCADEOBJECTS', VALUE: 'CAT' }));
+        engine.app.ticker = { started: true, start() { this.started = true; } };
+        engine.stopForRestart = async () => { engine.app.ticker.started = false; };
+        engine.saveFile.toObject = () => ({ fixture: 'CAT' });
+        engine.options = { storage: { snapshot: async () => [...files].map(([key, value]) => ({ key, value })) } };
+        const checkpoint = await captureSavedProgressCheckpoint(engine, {
+            version: 1, scene: 'CAT', previousScene: 'ARCADE', globals: [
+                { name: 'G_SARCADEOBJECTS', parent: 'CAT', type: 'STRING', value: 'JAGA' },
+            ], saveData: {}, filesystemEntries: [],
+        });
+        assert.equal(checkpoint.captureKind, 'persisted'); assert.equal(checkpoint.globals[0].value, 'CAT');
+        assert.equal(engine.app.ticker.started, true);
+        return checkpoint;
+    };
+    try {
+        const first = await createCatFixture(); fixtures.push(first);
+        for (const [x, y, ticks] of catHiveRoute) { await first.click(x, y); await first.step(ticks); }
+        assert.deepEqual(first.saves, [[1, 0]]);
+        const hive = await capture(first);
+        const restored = await createCatFixture(hive.filesystemEntries); fixtures.push(restored);
+        assert.deepEqual(restored.get('ARRAYSAVE').value, [1, 0], 'Original array LOAD must retain the knocked-down hive');
+        assert.equal(restored.get('ANNUL').GETEVENTNAME(), 'MIOD');
+        assert.equal(restored.get('ANNKROPLA').ISVISIBLE(), false); assert.equal(restored.get('ANNKOT').ISVISIBLE(), true);
+        assert.equal(restored.get('ANNBUTY').ISVISIBLE(), false);
+        for (const [x, y, ticks] of catHiveRoute) { await restored.click(x, y); await restored.step(ticks); }
+        const mole = restored.get('ANNKRET'); await restored.click(mole.GETCENTERX(), mole.GETCENTERY());
+        await restored.click(150, 500); await restored.step(320);
+        assert.deepEqual(restored.get('ARRAYSAVE').value, [1, 1]);
+        await verifyCatReward(restored);
+        const completed = await capture(restored);
+        const final = await createCatFixture(completed.filesystemEntries); fixtures.push(final);
+        assert.deepEqual(final.get('ARRAYSAVE').value, [1, 1]);
+        assert.equal(final.get('ANNKOT').ISVISIBLE(), false); assert.equal(final.get('ANNCIENKOTA').ISVISIBLE(), false);
+        const { database, itemSaves } = installCatInventory(final);
+        await restoreMagicieniiSavedProgress(final.engine);
+        assert.equal(final.get('ANNBUTY').ISVISIBLE(), false, 'Collected boots must stay hidden after checkpoint restoration');
+        database.REMOVEALL();
+        await database.LOAD('$COMMON\\ITEMS0.DTA'); assert.equal(await database.FIND('NAME', 'BUTY_BUT', 0), 0);
+        await final.get('BEHBOOTS').RUN(); assert.deepEqual(itemSaves, [], 'Restored boots must not be awarded twice');
+        console.log('CAT SAVED PROGRESS: real array/database bytes preserve the hive, allow normal herding after restore, retain collected boots and reject duplicate rewards');
+    } finally {
+        for (const fixture of fixtures) {
+            assert.deepEqual(fixture.engine.scopeManager.destroy(), []); assert.equal(fixture.stage.children.length, 0);
+        }
     }
 }
 
@@ -1481,6 +1550,7 @@ async function main() {
     await verifyStartupCursor();
     await verifyCat();
     await verifyCatHerding();
+    await verifyCatSavedProgress();
     await verifyBarandalf();
     await verifyBarandalfBoat();
     await verifyMazeEnemies();

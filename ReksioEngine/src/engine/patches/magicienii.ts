@@ -1,6 +1,9 @@
 import type { Engine } from '../index'
 import type { SequenceFile } from '../../fileFormats/seq'
 import type { ANN } from '../../fileFormats/ann'
+import type { ValueType } from '../types'
+import type { Database } from '../types/database'
+import type { Animo } from '../types/animo'
 
 export function getMagicieniiPlaceholderAnimation(filename: string): ANN | null {
     if (!['dane/game/przygoda/labirynt/blank.ann',
@@ -71,4 +74,17 @@ export function restoreMagicieniiTransitionState(engine: Engine) {
         animation?.HIDE()
     }
     engine.getObject<any>('G_IMGPAGE')?.HIDE()
+}
+
+export async function restoreMagicieniiSavedProgress(engine: Engine) {
+    if (!engine.compat.persistedCatCheckpoints || engine.currentScene?.name !== 'CAT') return
+    const slot = await engine.getObject<ValueType<any, number>>('G_IGAMESLOT')?.getValue()
+    const inventory = engine.getObject<Database>('DBITEMS')
+    if (slot === undefined || !inventory) return
+    const filename = `$COMMON\\ITEMS${slot}.DTA`
+    if (!await engine.filesystem.hasFile(await engine.resolvePath(filename))) return
+    inventory.REMOVEALL()
+    await inventory.LOAD(filename)
+    // The original re-entry initializer redraws dropped boots even after their pickup was saved.
+    if (await inventory.FIND('NAME', 'BUTY_BUT', 0) >= 0) engine.getObject<Animo>('ANNBUTY')?.HIDE()
 }

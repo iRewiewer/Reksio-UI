@@ -31,6 +31,7 @@ export type EngineCompat = {
     relativeScriptedCursor: boolean
     propagateLoopBreak: boolean
     persistedArcadeCheckpoints: boolean
+    persistedCatCheckpoints: boolean
     backgroundImagePositions: boolean
     linkedBodyPositions: boolean
     underwaterPhysics: boolean
@@ -106,6 +107,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         relativeScriptedCursor: name === 'magicienii',
         propagateLoopBreak: name === 'magicienii',
         persistedArcadeCheckpoints: name === 'nemo',
+        persistedCatCheckpoints: name === 'magicienii',
         backgroundImagePositions: name === 'magicienii',
         linkedBodyPositions: name === 'timpului',
         underwaterPhysics: name === 'timpului',
