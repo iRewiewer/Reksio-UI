@@ -879,8 +879,9 @@ async function verifyBroomPhysics() {
     }
 }
 
-async function verifyCat() {
-    const { engine, parent, scope, directory, defs, world, get } = await createArcadeFixture('CAT', 'Cat', 'Cat.cnv');
+async function createCatFixture() {
+    const fixture = await createArcadeFixture('CAT', 'Cat', 'Cat.cnv');
+    const { engine, parent, scope, directory, defs, world, get } = fixture;
     const stage = engine.app.stage, saves = [];
     engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
     engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
@@ -890,28 +891,64 @@ async function verifyCat() {
     engine.filesystem.saveFile = async (filename, data) => {
         assert.equal(filename, path.join(directory, 'cat-fixture.arr')); saves.push(deserializeArray(data));
     };
-    try {
-        for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
-            const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
-            if (actor instanceof Animo) actor.loadSfx = async () => {};
-            scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+    for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
+        const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+        if (actor instanceof Animo) actor.loadSfx = async () => {};
+        scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+    }
+    const mouse = new Mouse(engine, parent, defs.MOUSE); scope.set(mouse.name, mouse);
+    get('ARRAYSAVE').restoreCheckpointValue([0, 0]); await get('VARSAVENAME').SET('cat-fixture.arr');
+    const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
+    const first = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'BEHINITLEVEL');
+    assert.ok(first >= 0);
+    const initialization = ast.slice(first).filter(entry => entry.target?.ref?.name !== 'G_AMBIENT');
+    await new Interpreter(new RuntimeContext(engine, null, code)).execute(initialization);
+    assert.ok(world.physics, 'Cat must initialize its shipped three-dimensional collision world');
+    const step = async (count = 1) => {
+        for (let tick = 0; tick < count; tick++) {
+            for (const object of scope.objects) {
+                if (object instanceof World || object instanceof Animo || object instanceof Mouse) await object.tick(1000 / 60);
+            }
         }
-        const mouse = new Mouse(engine, parent, defs.MOUSE); scope.set(mouse.name, mouse);
-        get('ARRAYSAVE').restoreCheckpointValue([0, 0]); await get('VARSAVENAME').SET('cat-fixture.arr');
-        const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
-        const first = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'BEHINITLEVEL');
-        assert.ok(first >= 0);
-        const initialization = ast.slice(first).filter(entry => entry.target?.ref?.name !== 'G_AMBIENT');
-        await new Interpreter(new RuntimeContext(engine, null, code)).execute(initialization);
-        assert.ok(world.physics, 'Cat must initialize its shipped three-dimensional collision world');
-        const step = async () => {
-            world.tick(1000 / 60); await get('BEHMOVEWORLD').RUN();
-            for (const actor of [get('ANNREX'), get('ANNKRET'), get('ANNKOT')]) await actor.tick(1000 / 60);
-        };
-        const click = async (x, y) => {
+    };
+    const click = async (x, y) => {
+        const pointer = { button: 0, screen: { x, y } };
+        mouse.handleClickEvent(pointer, 'click'); mouse.handleClickEvent(pointer, 'release'); await mouse.tick(16);
+    };
+    return { ...fixture, stage, saves, step, click };
+}
+
+async function verifyStartupCursor() {
+    const original = decryptCNV(bytes(path.join(assets, 'Dane/Game/Game.cnv')));
+    assert.ok(original.includes('MOUSE^SETPOSITION(400,300);MOUSE^HIDE();'));
+    const definitions = parseCNV(patchMagicieniiSource('dane/game/game.cnv', original));
+    const startup = Object.values(definitions).find(def => def.CODE?.code.includes('CF^NEW("G_CURSOR")'));
+    assert.ok(startup);
+    const { engine, parent, scope } = await createArcadeFixture('CAT', 'Cat', 'Cat.cnv');
+    const globalMouse = new Mouse(engine, null, definitions.MOUSE), sceneMouse = new Mouse(engine, parent, { TYPE: 'MOUSE', NAME: 'SCENEMOUSE' });
+    scope.set(globalMouse.name, globalMouse); scope.set(sceneMouse.name, sceneMouse);
+    const cursorModes = []; engine.rendering.setCursor = mode => cursorModes.push(mode);
+    try {
+        const statements = load('interpreter/parser.ts').parseCode(startup.CODE.code).filter(entry =>
+            entry.type === 'FunctionCall' && entry.target?.ref?.name === 'MOUSE');
+        await new Interpreter(new RuntimeContext(engine, null, startup.CODE.code)).execute(statements);
+        assert.deepEqual(cursorModes, ['none']);
+        for (const [x, y] of [[50, 40], [700, 450], [450, 350]]) {
             const pointer = { button: 0, screen: { x, y } };
-            mouse.handleClickEvent(pointer, 'click'); mouse.handleClickEvent(pointer, 'release'); await mouse.tick(16);
-        };
+            globalMouse.onMouseMove(pointer); sceneMouse.onMouseMove(pointer);
+            assert.deepEqual([globalMouse.GETPOSX(), globalMouse.GETPOSY()], [x, y]);
+            assert.deepEqual([sceneMouse.GETPOSX(), sceneMouse.GETPOSY()], [x, y]);
+        }
+        sceneMouse.SETPOSITION(400, 300); sceneMouse.onMouseMove({ button: 0, screen: { x: 460, y: 360 } });
+        assert.deepEqual([sceneMouse.GETPOSX(), sceneMouse.GETPOSY()], [410, 310], 'Spell drawing must retain relative warps');
+        console.log('CURSOR: original Game startup keeps global cursor and scene clicks aligned; relative spell movement is preserved');
+    } finally { assert.deepEqual(engine.scopeManager.destroy(), []); }
+}
+
+async function verifyCat() {
+    const fixture = await createCatFixture();
+    const { engine, stage, world, get, saves, step, click } = fixture;
+    try {
         for (let tick = 0; tick < 10; tick++) await step();
         assert.equal(get('VARPLAYERNAME').value, 'ANNREX');
         assert.ok(Math.hypot(get('ANNREX').GETCENTERX() - 150, get('ANNREX').GETCENTERY() - 400) < 25,
@@ -943,7 +980,7 @@ async function verifyCat() {
         await get('VARPLAYERNAME').SET('ANNREX'); await get('VARPLAYERID').SET(100);
         await get('ANNREX').PLAY('IDLE_0'); await get('VARDESTX').SET(640); await get('VARDESTY').SET(450);
         await world.SETPOSITION(102, 550, 450, 0); world.SETVELOCITY(102, 0, 0, 0); await get('ANNKOT').PLAY('IDLE');
-        await step();
+        for (let tick = 0; tick < 4 && get('ANNKOT').GETEVENTNAME() !== 'PLAY'; tick++) await step();
         assert.equal(get('ANNKOT').GETEVENTNAME(), 'PLAY', 'A nearby hero must provoke the original cat jump');
         let peak = 0;
         for (let tick = 0; tick < 150; tick++) { await step(); peak = Math.max(peak, world.GETPOSITIONZ(102)); }
@@ -977,43 +1014,84 @@ async function verifyCat() {
         get('ARRAYSAVE').restoreCheckpointValue(saves.at(-1)); await get('BEHINITLEVEL').RUN();
         assert.equal(get('ANNUL').GETEVENTNAME(), 'MIOD'); assert.equal(get('ANNKOT').ISVISIBLE(), false);
         assert.equal(get('ANNCIENKOTA').ISVISIBLE(), false); assert.equal(get('ANNBUTY').ISVISIBLE(), true);
-        const makeItem = () => {
-            const item = new Struct(engine, parent, defs.SITEM);
-            for (const [name, type] of item.structure) {
-                item.content.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name }));
-            }
-            item.clone = async () => makeItem();
-            return item;
-        };
-        const model = makeItem(), inventoryPath = path.join(directory, 'cat-fixture-items.dta'), itemSaves = [];
-        scope.set('SITEM', model);
-        scope.set('G_IGAMESLOT', new constructors.INTEGER(engine, parent, { TYPE: 'INTEGER', NAME: 'G_IGAMESLOT' }));
-        const database = new Database(engine, parent, defs.DBITEMS); scope.set(database.name, database); database.init();
-        const relativePath = parent.getRelativePath;
-        parent.getRelativePath = async name => name === '$COMMON\\ITEMS0.DTA' ? inventoryPath : relativePath(name);
-        engine.resolvePath = parent.getRelativePath;
-        const read = engine.filesystem.getFile, write = engine.filesystem.saveFile;
-        let inventory = Buffer.from(Array.from({ length: 10 }, (_, index) => `${index}|NULL|-1|NULL|0\r\n`).join(''));
-        engine.filesystem.getFile = async name => name === inventoryPath ? inventory : read(name);
-        engine.filesystem.saveFile = async (name, data) => {
-            if (name !== inventoryPath) return write(name, data);
-            inventory = Buffer.from(data); itemSaves.push(inventory.toString());
-        };
-        const boots = get('ANNBUTY').getRenderObject(), bounds = boots.getBounds();
-        const pixel = boots.hitmap.findIndex(alpha => alpha > 0);
-        assert.ok(pixel >= 0);
-        const pickup = { x: Math.floor(bounds.x + pixel % boots.texture.orig.width),
-            y: Math.floor(bounds.y + Math.floor(pixel / boots.texture.orig.width)) };
-        await click(pickup.x, pickup.y);
-        for (let tick = 0; tick < 360 && !itemSaves.length; tick++) await step();
-        assert.equal(itemSaves.length, 1, 'The original arrival callback must persist the boots reward');
-        assert.equal(get('ANNBUTY').ISVISIBLE(), false);
-        assert.match(itemSaves[0], /^0\|BUTY_BUT\|-1\|CAT\|1\r\n/);
-        await get('BEHBOOTS').RUN();
-        assert.equal(itemSaves.length, 1, 'An existing boots item must not be awarded twice');
+        await verifyCatReward(fixture);
         console.log('CAT: original initialization, eight-way walking, actor selection, stops, jump/landing, mask height guards, puzzle re-entry and boots inventory persistence passed');
     } finally {
         assert.deepEqual(engine.scopeManager.destroy(), [], 'Cat cleanup'); assert.equal(stage.children.length, 0);
+    }
+}
+
+async function verifyCatReward({ engine, parent, scope, directory, defs, get, step, click }) {
+    // Supply an empty inventory and the value-field factory; LOAD/SAVE and pickup scripts remain real.
+    const makeItem = () => {
+        const item = new Struct(engine, parent, defs.SITEM);
+        for (const [name, type] of item.structure) {
+            item.content.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name }));
+        }
+        item.clone = async () => makeItem();
+        return item;
+    };
+    const model = makeItem(), inventoryPath = path.join(directory, 'cat-fixture-items.dta'), itemSaves = [];
+    scope.set('SITEM', model);
+    scope.set('G_IGAMESLOT', new constructors.INTEGER(engine, parent, { TYPE: 'INTEGER', NAME: 'G_IGAMESLOT' }));
+    const database = new Database(engine, parent, defs.DBITEMS); scope.set(database.name, database); database.init();
+    const relativePath = parent.getRelativePath;
+    parent.getRelativePath = async name => name === '$COMMON\\ITEMS0.DTA' ? inventoryPath : relativePath(name);
+    engine.resolvePath = parent.getRelativePath;
+    const read = engine.filesystem.getFile, write = engine.filesystem.saveFile;
+    let inventory = Buffer.from(Array.from({ length: 10 }, (_, index) => `${index}|NULL|-1|NULL|0\r\n`).join(''));
+    engine.filesystem.getFile = async name => name === inventoryPath ? inventory : read(name);
+    engine.filesystem.saveFile = async (name, data) => {
+        if (name !== inventoryPath) return write(name, data);
+        inventory = Buffer.from(data); itemSaves.push(inventory.toString());
+    };
+    const boots = get('ANNBUTY').getRenderObject(), bounds = boots.getBounds();
+    const pixel = boots.hitmap.findIndex(alpha => alpha > 0);
+    assert.ok(pixel >= 0);
+    const pickup = { x: Math.floor(bounds.x + pixel % boots.texture.orig.width),
+        y: Math.floor(bounds.y + Math.floor(pixel / boots.texture.orig.width)) };
+    await click(pickup.x, pickup.y);
+    for (let tick = 0; tick < 480 && !itemSaves.length; tick++) await step();
+    assert.equal(itemSaves.length, 1, 'The original arrival callback must persist the boots reward');
+    assert.equal(get('ANNBUTY').ISVISIBLE(), false);
+    assert.match(itemSaves[0], /^0\|BUTY_BUT\|-1\|CAT\|1\r\n/);
+    await get('BEHBOOTS').RUN();
+    assert.equal(itemSaves.length, 1, 'An existing boots item must not be awarded twice');
+}
+
+async function verifyCatHerding() {
+    const fixture = await createCatFixture(), { engine, parent, scope, stage, get, step, click, saves } = fixture;
+    try {
+        // Only normal mouse destinations and elapsed ticks: no body/flag/animation relocation after entry.
+        for (const [x, y, ticks] of [[300, 540, 240], [400, 540, 240], [400, 480, 240], [400, 520, 360],
+            [650, 400, 240], [650, 270, 240], [650, 150, 180], [450, 130, 240]]) {
+            await click(x, y); await step(ticks);
+        }
+        assert.deepEqual(saves, [[1, 0]], 'The normal route must knock down the beehive before dropping the boots');
+        const mole = get('ANNKRET'); await click(mole.GETCENTERX(), mole.GETCENTERY());
+        assert.equal(get('VARPLAYERNAME').value, 'ANNKRET'); await click(150, 500); await step(320);
+        assert.deepEqual(saves, [[1, 0], [1, 1]], 'Normal herding must land the cat on the honey');
+        assert.equal(get('ANNKOT').GETEVENTNAME(), 'BEZ_BUTOW');
+        await verifyCatReward(fixture);
+        const routes = [], screenshots = [];
+        const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+        episode.GOTO = scene => routes.push(scene); scope.set(episode.name, episode);
+        const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+        screenshot.RUN = () => screenshots.push('exit'); scope.set(screenshot.name, screenshot);
+        for (const name of ['G_SLASTOBJECTS', 'G_SARCADEOBJECTS']) {
+            scope.set(name, new constructors.STRING(engine, parent, { TYPE: 'STRING', NAME: name }));
+        }
+        for (const [x, y] of [[250, 450], [180, 500], [60, 560]]) {
+            await click(x, y);
+            for (let tick = 0; tick < 480 && !routes.length; tick++) await step();
+            if (routes.length) break;
+        }
+        assert.deepEqual(routes, ['ARCADE'], 'Walking to the original exit must request the adventure scene');
+        assert.deepEqual(screenshots, ['exit']); assert.equal(get('G_SLASTOBJECTS').value, 'CAT');
+        assert.equal(get('G_SARCADEOBJECTS').value, 'JAGA');
+        console.log('CAT HERDING: normal click-only route knocks down the hive, lands the cat on honey, collects the boots and requests the original JAGA adventure return');
+    } finally {
+        assert.deepEqual(engine.scopeManager.destroy(), [], 'Cat herding cleanup'); assert.equal(stage.children.length, 0);
     }
 }
 
@@ -1400,7 +1478,9 @@ async function main() {
     }
     console.log('PATTERNS: all 12 exact and rotated shapes recognized; all 12 out-of-tolerance shapes rejected');
     await verifyBroomPhysics();
+    await verifyStartupCursor();
     await verifyCat();
+    await verifyCatHerding();
     await verifyBarandalf();
     await verifyBarandalfBoat();
     await verifyMazeEnemies();

@@ -14,6 +14,10 @@ export function getMagicieniiPlaceholderAnimation(filename: string): ANN | null 
 }
 
 export function patchMagicieniiSource(filename: string, source: string): string {
+    if (filename === 'dane/game/game.cnv') {
+        // The browser cannot warp the OS pointer; keep the global cursor aligned with scene mice.
+        return source.replaceAll('MOUSE^SETPOSITION(400,300);MOUSE^HIDE();', 'MOUSE^HIDE();')
+    }
     if (filename === 'dane/game/przygoda/cat/cat.cnv') {
         // Native integer division selects an eight-way event; JS expressions retain fractions.
         return source.replaceAll('*VARPLAYERNAME^PLAY([360-VARINT0@45]);',

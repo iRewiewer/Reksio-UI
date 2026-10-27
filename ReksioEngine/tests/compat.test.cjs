@@ -557,6 +557,17 @@ test('Magicienii Cat converts walking directions to integer event names only in 
     }
 });
 
+test('Magicienii removes only the global startup pointer warp, preserving relative spell drawing', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const source = 'CF^NEW("G_CURSOR");MOUSE^SETPOSITION(400,300);MOUSE^HIDE();MOUSE^SETPOSITION(100,200);';
+    const file = 'dane/game/game.cnv', repaired = patchMagicieniiSource(file, source);
+    assert.equal(repaired, 'CF^NEW("G_CURSOR");MOUSE^HIDE();MOUSE^SETPOSITION(100,200);');
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    assert.equal(patchMagicieniiSource('dane/game/przygoda/cat/cat.cnv', source), source);
+    assert.equal(patchMagicieniiSource('dane/game/przygoda/magic/magic.cnv', source), source);
+    assert.equal(patchMagicieniiSource('other/game.cnv', source), source);
+});
+
 test('Magicienii maze failure and restart freeze animations without pausing their dialogue processor', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const file = 'dane/game/przygoda/labirynt/labirynt.cnv';
