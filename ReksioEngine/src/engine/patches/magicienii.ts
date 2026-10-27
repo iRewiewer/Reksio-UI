@@ -17,6 +17,15 @@ export function getMagicieniiPlaceholderAnimation(filename: string): ANN | null 
 }
 
 export function patchMagicieniiSource(filename: string, source: string): string {
+    if (['labirynt.cnv', 'cnvlevel0.cnv', 'cnvlevel1.cnv', 'cnvlevel2.cnv'].some((name) =>
+        filename === `dane/game/przygoda/labirynt/${name}`)) {
+        // Quantize through an INTEGER temporary before multiplying back to the tile center.
+        for (const [target, input] of [['VARINT0', 'VARINT0'], ['VARINT1', 'VARINT1'],
+            ['VARINT2', 'VARINT0'], ['VARINT3', 'VARINT1']]) {
+            source = source.replaceAll(`${target}^SET([${input}@40*40+20]);`,
+                `${target}^SET([${input}@40]);${target}^SET([${target}*40+20]);`)
+        }
+    }
     if (filename === 'dane/game/game.cnv') {
         // The browser cannot warp the OS pointer; keep the global cursor aligned with scene mice.
         return source.replaceAll('MOUSE^SETPOSITION(400,300);MOUSE^HIDE();', 'MOUSE^HIDE();')

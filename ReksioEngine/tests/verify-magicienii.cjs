@@ -863,8 +863,9 @@ async function verifyMazePlayers() {
     console.log(`MAZE PLAYERS: original player initialization, ${selections} keyboard selections, ${moved} tile moves and ${blocked} wall blocks passed`);
 }
 
-async function createMazePuzzleFixture(level) {
-    const fixture = await createArcadeFixture('LABIRYNT', 'Labirynt', 'Labirynt.cnv', `cnvLevel${level}.cnv`);
+async function createMazePuzzleFixture(level, spells = false) {
+    const fixture = await createArcadeFixture('LABIRYNT', 'Labirynt', 'Labirynt.cnv',
+        spells ? ['cnvSpell.cnv', `cnvLevel${level}.cnv`] : `cnvLevel${level}.cnv`);
     const { engine, parent, scope, defs, get } = fixture, stage = engine.app.stage;
     const scenePath = 'dane/game/przygoda/labirynt', memory = new Map(), reads = [], backgrounds = [];
     engine.currentScene.getRelativePath = name => normalizePath(name.startsWith('$') ? name.slice(1) : `${scenePath}/${name}`);
@@ -1147,7 +1148,7 @@ async function verifyMazeFirstRoute() {
         }
         assert.equal(get('BTNEXIT1').logic.enabled, true, 'Both characters must reach the far exit naturally');
         assert.deepEqual(get('ANNSWITCHMASK').clones.map(wall => wall.GETCFRAMEINEVENT()), [1, 1, 1, 1, 0, 0, 1]);
-        assert.deepEqual([get('VARREXZYCIA').value, get('VARKRETZYCIA').value], [2, 2]);
+        assert.deepEqual([get('VARREXZYCIA').value, get('VARKRETZYCIA').value], [1, 2]);
         assert.deepEqual([walked, crossings, teleports], [74, 11, 4]);
         assert.ok(audio.includes('wavs/rex_r042.wav') && audio.includes('wavs/kretes_d047.wav'));
         const button = get('BTNEXIT1'), sprite = get(button.definition.GFXSTANDARD.objectName).getRenderObject();
@@ -1160,6 +1161,96 @@ async function verifyMazeFirstRoute() {
     } finally {
         assetLoader.loadSound = previousSound;
         assert.deepEqual(engine.scopeManager.destroy(), [], 'Maze route cleanup'); assert.equal(stage.children.length, 0);
+        backgrounds.forEach(texture => texture.destroy(true));
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+    }
+}
+
+async function verifyMazeSpellControls() {
+    const previousWindow = globalThis.window; globalThis.window = new EventTarget();
+    const { engine, scope, parent, defs, get, stage, backgrounds } = await createMazePuzzleFixture(1, true);
+    try {
+        const mouse = new Mouse(engine, parent, defs.MOUSE), keyboard = new Keyboard(engine, parent, defs.KEYBOARD);
+        scope.set(mouse.name, mouse); scope.set(keyboard.name, keyboard); await keyboard.ready(); keyboard.SETAUTOREPEAT(false);
+        // Learned spells and dialogue audio are inputs; drawing, projectiles, curses and expiry use the original scripts.
+        const spellbook = new constructors.ARRAY(engine, parent, { TYPE: 'ARRAY', NAME: 'G_ARRREXSPELLS' });
+        spellbook.restoreCheckpointValue([1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0]); scope.set(spellbook.name, spellbook);
+        const cursor = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_CURSOR' });
+        cursor.SETPOSITIONNOCALL = () => {}; scope.set(cursor.name, cursor);
+        const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+        episode.GETCURRENTSCENE = () => 'LABIRYNT'; scope.set(episode.name, episode);
+        await get('BEHINITSPELL').RUN();
+        const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
+        const start = ast.findIndex(entry => entry.target?.ref?.name === 'BEHINITPLAYERS'); assert.ok(start >= 0);
+        await new Interpreter(new RuntimeContext(engine, null, code)).execute([
+            ...ast.filter(entry => entry.target?.ref?.name === 'ARRAYSPELLTYPE'), ...ast.slice(start + 1),
+        ]);
+        const key = async (code, character, down) => {
+            const event = new Event(down ? 'keydown' : 'keyup'); Object.assign(event, { code, key: character });
+            window.dispatchEvent(event); await keyboard.tick();
+        };
+        const step = async (count = 1) => {
+            for (let tick = 0; tick < count; tick++) for (const object of scope.objects) await object.tick(1000 / 30);
+        };
+        const select = async number => { await key(`Digit${number}`, String(number), true); await key(`Digit${number}`, String(number), false); };
+        const right = async () => { await key('ArrowRight', 'RIGHT', true); await step(); await key('ArrowRight', 'RIGHT', false); await step(20); };
+        await select(2); await right(); await select(1); await right();
+        const rex = get('ANNPLAYER0'), companion = get('ANNPLAYER1');
+        const positions = () => [rex.GETCENTERX(), rex.GETCENTERY(), companion.GETCENTERX(), companion.GETCENTERY()];
+        assert.deepEqual(positions(), [100, 100, 140, 100], 'Move into casting range using the original keyboard controls');
+        const draw = async spell => {
+            let x = 400, y = 300;
+            const pointer = () => ({ button: 0, screen: { x, y } });
+            mouse.onMouseMove(pointer()); mouse.SETPOSITION(x, y); await mouse.tick(16);
+            await get('VARMOUSEPOSX').SET(x); await get('VARMOUSEPOSY').SET(y);
+            mouse.handleClickEvent(pointer(), 'click'); await mouse.tick(16);
+            for (const angle of get(`ARRPATTERN${spell}`).value) {
+                x += Math.round(60 * Math.cos(angle * Math.PI / 180)); y += Math.round(60 * Math.sin(angle * Math.PI / 180));
+                mouse.onMouseMove(pointer()); await mouse.tick(16);
+            }
+            mouse.handleClickEvent(pointer(), 'release'); await mouse.tick(16);
+        };
+        const cast = async () => {
+            const pointer = { button: 0, screen: { x: 400, y: 300 } };
+            mouse.handleClickEvent(pointer, 'click'); await mouse.tick(16);
+            mouse.handleClickEvent(pointer, 'release'); await mouse.tick(16); await step(30);
+        };
+        for (const [spell, name] of ['SLEEP', 'FROG', 'FLY', 'BUDYN', 'SWIRL', 'DARK'].entries()) {
+            await draw(spell); assert.equal(get('ARRSPELLTYPE').value[0], spell);
+            assert.equal(get('VARPLAYERSPELLTYPE').value, spell, 'A recognized learned shape must arm the original spell');
+            await cast();
+            assert.deepEqual(positions(), [100, 100, 140, 100], `${name} must not move either character off the tile grid`);
+            assert.equal(get('ANNPLAYERELAPSE_2').ISPLAYING(), true, `${name} must hit through the real projectile callback`);
+            if (name === 'DARK') assert.equal(get('ANNPLAYERDARKELAPSE_2').ISPLAYING(), true);
+            else assert.equal(get('ARRAYPLAYERSSTATE').value[1], name);
+            if (name === 'SLEEP') assert.equal(companion.ISPLAYING(), false);
+            if (name === 'FROG') assert.match(companion.GETEVENTNAME(), /FROG/);
+            if (name === 'FLY' || name === 'BUDYN') assert.equal(companion.fps, name === 'FLY' ? 16 : 4);
+            if (name === 'SWIRL') {
+                await select(2); assert.deepEqual(get('ARRAYKEYBOARD').value, ['DOWN', 'UP', 'RIGHT', 'LEFT']); await select(1);
+            }
+            let tick = 0;
+            for (; tick < 2400 && (get('ANNPLAYERELAPSE_2').ISPLAYING() || get('ANNPLAYERDARKELAPSE_2').ISPLAYING()); tick++) await step();
+            assert.ok(tick < 2400, `${name} must expire through its real animation timer`);
+            assert.deepEqual(positions(), [100, 100, 140, 100], `${name} recovery must preserve both tile centers`);
+            assert.equal(get('ARRAYPLAYERSSTATE').value[1], 'NULL'); assert.equal(companion.fps, 30);
+            assert.equal(companion.ISPLAYING(), true); assert.equal(get('VARMOUSESPEED').value, 1);
+            assert.deepEqual(get('ARRAYKEYBOARD').value, ['UP', 'DOWN', 'LEFT', 'RIGHT']);
+        }
+        assert.equal(get('ANNSPELL1').clones.length, 6);
+        for (const spell of [7, 8, 9, 10]) {
+            await draw(spell); assert.equal(get('ARRSPELLTYPE').value[0], spell);
+            assert.equal(get('VARPLAYERSPELLTYPE').value, -1, 'A counterspell must not arm an invalid projectile');
+        }
+        assert.deepEqual(get('ARRAYREXIMUNE').value, ['FROG', 'FLY', 'BUDYN', 'SWIRL']);
+        for (const spell of [6, 11]) { await draw(spell); assert.equal(get('ARRSPELLTYPE').value[0], -1); }
+        await spellbook.CHANGEAT(0, 0); await draw(0);
+        assert.equal(get('ARRSPELLTYPE').value[0], -1, 'The original learned-spell guard must reject an unavailable spell');
+        assert.equal(get('VARPLAYERSPELLTYPE').value, -1);
+        assert.deepEqual([get('VARREXZYCIA').value, get('VARKRETZYCIA').value], [3, 3]);
+        console.log('MAZE SPELLS: six drawn projectile hits and native curse recoveries preserve tile centers; four counterspells and learned-spell guards passed');
+    } finally {
+        assert.deepEqual(engine.scopeManager.destroy(), [], 'Maze spell cleanup'); assert.equal(stage.children.length, 0);
         backgrounds.forEach(texture => texture.destroy(true));
         if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
     }
@@ -3023,6 +3114,7 @@ async function main() {
     await verifyMazePlayers();
     await verifyMazePuzzleInitialization();
     await verifyMazeFirstRoute();
+    await verifyMazeSpellControls();
     await verifyMazeRecovery();
     await verifyFredRoute();
     await verifyFredRecovery();

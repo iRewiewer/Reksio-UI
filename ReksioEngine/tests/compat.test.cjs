@@ -580,6 +580,22 @@ test('Magicienii Fred failure keeps its dialogue processor running and rejects f
     }
 });
 
+test('Magicienii labyrinth tile snapping truncates division before restoring tile centers', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const pairs = [['VARINT0', 'VARINT0'], ['VARINT1', 'VARINT1'], ['VARINT2', 'VARINT0'], ['VARINT3', 'VARINT1']];
+    const source = pairs.map(([target, input]) => `${target}^SET([${input}@40*40+20]);`).join('');
+    const expected = pairs.map(([target, input]) => `${target}^SET([${input}@40]);${target}^SET([${target}*40+20]);`).join('');
+    for (const name of ['labirynt.cnv', 'cnvlevel0.cnv', 'cnvlevel1.cnv', 'cnvlevel2.cnv']) {
+        const file = `dane/game/przygoda/labirynt/${name}`;
+        assert.equal(patchMagicieniiSource(file, source), expected);
+        assert.equal(patchMagicieniiSource(file, expected), expected);
+    }
+    for (const file of ['dane/game/przygoda/labirynt/cnvspell.cnv', 'dane/game/przygoda/magic/magic.cnv',
+        'dane/game/przygoda/cat/cat.cnv', 'other/labirynt.cnv']) {
+        assert.equal(patchMagicieniiSource(file, source), source);
+    }
+});
+
 test('Magicienii maze failure and restart freeze animations without pausing their dialogue processor', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const file = 'dane/game/przygoda/labirynt/labirynt.cnv';
