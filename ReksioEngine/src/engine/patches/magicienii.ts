@@ -124,6 +124,11 @@ export function patchMagicieniiSource(filename: string, source: string): string 
     if (filename === 'dane/game/przygoda/arcade/alchemy.cnv') {
         return source.replaceAll('^SETPTIORITY(', '^SETPRIORITY(')
     }
+    if (filename === 'dane/game/przygoda/arcade/przepasc.cnv' && !source.includes('OBJECT=BFITMP1023')) {
+        // This room ships no WST0.ARR intro; retain its visit flag and normal arrival movement.
+        return source + '\nOBJECT=BFITMP1023\nBFITMP1023:TYPE=BEHAVIOUR\n' +
+            'BFITMP1023:CODE={SOBJECT|IPARAM0^SET(1);BEHUPDATEOBJECTS^RUN();}\n'
+    }
     if (filename === 'dane/game/przygoda/arcade/piklibia.cnv') {
         // Animation nodes are zero-based, while ARRAY clone names start at one.
         for (const index of ['_I_', 'ARRKNIGHTFRAME^GET(VARITER)', 'VARITEMP1']) {

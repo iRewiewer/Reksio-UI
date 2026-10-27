@@ -219,9 +219,11 @@ async function verifyPiklibia() {
 }
 
 async function verifyPiklibiaLive() {
-    await require('./verify-magicienii-piklibia-live.cjs')({ assets, createArcadeFixture, Filesystem, normalizePath,
+    const runtime = { assets, createArcadeFixture, Filesystem, normalizePath,
         Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray, load,
-        CanvasObserver, Mouse, StaticFilter, Sequence });
+        CanvasObserver, Mouse, StaticFilter, Sequence };
+    const checkpoint = await require('./verify-magicienii-piklibia-live.cjs')(runtime);
+    await require('./verify-magicienii-domspiel.cjs')(runtime, checkpoint);
 }
 
 async function verifyBarandalf() {

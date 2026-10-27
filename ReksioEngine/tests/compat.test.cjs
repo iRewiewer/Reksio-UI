@@ -547,6 +547,19 @@ test('Magicienii adventure initialization derives DEFAULT walking destinations f
     }
 });
 
+test('Only Magicienii Przepasc skips its absent first-visit dialogue and retains the visit save', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/przepasc.cnv';
+    const source = 'BEHINITSCRIPT:CODE={BEHSELECTOBJ^RUN(1);}';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.equal(repaired, source + '\nOBJECT=BFITMP1023\nBFITMP1023:TYPE=BEHAVIOUR\n' +
+        'BFITMP1023:CODE={SOBJECT|IPARAM0^SET(1);BEHUPDATEOBJECTS^RUN();}\n');
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/domspiel.cnv', 'other/przepasc.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
 test('Magicienii repairs misspelled alchemy image priorities only in that source file', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const source = 'IMG_EXIT_STD^SETPTIORITY(610);IMG_EXIT_GLOW^SETPTIORITY(610);IMG_EXIT_CLICK^SETPTIORITY(610);';

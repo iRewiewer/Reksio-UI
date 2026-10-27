@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 
-function getPiklibiaFactory(runtime) {
+function getAdventureFactory(runtime) {
     const { assets, createArcadeFixture, Filesystem, normalizePath, Database, Struct, Animo,
         Type, constructors, serializeArray } = runtime;
     const bytes = filename => {
@@ -10,14 +10,16 @@ function getPiklibiaFactory(runtime) {
         return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     };
     const create = async (options = {}) => {
-        const fixture = await createArcadeFixture('ARCADE', 'Arcade', 'Arcade.cnv', 'Piklibia.cnv');
+        const room = options.room ?? 'Piklibia', roomKey = room.toUpperCase();
+        const fixture = await createArcadeFixture('ARCADE', 'Arcade', 'Arcade.cnv', `${room}.cnv`);
         const { engine, parent, scope, defs, get } = fixture;
         const memory = new Map(options.files?.map(([name, data]) => [name, data.slice(0)]));
         const saves = [], calls = [], missing = new Set(), stage = engine.app.stage;
         const resolve = name => normalizePath(name.startsWith('$') ? name.slice(1) : `dane/game/przygoda/arcade/${name}`);
-        for (const room of ['piklibia', 'domspiel', 'items']) {
-            const filename = `common/${room}0.dta`;
-            if (!memory.has(filename)) memory.set(filename, bytes(`common/${room}_def.dta`));
+        const common = fs.readdirSync(assets).find(name => name.toLowerCase() === 'common');
+        for (const template of fs.readdirSync(path.join(assets, common)).filter(name => /_def\.dta$/i.test(name))) {
+            const filename = `common/${template.toLowerCase().replace(/_def\.dta$/, '0.dta')}`;
+            if (!memory.has(filename)) memory.set(filename, bytes(`${common}/${template}`));
         }
         for (const name of ['questions', 'questions_asked']) {
             const filename = `common/${name}0.arr`;
@@ -68,16 +70,16 @@ function getPiklibiaFactory(runtime) {
             for (const actor of actors) await actor.applyDefaults();
             for (const actor of actors) await actor.ready();
             for (const [name, type, value] of [
-                ['G_SARCADEOBJECTS', 'STRING', 'PIKLIBIA'], ['G_SLASTOBJECTS', 'STRING', options.previous ?? 'PIKMIOT'],
+                ['G_SARCADEOBJECTS', 'STRING', roomKey], ['G_SLASTOBJECTS', 'STRING', options.previous ?? 'PIKMIOT'],
                 ['G_ISUCCESS', 'INTEGER', options.success ?? 0], ['G_IGAMESLOT', 'INTEGER', 0],
             ]) scope.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name, VALUE: value }));
             const menu = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_MENU' });
             menu.ADDEXP = value => calls.push(['ADDEXP', value]); scope.set(menu.name, menu);
             const card = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_CARD' });
             card.LOAD = () => calls.push(['CARD_LOAD']); scope.set(card.name, card);
-            await get('VARSCURRARCADE').SET('$COMMON\\PIKLIBIA0.DTA');
+            await get('VARSCURRARCADE').SET(`$COMMON\\${roomKey}0.DTA`);
             await get('VARSCURRITEMS').SET('$COMMON\\ITEMS0.DTA');
-            await get('DBOBJECTS').LOAD('$COMMON\\PIKLIBIA0.DTA');
+            await get('DBOBJECTS').LOAD(`$COMMON\\${roomKey}0.DTA`);
             await get('DBITEMS').LOAD('$COMMON\\ITEMS0.DTA');
             // Optional seed data represents persisted state on entry, never post-initialization success.
             await options.seed?.({ ...fixture, memory }); saves.length = 0; calls.length = 0;
@@ -97,7 +99,7 @@ function getPiklibiaFactory(runtime) {
 
 module.exports = async function verifyPiklibia(runtime) {
     const { serializeArray, deserializeArray } = runtime;
-    const create = getPiklibiaFactory(runtime);
+    const create = getAdventureFactory(runtime);
     const roomField = async (fixture, index, field) => {
         await fixture.get('BEHSELECTOBJ').RUN(index);
         return fixture.get('SOBJECT').GETFIELD(field).getValue();
@@ -206,4 +208,4 @@ module.exports = async function verifyPiklibia(runtime) {
     console.log('PIKLIBIA: all 230 graph nodes, both endpoint moves, 24 three-way switches, card/XP reward, persisted re-entry and duplicate/asked-question guards passed');
 };
 
-module.exports.createFixture = (runtime, options) => getPiklibiaFactory(runtime)(options);
+module.exports.createFixture = (runtime, options) => getAdventureFactory(runtime)(options);

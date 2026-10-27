@@ -1,94 +1,12 @@
-const fs = require('node:fs');
-const path = require('node:path');
 const assert = require('node:assert/strict');
 
 module.exports = async function verifyPiklibiaLive(runtime) {
     const recording = require('./fixtures/magicienii-piklibia-puzzle.json');
-    const { assets, load, normalizePath, Type, Animo, Sequence, Mouse, CanvasObserver, StaticFilter, constructors } = runtime;
-    const fixture = await require('./verify-magicienii-piklibia.cjs').createFixture(runtime, { initialize: false });
-    const { engine, parent, scope, defs, get, missing } = fixture;
-    const assetLoader = load('filesystem/assetsLoader.ts'), originalSound = assetLoader.loadSound;
-    const voices = [], audio = [], backgrounds = [], switches = new Set(), routes = [];
+    const fixture = await require('./magicienii-adventure-fixture.cjs')(runtime);
+    const { get, missing, routes, audio, backgrounds } = fixture;
+    const switches = new Set();
     let elapsed = 0, saved;
-    const { UrlFileLoader, FileNotFoundError } = load('filesystem/fileLoader.ts');
-    // Reuse the production listing resolver without HTTP; all game-save writes remain in memory.
-    class LocalLoader extends UrlFileLoader {
-        constructor() {
-            super();
-            this.listing = new Map(fs.readdirSync(assets, { recursive: true })
-                .filter(name => fs.statSync(path.join(assets, name)).isFile()).map(name => [normalizePath(name), name]));
-        }
-        async getRawFile(name) {
-            const target = this.resolveListedPath(normalizePath(name));
-            if (!target) throw new FileNotFoundError(name);
-            const data = fs.readFileSync(path.join(assets, this.listing.get(target)));
-            return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-        }
-    }
     try {
-        engine.filesystem.fileLoader = new LocalLoader();
-        engine.resolvePath = async (name, base = '') => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
-        parent.getRelativePath = name => engine.resolvePath(name, 'dane/game/przygoda/arcade');
-        // Only audio duration and GPU background display are boundaries, not speech callbacks.
-        assetLoader.loadSound = async (_filesystem, filename) => {
-            const data = await engine.filesystem.getFile(filename);
-            assert.ok(data.byteLength > 0, filename);
-            const sound = { isPlaying: false, stop() { this.isPlaying = false; }, pause() {}, resume() {},
-                play(options = {}) {
-                    this.isPlaying = true; audio.push(normalizePath(filename)); options.onStart?.();
-                    const instance = { isPlaying: true, stop() { this.isPlaying = false; sound.stop(); }, pause() {}, resume() {} };
-                    voices.push(() => {
-                        if (!instance.isPlaying || !sound.isPlaying) return;
-                        instance.isPlaying = false; sound.isPlaying = false; options.onEnd?.();
-                    });
-                    return instance;
-                },
-            };
-            return sound;
-        };
-        const { Sound } = load('engine/types/sound.ts');
-        for (const def of Object.values(defs).filter(def => def.TYPE === 'SOUND')) {
-            const sound = new Sound(engine, parent, def); scope.set(sound.name, sound); await sound.init();
-        }
-        for (const def of Object.values(defs).filter(def => def.TYPE === 'SEQUENCE')) {
-            const sequence = new Sequence(engine, parent, def);
-            sequence.getAnimo = async name => {
-                const existing = get(name) ?? scope.objects.find(object => object instanceof Animo && object.definition.FILENAME === name);
-                if (existing) return existing;
-                const actor = new Animo(engine, parent, { TYPE: 'ANIMO', NAME: name, FILENAME: name,
-                    FPS: 16, TOCANVAS: true, VISIBLE: true, PRIORITY: 0 });
-                actor.loadSfx = async () => {}; scope.set(actor.name, actor);
-                await actor.init(); await actor.applyDefaults(); await actor.ready(); return actor;
-            };
-            scope.set(sequence.name, sequence); await sequence.init();
-        }
-        const canvas = new CanvasObserver(engine, parent, defs.CANVASOBSERVER);
-        scope.set(canvas.name, canvas);
-        engine.rendering.setBackground = (texture, position) => backgrounds.push({ texture, position });
-        scope.set('MOUSE', new Mouse(engine, parent, defs.MOUSE));
-        scope.set('FCOLOR', new StaticFilter(engine, parent, defs.FCOLOR));
-        const boundary = (name, methods) => {
-            const object = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: name });
-            for (const method of methods) object[method] = () => {};
-            scope.set(name, object); return object;
-        };
-        for (const [name, methods] of [
-            ['__GAME_INIT__', ['RUN']], ['__FLIP__', ['RUN']], ['__SCREENSHOT__', ['RUN']],
-            ['G_MENU', ['SETSCENE', 'SAVESETS', 'SHOW', 'ADDEXP']], ['G_CARD', ['SETSCENE', 'LOAD']],
-            ['G_CURSOR', ['SETSCENE', 'SETARCADE', 'SHOW']], ['G_AMBIENT', ['SETAMBIENT']], ['G_ANNPAGE', ['PLAY']],
-        ]) boundary(name, methods);
-        const cnv = boundary('CNVLOADER', ['LOAD']);
-        cnv.LOAD = filename => assert.equal(filename, 'PIKLIBIA.CNV', 'The already-installed overlay must be requested normally');
-        const episode = boundary('PRZYGODA', ['GOTO']); episode.GOTO = scene => routes.push(scene);
-        for (const [name, type, value] of [['SCENENAME', 'STRING', 'ARCADE'], ['G_IKRETACTIVE', 'INTEGER', 1], ['G_IFLIPPAGE', 'INTEGER', 0]]) {
-            scope.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name, VALUE: value }));
-        }
-        const settings = new constructors.ARRAY(engine, parent, { TYPE: 'ARRAY', NAME: 'G_ARRSETTINGS' });
-        settings.ADD(1, 500); scope.set(settings.name, settings);
-        parent.STARTMUSIC = async filename => { await assetLoader.loadSound(engine.filesystem, filename); };
-        parent.SETMUSICVOLUME = () => {};
-        for (const name of ['DBOBJECTS', 'DBITEMS']) get(name).REMOVEALL();
-        await get('MOUSE').ready(); await get('__INIT__').RUN();
         for (let index = 0; index < 24; index++) {
             const actor = get(`ANNOBJECT${index}`), event = actor.annFile.events[0], frame = event.frames[0];
             const image = actor.annFile.annImages[event.framesImageMapping[0]];
@@ -97,18 +15,13 @@ module.exports = async function verifyPiklibiaLive(runtime) {
                 `Switch ${index} must retain its own authored walking destination`);
         }
         const navigation = get('WPATH'), cameraPositions = [];
-        const step = async count => {
-            for (let tick = 0; tick < count; tick++) {
-                if (voices.length) voices.shift()();
-                for (const object of [...scope.objects]) await object.tick(1000 / 30);
-                const y = navigation.GETBKGPOSY(); cameraPositions.push(y);
-                assert.ok(y >= -300 && y <= 300, 'The live adventure camera must stay inside the original background bounds');
-                assert.ok(Math.abs(get('ANNBKG').GETPOSITIONY() - (-300 - y)) <= 1,
-                    'The original tick must keep the background aligned with its navigation camera');
-                elapsed++;
-                if (routes.length) break;
-            }
-        };
+        const step = count => fixture.step(count, () => {
+            const y = navigation.GETBKGPOSY(); cameraPositions.push(y);
+            assert.ok(y >= -300 && y <= 300, 'The live adventure camera must stay inside the original background bounds');
+            assert.ok(Math.abs(get('ANNBKG').GETPOSITIONY() - (-300 - y)) <= 1,
+                'The original tick must keep the background aligned with its navigation camera');
+            elapsed = fixture.elapsed;
+        });
         await step(500);
         assert.equal(get('VARIFIRSTENTER').value, 0, 'The original arrival animation must release scene input');
         assert.equal(navigation.GETBKGPOSY(), 245);
@@ -152,11 +65,7 @@ module.exports = async function verifyPiklibiaLive(runtime) {
             !/^BEHFINISHEDS[012]_ZNAK\d+$/.test(name) && !/^BEHFOCUSO(?:N|FF)_/.test(name));
         assert.deepEqual(optional, [], 'All required live room callbacks must resolve');
         console.log(`PIKLIBIA PUZZLE: ${recording.inputs.length} native mouse destinations, all eight live knight crashes/pickups, scrolling, saved switches/positions and original house-entry dialogue/DOMSPIEL transition passed`);
-    } finally {
-        assetLoader.loadSound = originalSound;
-        for (const { texture } of backgrounds) texture.destroy(true);
-        fixture.dispose();
-    }
+    } finally { fixture.dispose(); }
     const restored = await require('./verify-magicienii-piklibia.cjs').createFixture(runtime, { files: saved, previous: 'DOMSPIEL' });
     try {
         for (let index = 0; index < 8; index++) {
@@ -167,4 +76,5 @@ module.exports = async function verifyPiklibiaLive(runtime) {
         assert.deepEqual(restored.saves, [], 'Reloading the completed board must not rewrite or duplicate rewards');
         console.log('PIKLIBIA RELOAD: saved database bytes retain all eight scrap items and suppress every collected knight');
     } finally { restored.dispose(); }
+    return { files: saved, previous: 'PIKLIBIA', destination: 'DOMSPIEL' };
 };
