@@ -614,6 +614,22 @@ test('Magicienii classroom and corridor clicks skip only their absent generic ar
     }
 });
 
+test('Only Magicienii Guldryk spell orbs and door bypass absent generic cues without changing their own guards', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/guldryk.cnv';
+    const handlers = ['KULA_BUDYN', 'KULA_BUDYN_OBR', 'KULA_SEN', 'KULA_SEN_OBR'];
+    const sources = handlers.map(name => `BEHCLICK_${name}:CODE={@IF("XP","<","150","BLOCK","LEARN");}`);
+    sources.push('BEHCLICK_DRZWI:CODE={BEHTOGGLEDOOR^RUN(1);}');
+    sources.push('BEHCLICK_GUL:CODE={PRZYGODA^GOTO("DIALOGS");}');
+    const source = sources.join('\n'), repaired = patchMagicieniiSource(file, source);
+    for (const line of sources.slice(0, -1)) assert.ok(repaired.includes(line.replace('CODE={', 'CODE={VARSLASTFOCUS^SET("NULL");')));
+    assert.ok(repaired.includes(sources.at(-1)));
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const other of ['other/guldryk.cnv', 'dane/game/przygoda/arcade/domspiel.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
 test('Only Magicienii adventure magic entry drops redundant native redraw calls and preserves its capture', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const file = 'dane/game/przygoda/arcade/arcade.cnv';

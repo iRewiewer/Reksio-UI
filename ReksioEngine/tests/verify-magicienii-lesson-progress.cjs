@@ -108,14 +108,64 @@ async function createLesson(runtime, fighterId, options = {}) {
         finishPanel: menuState.finishPanel };
 }
 
+async function drawAndCast(lesson, spell, beforeCast) {
+    const { value, mouse, pointer, wand } = lesson;
+    let x = 400, y = 300; mouse.onMouseMove(pointer(x, y)); await mouse.tick(16);
+    mouse.lastClicksTime = {}; mouse.handleClickEvent(pointer(x, y), 'click'); await mouse.tick(16);
+    for (const angle of value(`ARRPATTERN${spell}`)) {
+        x += Math.round(60 * Math.cos(angle * Math.PI / 180)); y += Math.round(60 * Math.sin(angle * Math.PI / 180));
+        mouse.onMouseMove(pointer(x, y)); await mouse.tick(16);
+    }
+    mouse.handleClickEvent(pointer(x, y), 'release'); await mouse.tick(16);
+    assert.equal(value('ARRSPELLTYPE')[0], spell);
+    for (let tick = 0; tick < 200 && value('VARISPELLREADY') !== 2; tick++) await wand.tick(70);
+    assert.equal(value('VARISPELLREADY'), 2);
+    await beforeCast?.();
+    mouse.lastClicksTime = {}; mouse.handleClickEvent(pointer(x, y), 'click'); await mouse.tick(16);
+    for (let tick = 0; tick < 30 && wand.GETEVENTNAME() === 'STRZAL'; tick++) await wand.tick(70);
+    assert.equal(wand.GETEVENTNAME(), 'IDLE');
+}
+
 module.exports = async function verifyLessonProgress(runtime, entry = {}) {
     if (entry.files) { assert.equal(entry.destination, 'MAGIC'); assert.equal(entry.fighter, 13); }
     const first = await createLesson(runtime, 13, entry);
+    let firstLesson;
     try {
-        await first.get(first.intro).callbacks.run('ONFINISHED'); await first.get('SNDTUT1').callbacks.run('ONFINISHED');
+        const finishVoice = async name => {
+            assert.equal(first.get(name).ISPLAYING(), true, `${name} must be started by the native tutorial`);
+            first.get(name).STOP(); await first.get(name).callbacks.run('ONFINISHED');
+        };
+        await finishVoice(first.intro); await finishVoice('SNDTUT1');
         assert.equal(first.value('VARITUTORIAL'), 2);
         await first.clickExit(); assert.deepEqual(first.routes, [], 'The first lesson cannot be skipped before learning');
         assert.deepEqual(first.saved(), first.initial); assert.deepEqual(first.writes, []);
+        first.mouse.onMouseMove(first.pointer(400, 300)); await first.mouse.tick(16);
+        first.mouse.lastClicksTime = {}; first.mouse.handleClickEvent(first.pointer(400, 300), 'click'); await first.mouse.tick(16);
+        for (let move = 0; move < 100; move++) {
+            first.mouse.onMouseMove(first.pointer(move % 2 ? 200 : 600, move % 2 ? 200 : 400));
+            await first.mouse.tick(16);
+        }
+        assert.equal(first.value('VARITUTCOUNT'), 100, 'Native mouse movement must complete the wand exercise');
+        first.mouse.handleClickEvent(first.pointer(200, 200), 'release'); await first.mouse.tick(16);
+        for (let voice = 2; voice <= 6; voice++) await finishVoice(`SNDTUT${voice}`);
+        assert.equal(first.value('VARITUTORIAL'), 3);
+        for (let cast = 1; cast <= 3; cast++) {
+            if (cast > 1 && first.get('SNDTUT8').ISPLAYING()) await finishVoice('SNDTUT8');
+            assert.equal(first.value('VARITUTORIAL'), cast === 1 ? 3 : 4);
+            await drawAndCast(first, 3, cast === 1 ? () => finishVoice('SNDTUT7') : null);
+            assert.equal(first.value('ARREFFECTLEVEL1')[3], cast);
+        }
+        assert.equal(first.value('VARIWINNER'), 1);
+        for (let tick = 0; tick < 5; tick++) await first.get('STL10').callbacks.run('ONFRAMECHANGED', 'ELAPSE');
+        await finishVoice('SNDTUT9'); await finishVoice('SNDTUT10'); await finishVoice('SNDTUT11');
+        assert.equal(first.value('VARITUTORIAL'), 5); assert.equal(first.value('VARBLEARNED'), true);
+        await first.clickExit(); assert.deepEqual(first.routes, ['ARCADE']);
+        assert.equal(first.get('G_SLASTOBJECTS').value, 'MAGIC_GULDRYK13');
+        assert.equal(first.get('G_SARCADEOBJECTS').value, 'GULDRYK');
+        assert.deepEqual(first.saved(), first.initial, 'The first tutorial must not spend XP or unlock another spell');
+        assert.deepEqual(first.writes, ['common/spells0.arr']);
+        firstLesson = { files: [...first.memory], previous: 'MAGIC_GULDRYK13', destination: 'ARCADE', arcade: 'GULDRYK' };
+        console.log('FIRST LESSON: 100 native wand movements, original narration, three drawn/charged pudding casts, completion and saved classroom return passed without completion-state writes');
     } finally { first.dispose(); }
     const incomplete = await createLesson(runtime, 22);
     try {
@@ -126,23 +176,12 @@ module.exports = async function verifyLessonProgress(runtime, entry = {}) {
         assert.deepEqual(incomplete.writes, [], 'Leaving an unfinished later lesson must neither grant a spell nor spend XP');
     } finally { incomplete.dispose(); }
 
-    const lesson = await createLesson(runtime, 22), { get, value, mouse, pointer, wand } = lesson;
+    const lesson = await createLesson(runtime, 22), { get, value } = lesson;
     try {
         await get(lesson.intro).callbacks.run('ONFINISHED'); assert.equal(value('VARITUTORIAL'), 6);
         assert.equal(lesson.saved()[5], 0);
         for (let cast = 1; cast <= 3; cast++) {
-            let x = 400, y = 300; mouse.onMouseMove(pointer(x, y)); await mouse.tick(16);
-            mouse.lastClicksTime = {}; mouse.handleClickEvent(pointer(x, y), 'click'); await mouse.tick(16);
-            for (const angle of value('ARRPATTERN5')) {
-                x += Math.round(60 * Math.cos(angle * Math.PI / 180)); y += Math.round(60 * Math.sin(angle * Math.PI / 180));
-                mouse.onMouseMove(pointer(x, y)); await mouse.tick(16);
-            }
-            mouse.handleClickEvent(pointer(x, y), 'release'); await mouse.tick(16);
-            assert.equal(value('ARRSPELLTYPE')[0], 5);
-            for (let tick = 0; tick < 200 && value('VARISPELLREADY') !== 2; tick++) await wand.tick(70);
-            assert.equal(value('VARISPELLREADY'), 2);
-            mouse.lastClicksTime = {}; mouse.handleClickEvent(pointer(x, y), 'click'); await mouse.tick(16);
-            for (let tick = 0; tick < 30 && wand.GETEVENTNAME() === 'STRZAL'; tick++) await wand.tick(70);
+            await drawAndCast(lesson, 5);
             assert.equal(value('ARREFFECTLEVEL1')[5], cast);
         }
         assert.equal(value('VARIWINNER'), 1);
@@ -161,6 +200,6 @@ module.exports = async function verifyLessonProgress(runtime, entry = {}) {
         const reloaded = new runtime.constructors.ARRAY(lesson.engine, lesson.parent, { TYPE: 'ARRAY', NAME: '__RELOADED_BOOK__' });
         await reloaded.LOAD('$COMMON\\SPELLS0.ARR'); assert.deepEqual(reloaded.value, expected);
         console.log('LESSON SAVE: three drawn darkness casts, native XP/level-up, narration/winner/unfinished guards, button-first scene interruption and reloaded earned spellbook passed');
-        return { files: [...lesson.memory], book: reloaded.value.slice(0) };
+        return { files: [...lesson.memory], book: reloaded.value.slice(0), firstLesson };
     } finally { lesson.dispose(); }
 };

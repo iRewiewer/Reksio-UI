@@ -132,9 +132,12 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         return source.replaceAll('^SETPTIORITY(', '^SETPRIORITY(')
     }
     if (filename === 'dane/game/przygoda/arcade/guldryk.cnv') {
-        // The mannequin has no generic arrival cue, including while its briefing gate is still locked.
-        source = source.replaceAll('BEHCLICK_MANEKIN:CODE={BEHSELECTOBJS',
-            'BEHCLICK_MANEKIN:CODE={VARSLASTFOCUS^SET("NULL");BEHSELECTOBJS')
+        // These handlers own their actions/dialogue; none ships a separate generic arrival cue.
+        for (const [name, first] of [['MANEKIN', 'BEHSELECTOBJS'], ['DRZWI', 'BEHTOGGLEDOOR'],
+            ['KULA_BUDYN', '@IF'], ['KULA_BUDYN_OBR', '@IF'], ['KULA_SEN', '@IF'], ['KULA_SEN_OBR', '@IF']]) {
+            source = source.replaceAll(`BEHCLICK_${name}:CODE={${first}`,
+                `BEHCLICK_${name}:CODE={VARSLASTFOCUS^SET("NULL");${first}`)
+        }
     }
     if (filename === 'dane/game/przygoda/arcade/korytarz.cnv') {
         // Opening this door is its complete interaction; DRZWI_GULDRYK.ARR does not exist.

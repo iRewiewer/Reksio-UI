@@ -228,6 +228,11 @@ async function verifyLessonProgress(entry) {
         Struct, Database, Type, Animo, Button, CanvasObserver, constructors, serializeArray, deserializeArray }, entry);
 }
 
+async function verifyClassroomReturn(checkpoint) {
+    await require('./verify-magicienii-classroom-return.cjs')({ assets, createArcadeFixture, Filesystem, normalizePath,
+        Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray, load, CanvasObserver, Mouse, StaticFilter, Sequence }, checkpoint);
+}
+
 async function verifyPiklibiaLive(files) {
     const runtime = { assets, createArcadeFixture, Filesystem, normalizePath,
         Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray, load,
@@ -3216,6 +3221,7 @@ async function main() {
     console.log('LESSON: three casts, target defeat, completion voice callbacks, learned flag and effect reset passed');
     const firstLessonEntry = await verifyTeacherEntry();
     const learnedSpellbook = await verifyLessonProgress(firstLessonEntry);
+    await verifyClassroomReturn(learnedSpellbook.firstLesson);
     for (let spell = 0; spell < 12; spell++) {
         for (const rotation of [0, 25, 50]) {
             const fixture = await createFixture();
