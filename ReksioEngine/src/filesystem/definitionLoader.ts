@@ -40,9 +40,13 @@ import { Class } from '../engine/types/class'
 import { logger } from '../engine/logging'
 import { World } from '../engine/types/world'
 import { Matrix } from '../engine/types/matrix'
+import { Pattern } from '../engine/types/pattern'
 import { StackFrame, stackTrace } from '../interpreter/stacktrace'
 
 const createTypeInstance = (engine: Engine, parent: ParentType<any> | null, definition: any) => {
+    if (definition.TYPE === 'PATTERN' && engine.compat.patternMaps) {
+        return new Pattern(engine, parent, definition)
+    }
     switch (definition.TYPE) {
         case 'ANIMO':
             return new Animo(engine, parent, definition)

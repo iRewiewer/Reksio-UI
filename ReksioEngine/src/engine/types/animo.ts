@@ -491,14 +491,24 @@ export class Animo extends DisplayType<AnimoDefinition> {
             return
         }
 
-        const newEvent = eventNameOrFrameIdx.toString()
-        const newEventFrame = Number(frameIdx)
-
-        const event = this.getEvent(newEvent)
+        let newEventFrame = Number(frameIdx)
+        let event: Event | null
+        if (this.engine.compat.nativeFrameSelection) {
+            assert(this.annFile !== null)
+            // PIKLIB uses event indexes for numeric arguments and event zero for unknown names.
+            event = typeof eventNameOrFrameIdx === 'number'
+                ? eventNameOrFrameIdx === -1 ? this.currentEvent : this.annFile.events[eventNameOrFrameIdx] ?? null
+                : this.getEvent(eventNameOrFrameIdx) ?? this.annFile.events[0] ?? null
+            if (!event) return
+            if (newEventFrame === -1) newEventFrame = 0
+        } else {
+            event = this.getEvent(eventNameOrFrameIdx.toString())
+        }
         assert(event !== null)
 
         // Necessary in S63_OBOZ
-        if (newEventFrame < event.framesCount) {
+        if (newEventFrame < event.framesCount &&
+            (!this.engine.compat.nativeFrameSelection || newEventFrame >= 0)) {
             this.currentEvent = event
             this.currentFrame = newEventFrame
 
@@ -680,9 +690,14 @@ export class Animo extends DisplayType<AnimoDefinition> {
     }
 
     @method()
-    GETNOFINEVENT(eventName?: string): number {
+    GETNOFINEVENT(eventName?: string | number): number {
+        if (this.engine.compat.nativeFrameSelection && typeof eventName === 'number') {
+            assert(this.annFile !== null)
+            const event = eventName === -1 ? this.currentEvent : this.annFile.events[eventName]
+            return event?.framesCount ?? 0
+        }
         if (this.engine.compat.modernScripts && eventName !== undefined) {
-            return this.getEvent(eventName)?.framesCount ?? 0
+            return this.getEvent(eventName.toString())?.framesCount ?? 0
         }
         assert(this.currentEvent !== null)
         return this.currentEvent.framesCount

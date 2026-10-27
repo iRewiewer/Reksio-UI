@@ -40,6 +40,8 @@ export type EngineCompat = {
     cloneGroups: boolean
     backgroundCompositing: boolean
     rgb555Images: boolean
+    patternMaps: boolean
+    nativeFrameSelection: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -97,5 +99,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         cloneGroups: name === 'nemo',
         backgroundCompositing: name === 'nemo',
         rgb555Images: name === 'nemo',
+        patternMaps: name === 'magicienii',
+        nativeFrameSelection: name === 'magicienii',
     }
 }

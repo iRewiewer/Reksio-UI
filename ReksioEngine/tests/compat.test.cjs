@@ -1077,6 +1077,47 @@ test('Nemo inventory frame steps stay within the active event and leave Pirates 
     assert.equal(animation.currentFrame, 0);
 });
 
+test('Magicienii frame selection uses native event indexes and event-zero fallback', async () => {
+    const { Animo } = loadModule('engine/types/animo.ts', {
+        './index': { DisplayType: FakeType }, '../../common/errors': { assert: assert.ok }, 'pixi.js': {},
+        '../components/button': {}, '../../filesystem/assetsLoader': {}, '../../filesystem/fileLoader': {},
+        '../rendering': {}, '../../common/types': decorator, '../components/collisions': {}, '../audio': {}, '../logging': {},
+    });
+    const animation = Object.create(Animo.prototype), rendered = [];
+    const events = [{ name: 'PLAY', framesCount: 3 }, { name: 'IDLE', framesCount: 2 }, { name: '0', framesCount: 1 }];
+    animation.engine = { compat: createEngineCompat('magicienii') };
+    animation.annFile = { events };
+    animation.currentEvent = events[1]; animation.currentFrame = 1;
+    animation.forceRender = async () => rendered.push([animation.currentEvent.name, animation.currentFrame]);
+    animation.changeImage = index => rendered.push(['IMAGE', index]);
+    assert.equal(animation.GETNOFINEVENT(0), 3);
+    assert.equal(animation.GETNOFINEVENT(1), 2);
+    assert.equal(animation.GETNOFINEVENT('0'), 1);
+    assert.equal(animation.GETNOFINEVENT('G7'), 0);
+    assert.equal(animation.GETNOFINEVENT(-1), 2);
+    assert.equal(animation.GETNOFINEVENT(7), 0);
+    await animation.SETFRAME(0, 2);
+    await animation.SETFRAME(1, 1);
+    await animation.SETFRAME('0', 0);
+    await animation.SETFRAME('G7', 0);
+    await animation.SETFRAME('idle', -1);
+    await animation.SETFRAME(-1, 1);
+    await animation.SETFRAME(7, 0);
+    await animation.SETFRAME(1, 99);
+    await animation.SETFRAME(1, -2);
+    await animation.SETFRAME(2);
+    assert.deepEqual(rendered, [['PLAY', 2], ['IDLE', 1], ['0', 0], ['PLAY', 0], ['IDLE', 0], ['IDLE', 1], ['IMAGE', 2]]);
+    assert.equal(animation.currentEvent, events[1]);
+    assert.equal(animation.currentFrame, 1);
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        animation.engine.compat = createEngineCompat(profile);
+        await animation.SETFRAME(0, 0);
+        assert.deepEqual(rendered.at(-1), ['0', 0]);
+        await assert.rejects(animation.SETFRAME('G7', 0));
+        assert.equal(animation.GETNOFINEVENT(0), 1);
+    }
+});
+
 function arrayBuffer(bytes) {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
