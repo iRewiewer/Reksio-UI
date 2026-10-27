@@ -774,6 +774,7 @@ test('Filesystem applies Magicienii animation adapters only to the Magicienii co
         '../engine/compat': { createEngineCompat }, '../fileFormats/archive/sound': {}, '../engine/compatAssets': {},
         '../engine/patches/timpului': {}, '../engine/patches/ozn': {}, '../engine/patches/nemo': {},
         '../engine/patches/magicienii': {
+            getMagicieniiAssetFallback: () => null,
             getMagicieniiPlaceholderAnimation: () => null,
             patchMagicieniiAnimation: (filename, source) => { calls.push([filename, source]); return repaired; },
         },
@@ -819,6 +820,45 @@ test('Only Magicienii retains absent maze placeholders while existing assets and
         filesystem.compat = createEngineCompat(profile);
         await assert.rejects(filesystem.getANNFile(filename), /missing asset/);
     }
+});
+
+test('Only Magicienii falls back to the shipped rescue closing line without replacing existing assets', async () => {
+    const patches = loadModule('engine/patches/magicienii.ts');
+    assert.equal(patches.getMagicieniiAssetFallback('wavs/krasnal_k289.wav'), 'wavs/kretes_k289.wav');
+    assert.equal(patches.getMagicieniiAssetFallback('wavs/krasnal_k287.wav'), null);
+    const { default: Filesystem } = loadModule('filesystem/index.ts', {
+        '../fileFormats/cnv': {}, '../fileFormats/seq': {}, '../fileFormats/img': {}, '../fileFormats/ann': {},
+        '../fileFormats/fnt': {}, '../fileFormats/archive/array': {}, '../fileFormats/archive/sound': {},
+        '../engine/compat': { createEngineCompat }, '../engine/compatAssets': {},
+        '../engine/patches/timpului': {}, '../engine/patches/ozn': {}, '../engine/patches/nemo': {},
+        '../engine/patches/magicienii': patches,
+    });
+    const original = 'wavs/krasnal_k289.wav', replacement = 'wavs/kretes_k289.wav';
+    const files = new Map([[replacement, new ArrayBuffer(4)]]), saved = new Map(), reads = [];
+    const filesystem = new Filesystem({ hasFile: name => files.has(name), getFilesListing: () => [], getRawFile: async name => {
+        reads.push(name); if (!files.has(name)) throw new Error(`missing ${name}`); return files.get(name);
+    } }, { get: async name => saved.get(name) ?? null, has: async name => saved.has(name) }, createEngineCompat('magicienii'));
+    assert.equal(await filesystem.hasFile('WAVS\\KRASNAL_K289.WAV'), true);
+    assert.equal(await filesystem.getFile('WAVS\\KRASNAL_K289.WAV'), files.get(replacement));
+    assert.deepEqual(reads, [replacement]);
+    files.set(original, new ArrayBuffer(8));
+    assert.equal(await filesystem.getFile(original), files.get(original), 'An existing original takes precedence');
+    saved.set(original, new ArrayBuffer(12));
+    assert.equal(await filesystem.getFile(original), saved.get(original), 'A saved replacement takes precedence');
+    files.delete(original); saved.clear();
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        filesystem.compat = createEngineCompat(profile);
+        assert.equal(await filesystem.hasFile(original), false);
+        await assert.rejects(filesystem.getFile(original), /missing wavs\/krasnal_k289.wav/);
+    }
+    filesystem.compat = createEngineCompat('magicienii');
+    await assert.rejects(filesystem.getFile('wavs/krasnal_k287.wav'), /missing wavs\/krasnal_k287.wav/);
+    files.delete(replacement);
+    assert.equal(await filesystem.hasFile(original), false);
+    await assert.rejects(filesystem.getFile(original), /missing wavs\/krasnal_k289.wav/);
+    saved.set(replacement, new ArrayBuffer(16));
+    assert.equal(await filesystem.hasFile(original), true);
+    assert.equal(await filesystem.getFile(original), saved.get(replacement));
 });
 
 test('Magicienii counted-loop BREAK propagates to the behaviour boundary; ONE_BREAK only skips an iteration', async () => {

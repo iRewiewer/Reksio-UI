@@ -1197,6 +1197,11 @@ async function verifyMazeFirstRoute() {
     }
 }
 
+async function verifyMazeRescueRoute() {
+    await require('./verify-magicienii-maze-rescue.cjs')({ assets, createMazePuzzleFixture, load, Keyboard, Mouse,
+        Interpreter, RuntimeContext, Type, Animo, Sequence, constructors });
+}
+
 async function verifyMazeSpellControls() {
     const previousWindow = globalThis.window; globalThis.window = new EventTarget();
     const { engine, scope, parent, defs, get, stage, backgrounds } = await createMazePuzzleFixture(1, true);
@@ -3220,6 +3225,7 @@ async function main() {
     await verifyMazePlayers();
     await verifyMazePuzzleInitialization();
     await verifyMazeFirstRoute();
+    await verifyMazeRescueRoute();
     await verifyMazeSpellControls();
     await verifyMazeEnemySpellHits();
     await verifyMazeRecovery();

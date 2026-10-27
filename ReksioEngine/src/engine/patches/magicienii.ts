@@ -5,6 +5,11 @@ import type { ValueType } from '../types'
 import type { Database } from '../types/database'
 import type { Animo } from '../types/animo'
 
+export function getMagicieniiAssetFallback(filename: string): string | null {
+    // The Romanian rescue-room closing line ships under Kretes, not Krasnal.
+    return filename === 'wavs/krasnal_k289.wav' ? 'wavs/kretes_k289.wav' : null
+}
+
 export function getMagicieniiPlaceholderAnimation(filename: string): ANN | null {
     if (!['dane/game/przygoda/labirynt/blank.ann',
         'dane/game/przygoda/labirynt/przedmioty1.ann'].includes(filename)) return null

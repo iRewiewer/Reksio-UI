@@ -13,7 +13,7 @@ import { loadJpegBackground } from '../engine/compatAssets'
 import { patchTimeMachineDefinitions } from '../engine/patches/timpului'
 import { patchOznSource } from '../engine/patches/ozn'
 import { patchNemoDefinitions } from '../engine/patches/nemo'
-import { getMagicieniiPlaceholderAnimation, patchMagicieniiAnimation, patchMagicieniiArray, patchMagicieniiSequence, patchMagicieniiSource } from '../engine/patches/magicienii'
+import { getMagicieniiAssetFallback, getMagicieniiPlaceholderAnimation, patchMagicieniiAnimation, patchMagicieniiArray, patchMagicieniiSequence, patchMagicieniiSource } from '../engine/patches/magicienii'
 
 const PIRATES_RIVER_THREE_PATH = 'dane/intro/mainmenu/09rzekac/rzeka3.cnv'
 const PIRATES_WIOSKA_PATH = 'dane/intro/mainmenu/10wioska/wioska10.cnv'
@@ -252,12 +252,14 @@ export default class Filesystem {
         await this.storage.init()
     }
 
-    async getFile(path: string) {
+    async getFile(path: string): Promise<ArrayBuffer> {
         path = normalizePath(path)
         const storageFile = await this.storage.get(path)
         if (storageFile) {
             return storageFile
         }
+        const fallback = this.compat.magicieniiAssets ? getMagicieniiAssetFallback(path) : null
+        if (fallback && !this.fileLoader.hasFile(path) && await this.hasFile(fallback)) return this.getFile(fallback)
         if (this.compat.packedSounds && !this.fileLoader.hasFile(path) && path.endsWith('.wav')) {
             const packed = await this.getPackedSound(path)
             // decodeAudioData detaches its input; the archive cache must keep its own copy.
@@ -284,11 +286,13 @@ export default class Filesystem {
         return null
     }
 
-    async hasFile(path: string) {
+    async hasFile(path: string): Promise<boolean> {
         path = normalizePath(path)
         if (await this.storage.has(path)) {
             return true
         }
+        const fallback = this.compat.magicieniiAssets ? getMagicieniiAssetFallback(path) : null
+        if (fallback && !this.fileLoader.hasFile(path)) return this.hasFile(fallback)
         if (this.compat.packedSounds && path.endsWith('.wav') && !this.fileLoader.hasFile(path)) {
             return (await this.getPackedSound(path)) !== null
         }
