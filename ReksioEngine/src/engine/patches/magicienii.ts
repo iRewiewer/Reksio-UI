@@ -16,6 +16,20 @@ export function getMagicieniiPlaceholderAnimation(filename: string): ANN | null 
     }
 }
 
+export function patchMagicieniiAnimation(filename: string, animation: ANN): ANN {
+    if (filename !== 'dane/game/przygoda/labirynt/ges.ann' ||
+        animation.events.some(event => event.name.toUpperCase() === 'IDLE_FROG')) return animation
+    const idle = animation.events.find(event => event.name.toUpperCase() === 'IDLE')
+    const frog = animation.events.find(event => event.name.toUpperCase() === 'DOWN_FROG')
+    if (!idle?.frames.length || !frog?.frames.length) return animation
+    // Keep the original idle timing/path metadata while displaying an existing frog frame.
+    const event = { ...idle, name: 'IDLE_FROG', frames: idle.frames.map((frame, index) => ({
+        ...frog.frames[0], name: index === 0 ? '_FROG' : frame.name, hasSounds: 0, sounds: [],
+    })), framesImageMapping: idle.frames.map(() => frog.framesImageMapping[0]) }
+    return { ...animation, header: { ...animation.header, eventsCount: animation.events.length + 1 },
+        events: [...animation.events, event] }
+}
+
 export function patchMagicieniiSource(filename: string, source: string): string {
     if (['labirynt.cnv', 'cnvlevel0.cnv', 'cnvlevel1.cnv', 'cnvlevel2.cnv'].some((name) =>
         filename === `dane/game/przygoda/labirynt/${name}`)) {
@@ -25,6 +39,11 @@ export function patchMagicieniiSource(filename: string, source: string): string 
             source = source.replaceAll(`${target}^SET([${input}@40*40+20]);`,
                 `${target}^SET([${input}@40]);${target}^SET([${target}*40+20]);`)
         }
+    }
+    if (filename === 'dane/game/przygoda/labirynt/labirynt.cnv') {
+        // Off-canvas templates produce layer-zero clones; spell hit tests require the actors at 300.
+        source = source.replaceAll('*VARSTRING0^SETFPS(12);*VARSTRING0^SETANCHOR("CENTER");',
+            '*VARSTRING0^SETFPS(12);*VARSTRING0^SETPRIORITY(300);*VARSTRING0^SETANCHOR("CENTER");')
     }
     if (filename === 'dane/game/game.cnv') {
         // The browser cannot warp the OS pointer; keep the global cursor aligned with scene mice.

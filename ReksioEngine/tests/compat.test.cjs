@@ -596,6 +596,18 @@ test('Magicienii labyrinth tile snapping truncates division before restoring til
     }
 });
 
+test('Magicienii labyrinth enemy initialization puts off-canvas-template clones on the spell-hit layer', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/labirynt/labirynt.cnv';
+    const source = '*VARSTRING0^SETFPS(12);*VARSTRING0^SETANCHOR("CENTER");';
+    const repaired = '*VARSTRING0^SETFPS(12);*VARSTRING0^SETPRIORITY(300);*VARSTRING0^SETANCHOR("CENTER");';
+    assert.equal(patchMagicieniiSource(file, source), repaired);
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const other of ['labirynt/cnvlevel1.cnv', 'shooter/shooter.cnv', 'arcade/arcade.cnv']) {
+        assert.equal(patchMagicieniiSource(`dane/game/przygoda/${other}`, source), source);
+    }
+});
+
 test('Magicienii maze failure and restart freeze animations without pausing their dialogue processor', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const file = 'dane/game/przygoda/labirynt/labirynt.cnv';
@@ -712,6 +724,53 @@ test('Magicienii empty animation placeholders are restricted to two maze paths a
         'dane/game/przygoda/labirynt/missing.ann', 'blank.ann']) {
         assert.equal(getMagicieniiPlaceholderAnimation(file), null);
     }
+});
+
+test('Magicienii goose frog-idle adapter preserves artwork, idle timing and native patrol metadata without mutating assets', () => {
+    const { patchMagicieniiAnimation } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/labirynt/ges.ann';
+    const frames = [
+        { name: 'NORMAL', positionX: 2, positionY: 3, sounds: ['goose.wav'] },
+        { name: 'IDLE', positionX: 2, positionY: 3, sounds: [] },
+    ];
+    const animation = { header: { eventsCount: 2, framesCount: 4 }, images: [], annImages: [], events: [
+        { name: 'IDLE', framesCount: 2, fps: 12, frames, framesImageMapping: [1, 2] },
+        { name: 'DOWN_FROG', framesCount: 1, frames: [{ name: '_FROG', positionX: 7, positionY: 8, sounds: ['frog.wav'] }], framesImageMapping: [3] },
+    ] };
+    const before = structuredClone(animation), repaired = patchMagicieniiAnimation(file, animation);
+    assert.deepEqual(animation, before);
+    const idle = repaired.events.at(-1);
+    assert.equal(idle.name, 'IDLE_FROG'); assert.equal(idle.framesCount, 2); assert.equal(idle.fps, 12);
+    assert.deepEqual(idle.frames.map(frame => frame.name), ['_FROG', 'IDLE']);
+    assert.deepEqual(idle.frames.map(frame => [frame.positionX, frame.positionY, frame.sounds]), [[7, 8, []], [7, 8, []]]);
+    assert.deepEqual(idle.framesImageMapping, [3, 3]); assert.equal(repaired.header.eventsCount, 3);
+    assert.equal(repaired.header.framesCount, 4); assert.equal(repaired.images, animation.images);
+    assert.equal(repaired.annImages, animation.annImages); assert.equal(patchMagicieniiAnimation(file, repaired), repaired);
+    for (const other of ['ges.ann', 'dane/game/przygoda/labirynt/locha.ann', 'dane/game/przygoda/cat/ges.ann']) {
+        assert.equal(patchMagicieniiAnimation(other, animation), animation);
+    }
+    assert.equal(patchMagicieniiAnimation(file, { ...animation, events: animation.events.slice(0, 1) }).events.length, 1);
+});
+
+test('Filesystem applies Magicienii animation adapters only to the Magicienii compatibility profile', async () => {
+    const calls = [], raw = new ArrayBuffer(4), animation = { events: [] }, repaired = { events: ['patched'] };
+    const { default: Filesystem } = loadModule('filesystem/index.ts', {
+        '../fileFormats/cnv': {}, '../fileFormats/seq': {}, '../fileFormats/img': {},
+        '../fileFormats/ann': { loadAnn: data => { assert.equal(data, raw); return animation; } },
+        '../fileFormats/fnt': {}, '../fileFormats/archive/array': {},
+        '../engine/compat': { createEngineCompat }, '../fileFormats/archive/sound': {}, '../engine/compatAssets': {},
+        '../engine/patches/timpului': {}, '../engine/patches/ozn': {}, '../engine/patches/nemo': {},
+        '../engine/patches/magicienii': {
+            getMagicieniiPlaceholderAnimation: () => null,
+            patchMagicieniiAnimation: (filename, source) => { calls.push([filename, source]); return repaired; },
+        },
+    });
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului', 'magicienii']) {
+        const filesystem = new Filesystem({ getRawFile: async () => raw, hasFile: () => true }, { get: async () => null }, createEngineCompat(profile));
+        assert.equal(await filesystem.getANNFile('DANE\\GAME\\PRZYGODA\\LABIRYNT\\GES.ANN'),
+            profile === 'magicienii' ? repaired : animation);
+    }
+    assert.deepEqual(calls, [['dane/game/przygoda/labirynt/ges.ann', animation]]);
 });
 
 test('Only Magicienii retains absent maze placeholders while existing assets and unrelated failures remain untouched', async () => {

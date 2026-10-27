@@ -13,7 +13,7 @@ import { loadJpegBackground } from '../engine/compatAssets'
 import { patchTimeMachineDefinitions } from '../engine/patches/timpului'
 import { patchOznSource } from '../engine/patches/ozn'
 import { patchNemoDefinitions } from '../engine/patches/nemo'
-import { getMagicieniiPlaceholderAnimation, patchMagicieniiArray, patchMagicieniiSequence, patchMagicieniiSource } from '../engine/patches/magicienii'
+import { getMagicieniiPlaceholderAnimation, patchMagicieniiAnimation, patchMagicieniiArray, patchMagicieniiSequence, patchMagicieniiSource } from '../engine/patches/magicienii'
 
 const PIRATES_RIVER_THREE_PATH = 'dane/intro/mainmenu/09rzekac/rzeka3.cnv'
 const PIRATES_WIOSKA_PATH = 'dane/intro/mainmenu/10wioska/wioska10.cnv'
@@ -305,7 +305,8 @@ export default class Filesystem {
             if (placeholder && !await this.hasFile(filename)) return placeholder
         }
         const data = await this.getFile(filename)
-        return loadAnn(data, this.compat.trailingAnnFrameData)
+        const animation = loadAnn(data, this.compat.trailingAnnFrameData)
+        return this.compat.magicieniiAssets ? patchMagicieniiAnimation(normalizePath(filename), animation) : animation
     }
 
     async getFNTFile(filename: string) {

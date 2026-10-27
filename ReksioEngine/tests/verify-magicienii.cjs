@@ -679,6 +679,7 @@ async function verifyMazeEnemies() {
                     assert.ok(enemy.getRenderObject().parent === engine.app.stage,
                         'Enemy clones must join the renderer even when their source template is off-canvas');
                     assert.equal(enemy.ISVISIBLE(), true);
+                    assert.equal(enemy.GETPRIORITY(), 300, 'Enemy clones must remain on the original spell-hit layer');
                     for (const suffix of ['FIELD', 'MASK', 'MMASK']) {
                         const helper = get(`${prefix}${suffix}_${index}`);
                         assert.equal(helper.GETEVENTNAME(), 'IDLE');
@@ -894,6 +895,10 @@ async function createMazePuzzleFixture(level, spells = false) {
         ['G_SARCADEOBJECTS', 'STRING', 'LABIRYNT']]) {
         scope.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name, VALUE: value }));
     }
+    const { Rand } = load('engine/types/rand.ts');
+    const random = new Rand(engine, parent, { TYPE: 'RAND', NAME: 'RANDOM' }); let randomIndex = 0;
+    random.GET = (min, count) => count === undefined ? randomIndex++ % min : min + randomIndex++ % count;
+    scope.set(random.name, random);
     const displays = [];
     try {
         for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
@@ -914,7 +919,7 @@ async function createMazePuzzleFixture(level, spells = false) {
         await get('VARLEVEL').SET(level);
         const ast = load('interpreter/parser.ts').parseCode(defs.__INIT__.CODE.code);
         const arrays = ast.filter(entry => entry.type === 'FunctionCall' && entry.target?.type === 'ObjectTarget' &&
-            /^ARRAY(KEYBOARD|PLAYERACTIVE|UP|DOWN|LEFT|RIGHT|IDLE)$/.test(entry.target.ref.name));
+            /^ARRAY(KEYBOARD|PLAYERACTIVE|UP|DOWN|LEFT|RIGHT|IDLE|SLEEP|SPELL|SPELLTYPE)$/.test(entry.target.ref.name));
         await new Interpreter(new RuntimeContext(engine, null, defs.__INIT__.CODE.code)).execute(arrays);
         await get('BEHINITLEVEL').RUN();
         await get('BEHINITBUTTON').RUN();
@@ -929,10 +934,22 @@ async function createMazePuzzleFixture(level, spells = false) {
 }
 
 async function verifyMazePuzzleInitialization() {
-    let plates = 0, switches = 0, exits = 0;
+    let plates = 0, switches = 0, exits = 0, guards = 0;
     for (const level of [0, 1, 2]) {
         const { engine, parent, scope, get, stage, backgrounds, memory } = await createMazePuzzleFixture(level);
         try {
+            for (const enemy of [...get('ANNENEMY0').clones, ...get('ANNENEMY1').clones]) {
+                assert.equal(enemy.GETPRIORITY(), 300);
+                const sprite = enemy.getRenderObject(); let hittable = false;
+                for (let y = Math.ceil(sprite.y); y < sprite.y + sprite.height && !hittable; y += 2) {
+                    for (let x = Math.ceil(sprite.x); x < sprite.x + sprite.width; x += 2) {
+                        if (enemy.ISAT(x, y, true) && get('CANVASOBSERVER').GETGRAPHICSAT(x, y, false, 300, 300, false) === enemy.name) {
+                            hittable = true; break;
+                        }
+                    }
+                }
+                assert.ok(hittable, `${enemy.name} must expose an opaque pixel to the original spell hit test`); guards++;
+            }
             assert.equal(get('ANNBTN').clones.length, get('ANNBTN').GETNOE());
             assert.equal(get('ANNSWITCH').clones.length, get('ANNSWITCH').GETNOE());
             assert.equal(get('ANNPRZEDMIOT').GETNOE(), 0, 'The absent, unused item placeholder must not invent gameplay items');
@@ -1039,7 +1056,7 @@ async function verifyMazePuzzleInitialization() {
             backgrounds.forEach(texture => texture.destroy(true));
         }
     }
-    console.log(`MAZE PUZZLES: full image/animation startup, ${plates} plate updates, ${switches} linked switches, save round-trip and ${exits} exit decisions passed`);
+    console.log(`MAZE PUZZLES: full image/animation startup, ${guards} spell-hittable guards, ${plates} plate updates, ${switches} linked switches, save round-trip and ${exits} exit decisions passed`);
 }
 
 async function verifyMazeFirstRoute() {
@@ -1182,9 +1199,8 @@ async function verifyMazeSpellControls() {
         await get('BEHINITSPELL').RUN();
         const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
         const start = ast.findIndex(entry => entry.target?.ref?.name === 'BEHINITPLAYERS'); assert.ok(start >= 0);
-        await new Interpreter(new RuntimeContext(engine, null, code)).execute([
-            ...ast.filter(entry => entry.target?.ref?.name === 'ARRAYSPELLTYPE'), ...ast.slice(start + 1),
-        ]);
+        await new Interpreter(new RuntimeContext(engine, null, code)).execute(ast.slice(start + 1));
+        assert.deepEqual(get('ARRAYSPELLTYPE').value, ['SLEEP', 'FROG', 'FLY', 'BUDYN', 'SWIRL', 'DARK']);
         const key = async (code, character, down) => {
             const event = new Event(down ? 'keydown' : 'keyup'); Object.assign(event, { code, key: character });
             window.dispatchEvent(event); await keyboard.tick();
@@ -1254,6 +1270,49 @@ async function verifyMazeSpellControls() {
         backgrounds.forEach(texture => texture.destroy(true));
         if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
     }
+}
+
+async function verifyMazeEnemySpellHits() {
+    for (const spell of ['SLEEP', 'FROG', 'FLY', 'BUDYN', 'SWIRL', 'DARK']) {
+        const { engine, scope, get, stage, backgrounds } = await createMazePuzzleFixture(1);
+        try {
+            const enemy = get('ANNENEMY0_2'), elapsed = get('ANNENEMY0ELAPSE_2');
+            await get('ANNSPELL1').CLONE(1);
+            const beam = get('ANNSPELL1_1');
+            await beam.SETANCHOR('CENTER'); await beam.PLAY(`${spell}_RIGHT_R`);
+            // Projectile placement and unrelated actors are fixture boundaries; hit testing and curse callbacks are real.
+            await beam.SETPOSITION(beam.positionX + enemy.GETCENTERX() - beam.GETCENTERX(),
+                beam.positionY + enemy.GETCENTERY() - beam.GETCENTERY());
+            beam.ADDBEHAVIOUR('ONFRAMECHANGED', 'BEHMOVESPELL');
+            assert.equal(get('CANVASOBSERVER').GETGRAPHICSAT(beam.GETCENTERX(), beam.GETCENTERY(),
+                false, 300, 300, false), enemy.name);
+            await beam.tick(1000 / 16);
+            assert.equal(get('ARRAYENEMY0STATE').value[1], spell, `${spell} must hit the guard through the original projectile callback`);
+            assert.equal(beam.ISPLAYING(), false); assert.equal(beam.ISVISIBLE(), false);
+            assert.equal(elapsed.ISPLAYING(), true);
+            if (spell === 'SLEEP') assert.equal(enemy.ISPLAYING(), false);
+            if (spell === 'FROG') assert.match(enemy.GETEVENTNAME(), /FROG/);
+            if (spell === 'FLY' || spell === 'BUDYN') assert.equal(enemy.fps, spell === 'FLY' ? 4 : 8);
+            if (spell === 'DARK') for (const suffix of ['FIELD', 'MASK']) {
+                const helper = get(`ANNENEMY0${suffix}_2`);
+                assert.deepEqual([helper.positionX, helper.positionY], [-40, -40], 'Darkness must disable guard contact');
+            }
+            const actors = scope.objects.filter(object => /^ANNENEMY0(?:_2|(?:FIELD|MASK|MMASK|ELAPSE|CURSE)_2)$/.test(object.name));
+            let tick = 0;
+            for (; tick < 2400 && elapsed.ISPLAYING(); tick++) for (const actor of actors) await actor.tick(1000 / 30);
+            assert.ok(tick < 2400, `${spell} must expire through the guard's native animation timer`);
+            assert.equal(get('ARRAYENEMY0STATE').value[1], 'NULL');
+            assert.equal(enemy.ISPLAYING(), true); assert.equal(enemy.fps, 16);
+            for (tick = 0; tick < 60 && get('ANNENEMY0MASK_2').positionX < 0; tick++) {
+                for (const actor of actors) await actor.tick(1000 / 30);
+            }
+            assert.ok(get('ANNENEMY0MASK_2').positionX >= 0, 'Guard collision must return after the curse expires');
+        } finally {
+            assert.deepEqual(engine.scopeManager.destroy(), [], 'Maze enemy spell cleanup'); assert.equal(stage.children.length, 0);
+            backgrounds.forEach(texture => texture.destroy(true));
+        }
+    }
+    console.log('MAZE GUARD SPELLS: six original projectile hits, curse effects, native expiry and restored guard collision passed');
 }
 
 async function verifyMazeRecovery() {
@@ -3115,6 +3174,7 @@ async function main() {
     await verifyMazePuzzleInitialization();
     await verifyMazeFirstRoute();
     await verifyMazeSpellControls();
+    await verifyMazeEnemySpellHits();
     await verifyMazeRecovery();
     await verifyFredRoute();
     await verifyFredRecovery();
