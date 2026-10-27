@@ -101,7 +101,7 @@ const extractAlphaChannel = (data: Uint8ClampedArray) => {
     return alpha
 }
 
-const convertToRgba32 = (bytes: Uint8Array, alphaBytes?: Uint8Array): Uint8Array => {
+const convertToRgba32 = (bytes: Uint8Array, alphaBytes?: Uint8Array, bpp = 16): Uint8Array => {
     const numPixels = bytes.byteLength >>> 1
     const rgba = new Uint8Array(numPixels * 4)
     const input16 = new Uint16Array(bytes.buffer, bytes.byteOffset, numPixels)
@@ -111,8 +111,8 @@ const convertToRgba32 = (bytes: Uint8Array, alphaBytes?: Uint8Array): Uint8Array
         let temp = input16[i]
         const b = (temp & 0x1f) << 3
         temp >>>= 5
-        const g = (temp & 0x3f) << 2
-        temp >>>= 6
+        const g = bpp === 15 ? (temp & 0x1f) << 3 : (temp & 0x3f) << 2
+        temp >>>= bpp === 15 ? 5 : 6
         const r = (temp & 0x1f) << 3
         const a = hasAlphaBytes ? alphaBytes![i] : 255
         pixels32[i] = r | (g << 8) | (b << 16) | (a << 24)
@@ -120,7 +120,7 @@ const convertToRgba32 = (bytes: Uint8Array, alphaBytes?: Uint8Array): Uint8Array
     return rgba
 }
 
-export const loadImage = (data: ArrayBuffer): Image => {
+export const loadImage = (data: ArrayBuffer, rgb555 = false): Image => {
     const buffer = new BinaryBuffer(new DataView(data))
     const header = parseHeader(buffer)
 
@@ -138,7 +138,8 @@ export const loadImage = (data: ArrayBuffer): Image => {
         4: [CompressionType.NONE, CompressionType.NONE],
         5: [CompressionType.JPEG, CompressionType.CLZW],
     })
-    const imgBytes = loadImageWithoutHeader(buffer, colorDescriptor, alphaDescriptor)
+    const imgBytes = loadImageWithoutHeader(buffer, colorDescriptor, alphaDescriptor,
+        rgb555 && header.bpp === 15 ? 15 : 16)
     return {
         header,
         bytes: imgBytes,
@@ -178,12 +179,13 @@ export const createDescriptors = (
 export const loadImageWithoutHeader = (
     buffer: BinaryBuffer,
     colorCompression: CompressionDescriptor,
-    alphaCompression?: CompressionDescriptor
+    alphaCompression?: CompressionDescriptor,
+    bpp = 16
 ) => {
     const colorBytes = decompressImageData(buffer, colorCompression)
     const alphaBytes = alphaCompression !== undefined ? decompressImageData(buffer, alphaCompression) : undefined
 
-    return convertToRgba32(colorBytes, alphaBytes)
+    return convertToRgba32(colorBytes, alphaBytes, bpp)
 }
 
 const decompressImageData = (buffer: BinaryBuffer, descriptor: CompressionDescriptor) => {

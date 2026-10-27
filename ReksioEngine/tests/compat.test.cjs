@@ -19,6 +19,36 @@ function loadModule(file, dependencies = {}) {
 }
 
 const { createEngineCompat, normalizeCompatProfile } = loadModule('engine/compat.ts');
+
+test('Only Nemo decodes RGB555 images as 15-bit while RGB565 and alpha stay unchanged', () => {
+    const { BinaryBuffer } = loadModule('fileFormats/utils.ts');
+    const { loadImage } = loadModule('fileFormats/img/index.ts', {
+        '../utils': { BinaryBuffer }, '../compression/clzw': {}, '../compression/crle': {},
+        '../compression': { CompressionType: { NONE: 0, CLZW: 1, CLZW_IN_CRLE: 2, CRLE: 3, JPEG: 4 } },
+    });
+    const fixture = (bpp, colors) => {
+        const bytes = new ArrayBuffer(40 + colors.length * 3), view = new DataView(bytes);
+        [0x4b4950, colors.length, 1, bpp, colors.length * 2, 0, 0, colors.length, 0, 0]
+            .forEach((value, index) => view.setUint32(index * 4, value, true));
+        colors.forEach((value, index) => {
+            view.setUint16(40 + index * 2, value, true);
+            view.setUint8(40 + colors.length * 2 + index, 50 + index);
+        });
+        return bytes;
+    };
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const enabled = createEngineCompat(profile).rgb555Images;
+        assert.equal(enabled, profile === 'nemo');
+        for (const bpp of [2, 15]) {
+            assert.deepEqual([...new Uint8Array(loadImage(fixture(bpp, [0x7c00, 0x03e0, 0x001f]), enabled).bytes)],
+                enabled ? [248, 0, 0, 50, 0, 248, 0, 51, 0, 0, 248, 52]
+                    : [120, 128, 0, 50, 0, 124, 0, 51, 0, 0, 248, 52]);
+        }
+        assert.deepEqual([...new Uint8Array(loadImage(fixture(16, [0xf800, 0x07e0, 0x001f]), enabled).bytes)],
+            [248, 0, 0, 50, 0, 252, 0, 51, 0, 0, 248, 52]);
+    }
+});
+
 const { OznMatrixSimulation } = loadModule('engine/compat/oznMatrix.ts');
 const { readSekWorld } = loadModule('fileFormats/sek/index.ts');
 const { TimeMachinePhysics } = loadModule('engine/compat/timeMachinePhysics.ts', { 'cannon-es': require('cannon-es') });
@@ -62,7 +92,7 @@ test('Magicienii group collection methods do not forward to actors or destroy th
 });
 
 test('Other profiles retain group collection call forwarding', async () => {
-    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+    for (const profile of ['default', 'ozn', 'timpului']) {
         const group = new Group({ compat: createEngineCompat(profile) });
         const calls = [];
         group.add({ GETSIZE: () => calls.push('size'), REMOVEALL: () => calls.push('clear'),
@@ -72,6 +102,126 @@ test('Other profiles retain group collection call forwarding', async () => {
         await group.__call('HIDE', []);
         assert.deepEqual(calls, ['size', 'clear', 'hide']);
     }
+});
+
+test('Nemo clone groups include both range endpoints and wrap their object marker', async () => {
+    const group = new Group({ compat: createEngineCompat('nemo') });
+    const objects = Object.fromEntries([0, 1, 2, 4].map(i => [`BEAM_${i}`, { name: `BEAM_${i}` }]));
+    group.getObject = name => objects[name] ?? null;
+    group.ADDCLONES('BEAM', 0, 4);
+    assert.equal(group.GETSIZE(), 4);
+    assert.equal(group.GETMARKERPOS(), -1);
+    assert.equal(group.NEXT(), 'BEAM_0');
+    assert.equal(group.NEXT(2), 'BEAM_2');
+    assert.equal(group.PREV(), 'BEAM_1');
+    group.SETMARKERPOS(0);
+    assert.equal(group.PREV(), 'BEAM_4');
+    assert.equal(group.GETNAMEATMARKER(), 'BEAM_4');
+    assert.equal(group.NEXT(9), 'BEAM_0');
+    group.RESETMARKER();
+    assert.equal(group.GETNAMEATMARKER(), null);
+    group.REMOVEALL();
+    assert.equal(group.GETSIZE(), 0);
+    assert.equal(group.NEXT(), null);
+});
+
+test('Only Nemo forwards unknown group commands into class behaviour scopes', async () => {
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const group = new Group({ compat: createEngineCompat(profile) });
+        const calls = [];
+        group.add({ definition: { TYPE: 'CLASS_INSTANCE' }, __call: (...args) => calls.push(args) });
+        await group.__call('NEXTSTEP', [4]);
+        assert.deepEqual(calls, profile === 'nemo' ? [['NEXTSTEP', [4]]] : []);
+    }
+});
+
+test('Clone group methods retain actor forwarding outside Nemo', async () => {
+    for (const profile of ['default', 'magicienii', 'ozn', 'timpului']) {
+        const group = new Group({ compat: createEngineCompat(profile) });
+        const calls = [];
+        group.add(Object.fromEntries(['ADDCLONES', 'SETMARKERPOS', 'GETMARKERPOS', 'RESETMARKER',
+            'GETNAMEATMARKER', 'NEXT', 'PREV'].map(name => [name, (...args) => calls.push([name, args])])));
+        await group.ADDCLONES('BEAM', 0, 3);
+        await group.SETMARKERPOS(2); await group.GETMARKERPOS(); await group.RESETMARKER();
+        await group.GETNAMEATMARKER(); await group.NEXT(2); await group.PREV(3);
+        assert.deepEqual(calls, [['ADDCLONES', ['BEAM', 0, 3]], ['SETMARKERPOS', [2]], ['GETMARKERPOS', []],
+            ['RESETMARKER', []], ['GETNAMEATMARKER', []], ['NEXT', [2]], ['PREV', [3]]]);
+    }
+});
+
+test('Nemo canvas stamps hidden templates and scrolls independently of live actors', () => {
+    class Template {}
+    const { CanvasObserver } = loadModule('engine/types/canvasObserver.ts', {
+        './index': { Type: FakeType }, '../../common/types': decorator,
+        '../../filesystem/assetsLoader': {}, 'pixi.js': {}, '../rendering': { AdvancedSprite: Template },
+        '../../common/errors': {}, '../../fileFormats/img': {}, '../logging': {}, './class': {},
+    });
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const calls = [], sprite = new Template(); sprite.visible = false;
+        const background = { x: 0, y: 0, position: { set(x, y) { background.x = x; background.y = y; } } };
+        const observer = new CanvasObserver({ compat: createEngineCompat(profile),
+            rendering: { canvasBackground: background, pasteBackground: (...args) => calls.push(args) } });
+        observer.__call = (...args) => calls.push(args);
+        observer.getObject = name => name === 'TILE' ? { getRenderObject: () => sprite }
+            : name === 'VALUE' ? {} : null;
+        observer.PASTE('TILE', 45, 90);
+        observer.MOVEBKG(-30, -60);
+        observer.MOVEBKG(5, 10);
+        if (profile === 'nemo') {
+            assert.deepEqual(calls, [[sprite, 45, 90]]);
+            assert.deepEqual([background.x, background.y], [-25, -50]);
+            observer.SETBKGPOS(90, 70);
+            assert.deepEqual([background.x, background.y], [-90, -70]);
+            observer.PASTE('MISSING', 0, 0);
+            observer.PASTE('VALUE', 0, 0);
+            assert.equal(calls.length, 1);
+        } else {
+            assert.deepEqual(calls, [['PASTE', ['TILE', 45, 90]], ['MOVEBKG', [-30, -60]], ['MOVEBKG', [5, 10]]]);
+            assert.deepEqual([background.x, background.y], [0, 0]);
+        }
+        assert.equal(sprite.visible, false);
+    }
+});
+
+test('Background stamping preserves prior pixels, frame properties and shared textures', () => {
+    const draws = [], destroyed = [];
+    class Sprite {
+        constructor(texture) { this.texture = texture; this.position = new MousePoint();
+            this.anchor = { copyFrom: value => this.copiedAnchor = value };
+            this.scale = { copyFrom: value => this.copiedScale = value }; }
+        destroy() { destroyed.push(this); }
+    }
+    const { RenderingManager } = loadModule('engine/rendering.ts', {
+        'pixi.js': { Sprite, RenderTexture: { create: ({ width, height }) => ({ width, height,
+            destroy: value => destroyed.push(['texture', value]) }) } },
+        '../common/errors': { assert: assert.ok }, './types': {},
+    });
+    const originalTexture = { orig: { width: 1600, height: 1200 } };
+    const manager = Object.create(RenderingManager.prototype);
+    manager.pastedBackground = null;
+    manager.app = { renderer: { render: (sprite, options) => draws.push({ sprite, options }) } };
+    manager.canvasBackground = { texture: originalTexture, position: new MousePoint(40, -80) };
+    const actor = { texture: {}, anchor: {}, scale: {}, rotation: 1, alpha: 0.5, tint: 123,
+        blendMode: 0, visible: false, x: 8, y: 9 };
+    manager.pasteBackground(actor, 50, 70);
+    manager.pasteBackground(actor, 80, 90);
+    assert.equal(draws.length, 3);
+    assert.equal(draws[0].sprite.texture, originalTexture);
+    assert.equal(draws[0].options.clear, true);
+    assert.equal(draws[1].options.clear, false);
+    assert.equal(draws[2].options.renderTexture, draws[0].options.renderTexture);
+    assert.deepEqual([draws[1].sprite.position.x, draws[1].sprite.position.y], [50, 70]);
+    assert.equal(draws[1].sprite.copiedAnchor, actor.anchor);
+    assert.equal(draws[1].sprite.copiedScale, actor.scale);
+    assert.equal(draws[1].sprite.alpha, 0.5);
+    assert.equal(draws[1].sprite.rotation, 1);
+    assert.deepEqual([actor.x, actor.y, actor.visible], [8, 9, false]);
+    assert.deepEqual([manager.canvasBackground.position.x, manager.canvasBackground.position.y], [40, -80]);
+    assert.equal(destroyed.length, 3);
+    manager.setBackground(originalTexture);
+    assert.equal(manager.pastedBackground, null);
+    assert.deepEqual(destroyed[3], ['texture', true]);
+    assert.equal(manager.canvasBackground.texture, originalTexture);
 });
 
 const { Database } = loadModule('engine/types/database.ts', {

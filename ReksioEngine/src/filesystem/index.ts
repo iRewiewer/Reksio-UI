@@ -546,7 +546,7 @@ export default class Filesystem {
         if (this.compat.jpegImages && data.byteLength >= 40 && new DataView(data).getUint32(24, true) === 5) {
             return loadJpegBackground(data)
         }
-        return loadImage(data)
+        return loadImage(data, this.compat.rgb555Images)
     }
 
     async getARRFile(filename: string): Promise<any[]> {

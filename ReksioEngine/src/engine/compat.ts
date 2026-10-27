@@ -37,6 +37,9 @@ export type EngineCompat = {
     namedSequencePlayback: boolean
     flightPhysics: boolean
     vehiclePhysics: boolean
+    cloneGroups: boolean
+    backgroundCompositing: boolean
+    rgb555Images: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -80,7 +83,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         dynamicHotspotTransforms: name === 'magicienii',
         resetDatabaseCursor: name === 'magicienii',
         databaseFindSelectsRow: name === 'magicienii',
-        groupCollections: name === 'magicienii',
+        groupCollections: name === 'magicienii' || name === 'nemo',
         croppedCanvasSaves: name === 'magicienii',
         relativeScriptedCursor: name === 'magicienii',
         propagateLoopBreak: name === 'magicienii',
@@ -91,5 +94,8 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         namedSequencePlayback: name === 'timpului',
         flightPhysics: name === 'timpului',
         vehiclePhysics: name === 'timpului',
+        cloneGroups: name === 'nemo',
+        backgroundCompositing: name === 'nemo',
+        rgb555Images: name === 'nemo',
     }
 }

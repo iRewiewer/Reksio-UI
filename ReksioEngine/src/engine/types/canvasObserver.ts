@@ -28,8 +28,26 @@ export class CanvasObserver extends Type<CanvasObserverDefinition> {
 
     @method()
     SETBKGPOS(x: number, y: number) {
-        if (!this.engine.compat.underwaterPhysics) return this.__call('SETBKGPOS', [x, y])
+        if (!this.engine.compat.underwaterPhysics && !this.engine.compat.backgroundCompositing) {
+            return this.__call('SETBKGPOS', [x, y])
+        }
         this.engine.rendering.canvasBackground.position.set(-x, -y)
+    }
+
+    @method()
+    MOVEBKG(x: number, y: number) {
+        if (!this.engine.compat.backgroundCompositing) return this.__call('MOVEBKG', [x, y])
+        const background = this.engine.rendering.canvasBackground
+        background.position.set(background.x + x, background.y + y)
+    }
+
+    @method()
+    PASTE(name: string, x: number, y: number) {
+        if (!this.engine.compat.backgroundCompositing) return this.__call('PASTE', [name, x, y])
+        const object = this.getObject<DisplayType<any>>(name)
+        const sprite = object?.getRenderObject?.()
+        if (!(sprite instanceof AdvancedSprite)) return
+        this.engine.rendering.pasteBackground(sprite, x, y)
     }
 
     @method()

@@ -4,6 +4,7 @@ import {
     Graphics,
     IPointData,
     Rectangle,
+    RenderTexture,
     Sprite,
     Texture,
 } from 'pixi.js'
@@ -16,6 +17,7 @@ export class RenderingManager {
 
     public readonly canvasBackground: Sprite
     private readonly blackTexture
+    private pastedBackground: RenderTexture | null = null
 
     constructor(private app: Application) {
         this.blackTexture = createColorTexture(
@@ -42,12 +44,37 @@ export class RenderingManager {
     }
 
     setBackground(texture: Texture, position: IPointData = { x: 0, y: 0 }) {
+        this.pastedBackground?.destroy(true)
+        this.pastedBackground = null
         this.canvasBackground.texture = texture
         this.canvasBackground.position.set(position.x, position.y)
     }
 
     clearBackground() {
         this.setBackground(this.blackTexture)
+    }
+
+    pasteBackground(source: AdvancedSprite, x: number, y: number) {
+        if (!this.pastedBackground) {
+            const original = new Sprite(this.canvasBackground.texture)
+            const texture = RenderTexture.create({ width: original.texture.orig.width,
+                height: original.texture.orig.height, resolution: 1 })
+            this.app.renderer.render(original, { renderTexture: texture, clear: true })
+            original.destroy()
+            this.pastedBackground = texture
+            this.canvasBackground.texture = texture
+        }
+        // Copy the current frame, including hidden templates, without moving the live actor.
+        const stamp = new Sprite(source.texture)
+        stamp.position.set(x, y)
+        stamp.anchor.copyFrom(source.anchor)
+        stamp.scale.copyFrom(source.scale)
+        stamp.rotation = source.rotation
+        stamp.alpha = source.alpha
+        stamp.tint = source.tint
+        stamp.blendMode = source.blendMode
+        this.app.renderer.render(stamp, { renderTexture: this.pastedBackground, clear: false })
+        stamp.destroy()
     }
 
     setCursor(mode: string) {
