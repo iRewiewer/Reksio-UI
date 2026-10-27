@@ -1,5 +1,17 @@
 import type { Engine } from '../index'
 import type { SequenceFile } from '../../fileFormats/seq'
+import type { ANN } from '../../fileFormats/ann'
+
+export function getMagicieniiPlaceholderAnimation(filename: string): ANN | null {
+    if (!['dane/game/przygoda/labirynt/blank.ann',
+        'dane/game/przygoda/labirynt/przedmioty1.ann'].includes(filename)) return null
+    // Native objects survive an absent editor placeholder and can receive a later LOAD.
+    return {
+        header: { framesCount: 0, bpp: 16, eventsCount: 0, fps: 16, flags: 0,
+            transparency: 255, randomFramesNumber: 0, author: '', description: '' },
+        events: [], images: [], annImages: [],
+    }
+}
 
 export function patchMagicieniiSource(filename: string, source: string): string {
     if (filename === 'dane/game/przygoda/arcade/alchemy.cnv') {

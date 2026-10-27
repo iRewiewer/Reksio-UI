@@ -66,6 +66,9 @@ const { Button } = load('engine/types/button.ts');
 const { StaticFilter } = load('engine/types/staticfilter.ts');
 const { loadImage } = load('fileFormats/img/index.ts');
 const { loadSprite } = load('filesystem/assetsLoader.ts');
+const { default: Filesystem, normalizePath } = load('filesystem/index.ts');
+const { FileNotFoundError } = load('filesystem/fileLoader.ts');
+const { deserializeArray } = load('fileFormats/archive/array.ts');
 const { Container, Rectangle, Texture, BaseTexture } = require('pixi.js');
 const constructors = Object.fromEntries([
     ['INTEGER', 'integer', 'Integer'], ['DOUBLE', 'double', 'Double'], ['STRING', 'string', 'String'],
@@ -488,7 +491,7 @@ async function verifyMazePlayers() {
                 await actor.initSprite(); scope.set(actor.name, actor);
             }
             const mask = new Image(engine, parent, defs.IMGMASK);
-            mask.sprite = await loadSprite(engine.filesystem, path.join(directory, defs.IMGMASK.FILENAME));
+            mask.sprite = await loadSprite(engine.filesystem, path.join(directory, `MASK${level}.IMG`));
             mask.sprite.visible = false; await mask.applyDefaults(); stage.addChild(mask.sprite); scope.set(mask.name, mask);
             const keyboard = new Keyboard(engine, parent, defs.KEYBOARD);
             scope.set(keyboard.name, keyboard); await keyboard.ready(); keyboard.SETAUTOREPEAT(false);
@@ -583,6 +586,183 @@ async function verifyMazePlayers() {
         else globalThis.window = previousWindow;
     }
     console.log(`MAZE PLAYERS: original player initialization, ${selections} keyboard selections, ${moved} tile moves and ${blocked} wall blocks passed`);
+}
+
+async function createMazePuzzleFixture(level) {
+    const fixture = await createArcadeFixture('LABIRYNT', 'Labirynt', 'Labirynt.cnv', `cnvLevel${level}.cnv`);
+    const { engine, parent, scope, defs, get } = fixture, stage = engine.app.stage;
+    const scenePath = 'dane/game/przygoda/labirynt', memory = new Map(), reads = [], backgrounds = [];
+    engine.currentScene.getRelativePath = name => normalizePath(name.startsWith('$') ? name.slice(1) : `${scenePath}/${name}`);
+    engine.resolvePath = async (name, base = scenePath) => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
+    engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
+    engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
+    engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+    engine.rendering.setBackground = texture => backgrounds.push(texture);
+    engine.filesystem = new Filesystem({
+        hasFile: name => fs.existsSync(path.join(assets, name)),
+        getRawFile: async name => {
+            reads.push(name);
+            if (!fs.existsSync(path.join(assets, name))) throw new FileNotFoundError(name);
+            return bytes(path.join(assets, name));
+        },
+    }, {
+        get: async name => memory.get(name) ?? null,
+        has: async name => memory.has(name),
+        save: async (name, data) => {
+            assert.equal(name, `common/maze_fixture${level}.arr`, 'Puzzle saves must remain in the in-memory fixture');
+            memory.set(name, data.slice(0));
+        },
+    }, engine.compat);
+    for (const [name, type, value] of [['G_IKRETACTIVE', 'INTEGER', 1], ['G_ISUCCESS', 'INTEGER', 0],
+        ['G_SARCADEOBJECTS', 'STRING', 'LABIRYNT']]) {
+        scope.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name, VALUE: value }));
+    }
+    const displays = [];
+    try {
+        for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
+            const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+            // Asset decoding, scripts and rendering ownership are real; Web Audio playback is outside this fixture.
+            if (actor instanceof Animo) actor.loadSfx = async () => {};
+            scope.set(actor.name, actor); displays.push(actor);
+            await actor.init();
+        }
+        for (const actor of displays) await actor.applyDefaults();
+        for (const actor of displays) await actor.ready();
+        for (const def of Object.values(defs).filter(def => def.TYPE === 'BUTTON')) {
+            const button = new Button(engine, parent, def);
+            scope.set(button.name, button); button.init(); await button.applyDefaults();
+        }
+        get('ARRAYSAVE').restoreCheckpointValue(Array(9).fill(0));
+        await get('VARSAVENAME').SET(`$COMMON/MAZE_FIXTURE${level}.ARR`);
+        await get('VARLEVEL').SET(level);
+        const ast = load('interpreter/parser.ts').parseCode(defs.__INIT__.CODE.code);
+        const arrays = ast.filter(entry => entry.type === 'FunctionCall' && entry.target?.type === 'ObjectTarget' &&
+            /^ARRAY(KEYBOARD|PLAYERACTIVE|UP|DOWN|LEFT|RIGHT|IDLE)$/.test(entry.target.ref.name));
+        await new Interpreter(new RuntimeContext(engine, null, defs.__INIT__.CODE.code)).execute(arrays);
+        await get('BEHINITLEVEL').RUN();
+        await get('BEHINITBUTTON').RUN();
+        await get('BEHINITPLAYERS').RUN();
+        assert.ok(reads.includes(`${scenePath}/mask${level}.img`), 'Each room must load its own collision mask');
+        return { ...fixture, stage, memory, reads, backgrounds };
+    } catch (error) {
+        engine.scopeManager.destroy();
+        backgrounds.forEach(texture => texture.destroy(true));
+        throw error;
+    }
+}
+
+async function verifyMazePuzzleInitialization() {
+    let plates = 0, switches = 0, exits = 0;
+    for (const level of [0, 1, 2]) {
+        const { engine, parent, scope, get, stage, backgrounds, memory } = await createMazePuzzleFixture(level);
+        try {
+            assert.equal(get('ANNBTN').clones.length, get('ANNBTN').GETNOE());
+            assert.equal(get('ANNSWITCH').clones.length, get('ANNSWITCH').GETNOE());
+            assert.equal(get('ANNPRZEDMIOT').GETNOE(), 0, 'The absent, unused item placeholder must not invent gameplay items');
+            for (const [name, priority] of [['ANNBTN', 201], ['ANNBTNMASK', 130], ['ANNSWITCH', 202], ['ANNSWITCHMASK', 130]]) {
+                for (const clone of get(name).clones) {
+                    assert.equal(clone.GETPRIORITY(), priority);
+                    assert.equal(clone.ISVISIBLE(), false);
+                    assert.ok(clone.getRenderObject().parent === stage);
+                }
+            }
+            const players = get('ARRAYPLAYERS').value.map(name => get(name));
+            const park = async () => {
+                for (const player of players) await player.SETPOSITION(-1000, -1000);
+                await get('VARPLAYERCHANGED').SET(0);
+            };
+            const points = (area, minZ = 201, maxZ = 202) => {
+                const hits = [];
+                for (let y = 20; y < 600; y += 40) for (let x = 20; x < 800; x += 40) {
+                    if (area.ISAT(x, y, true) && get('CANVASOBSERVER').GETGRAPHICSAT(x, y, false, minZ, maxZ, false) === area.name) {
+                        hits.push({ x, y });
+                    }
+                }
+                return hits;
+            };
+            await park();
+            for (const area of get('ANNBTN').clones) {
+                const hit = points(area, 201, 201)[0];
+                if (!hit) continue;
+                await players[0].SETPOSITION(hit.x, hit.y); await get('BEHONBUTTON').RUN();
+                const index = area.GETCLONEINDEX();
+                for (const name of [`ANNBTNGRAPH_${index}`, `ANNBTNMASK_${index}`]) {
+                    const helper = get(name), frames = helper.GETNOFINEVENT(`A${index}`);
+                    assert.equal(helper.GETCFRAMEINEVENT(), frames > 1 ? 1 : 0, `${name} must reflect the occupied plate`);
+                }
+                await park(); await get('BEHONBUTTON').RUN();
+                assert.equal(get(`ANNBTNGRAPH_${index}`).GETCFRAMEINEVENT(), 0, 'Releasing a plate must restore its graphic');
+                assert.equal(get(`ANNBTNMASK_${index}`).GETCFRAMEINEVENT(), 0, 'Releasing a plate must restore its wall mask');
+                plates++;
+            }
+            for (const area of get('ANNSWITCH').clones) {
+                const frames = area.getEvent(area.GETEVENTNAME()).frames;
+                const linked = frames.length === 1 ? [area.GETCLONEINDEX()] : frames.map(frame => Number(frame.name));
+                const before = linked.map(index => get(`ANNSWITCHMASK_${index}`).GETCFRAMEINEVENT());
+                await get('VARPLAYERCHANGED').SET(0); await get('VARSWITCH').SET('NULL'); await get('VARSWITCH').SET(area.name);
+                if (!get('VARSWITCH').callbacks.hasParametrized('ONCHANGED', area.name)) {
+                    assert.deepEqual(linked.map(index => get(`ANNSWITCHMASK_${index}`).GETCFRAMEINEVENT()), before,
+                        'An unused switch placeholder without a handler must not change wall state');
+                    continue;
+                }
+                for (const [offset, index] of linked.entries()) {
+                    const helper = get(`ANNSWITCHMASK_${index}`), count = helper.GETNOFINEVENT(`A${index}`);
+                    const expected = (before[offset] + 1) % count;
+                    assert.equal(helper.GETCFRAMEINEVENT(), expected, `${area.name} must advance its linked wall mask: ${JSON.stringify({
+                        level, index, linked, before, after: get('ANNSWITCHMASK').clones.map(clone => clone.GETCFRAMEINEVENT()),
+                        var0: get('VARINT0').value, var1: get('VARINT1').value, var2: get('VARINT2').value,
+                        callback: get('VARSWITCH').definition.ONCHANGED.parametrized.get(area.name),
+                    })}`);
+                    assert.equal(get(`ANNSWITCHGRAPH_${index}`).GETCFRAMEINEVENT(), expected);
+                }
+                if (level === 0) {
+                    const saved = deserializeArray(memory.get('common/maze_fixture0.arr'));
+                    assert.deepEqual(saved.slice(2), get('ANNSWITCHMASK').clones.map(clone => clone.GETCFRAMEINEVENT()));
+                }
+                switches++;
+            }
+            if (level === 0) {
+                const saved = [...get('ARRAYSAVE').value];
+                get('ARRAYSAVE').REMOVEALL(); await get('ARRAYSAVE').LOAD(get('VARSAVENAME').value);
+                assert.deepEqual(get('ARRAYSAVE').value, saved, 'Original array persistence must round-trip switch state');
+                for (const clone of get('ANNSWITCHMASK').clones) await clone.SETFRAME(clone.GETEVENTNAME(), 0);
+                await get('BFITMP196').RUN();
+                assert.deepEqual(get('ANNSWITCHMASK').clones.map(clone => clone.GETCFRAMEINEVENT()), saved.slice(2));
+            }
+            const routes = [], screenshots = [];
+            let localExits = 0;
+            const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+            episode.GOTO = scene => routes.push(scene); scope.set(episode.name, episode);
+            const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+            screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+            for (const [plate, buttonName, destination] of level === 0
+                ? [[9, 'BTNEXIT0', 'PIWNICA'], [8, 'BTNEXIT1', 'UNIVPIWNICA']]
+                : [[level === 1 ? 56 : 27, 'BTNEXIT', level === 1 ? 'CALINECZKA' : 'PIKLIBIA']]) {
+                const area = get(`ANNBTN_${plate}`), targets = points(area), button = get(buttonName);
+                assert.ok(targets.length >= 2, `${area.name} must have room for both main characters`);
+                await park(); await players[0].SETPOSITION(targets[0].x, targets[0].y);
+                await get('VARPLAYERNAME').SET(players[0].name); await get('VARBUTTON').SET('NULL'); await get('VARBUTTON').SET(area.name);
+                assert.equal(button.logic.enabled, false, 'One character must not unlock an exit requiring both');
+                await players[1].SETPOSITION(targets[1].x, targets[1].y);
+                await get('VARBUTTON').SET('NULL'); await get('VARBUTTON').SET(area.name);
+                assert.equal(button.logic.enabled, true);
+                if (level === 1) assert.equal(get('G_ISUCCESS').value, 0, 'Leaving without the seven prisoners must not award rescue success');
+                const sprite = get(button.definition.GFXSTANDARD.objectName).getRenderObject();
+                assert.equal(sprite.visible, true);
+                for (const event of ['pointerover', 'pointerdown', 'pointerup']) sprite.emit(event);
+                await button.tick();
+                assert.equal(get('G_SARCADEOBJECTS').value, destination);
+                assert.equal(routes.at(-1), 'ARCADE');
+                assert.equal(screenshots.length, ++localExits);
+                exits++;
+            }
+        } finally {
+            assert.deepEqual(engine.scopeManager.destroy(), [], `Maze ${level} puzzle cleanup`);
+            assert.equal(stage.children.length, 0);
+            backgrounds.forEach(texture => texture.destroy(true));
+        }
+    }
+    console.log(`MAZE PUZZLES: full image/animation startup, ${plates} plate updates, ${switches} linked switches, save round-trip and ${exits} exit decisions passed`);
 }
 
 async function verifyBroomPhysics() {
@@ -1008,6 +1188,7 @@ async function main() {
     await verifyBarandalfBoat();
     await verifyMazeEnemies();
     await verifyMazePlayers();
+    await verifyMazePuzzleInitialization();
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();

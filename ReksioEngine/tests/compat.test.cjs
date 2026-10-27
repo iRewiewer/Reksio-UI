@@ -545,6 +545,56 @@ test('Magicienii repairs misspelled alchemy image priorities only in that source
     assert.equal(patchMagicieniiSource('dane/game/przygoda/magic/magic.cnv', source), source);
 });
 
+test('Magicienii empty animation placeholders are restricted to two maze paths and never share mutable state', () => {
+    const { getMagicieniiPlaceholderAnimation } = loadModule('engine/patches/magicienii.ts');
+    for (const name of ['blank.ann', 'przedmioty1.ann']) {
+        const file = `dane/game/przygoda/labirynt/${name}`, first = getMagicieniiPlaceholderAnimation(file);
+        assert.deepEqual(first.events, []); assert.deepEqual(first.images, []); assert.deepEqual(first.annImages, []);
+        assert.equal(first.header.eventsCount, 0);
+        first.events.push({ name: 'MUTATED' });
+        assert.deepEqual(getMagicieniiPlaceholderAnimation(file).events, []);
+    }
+    for (const file of ['dane/game/przygoda/labirynt/ogien.ann', 'dane/game/przygoda/magic/blank.ann',
+        'dane/game/przygoda/labirynt/missing.ann', 'blank.ann']) {
+        assert.equal(getMagicieniiPlaceholderAnimation(file), null);
+    }
+});
+
+test('Only Magicienii retains absent maze placeholders while existing assets and unrelated failures remain untouched', async () => {
+    const patches = loadModule('engine/patches/magicienii.ts'), decoded = [], raw = new ArrayBuffer(4);
+    let corrupt = false;
+    const { default: Filesystem } = loadModule('filesystem/index.ts', {
+        '../fileFormats/cnv': {}, '../fileFormats/seq': {}, '../fileFormats/img': {},
+        '../fileFormats/ann': { loadAnn: data => {
+            assert.equal(data, raw); if (corrupt) throw new Error('corrupt animation');
+            decoded.push(data); return 'REAL ASSET';
+        } },
+        '../fileFormats/fnt': {}, '../fileFormats/archive/array': {},
+        '../engine/compat': { createEngineCompat }, '../fileFormats/archive/sound': {}, '../engine/compatAssets': {},
+        '../engine/patches/timpului': {}, '../engine/patches/ozn': {}, '../engine/patches/nemo': {},
+        '../engine/patches/magicienii': patches,
+    });
+    let exists = false;
+    const filesystem = new Filesystem({ hasFile: () => exists, getRawFile: async () => {
+        if (!exists) throw new Error('missing asset'); return raw;
+    } }, { get: async () => null, has: async () => false }, createEngineCompat('magicienii'));
+    const filename = 'DANE\\GAME\\PRZYGODA\\LABIRYNT\\BLANK.ANN';
+    assert.deepEqual((await filesystem.getANNFile(filename)).events, []);
+    assert.deepEqual(decoded, []);
+    exists = true;
+    assert.equal(await filesystem.getANNFile(filename), 'REAL ASSET', 'An installed replacement must take precedence');
+    assert.equal(decoded.length, 1);
+    corrupt = true;
+    await assert.rejects(filesystem.getANNFile(filename), /corrupt animation/);
+    corrupt = false;
+    exists = false;
+    await assert.rejects(filesystem.getANNFile('dane/game/przygoda/labirynt/not-a-placeholder.ann'), /missing asset/);
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        filesystem.compat = createEngineCompat(profile);
+        await assert.rejects(filesystem.getANNFile(filename), /missing asset/);
+    }
+});
+
 test('Magicienii counted-loop BREAK propagates to the behaviour boundary; ONE_BREAK only skips an iteration', async () => {
     class IgnorableError extends Error {}
     class Counter { async setValue(value) { this.value = value; } }
@@ -1306,6 +1356,7 @@ function transformFixture(profile) {
     });
     const actor = Object.create(Animo.prototype), engine = { compat: createEngineCompat(profile) };
     actor.engine = engine;
+    actor.annFile = { annImages: [{ width: 80, height: 40 }] };
     const texture = new pixi.Texture(pixi.BaseTexture.fromBuffer(new Uint8Array(80 * 40 * 4), 80, 40));
     const sprite = new AdvancedSprite(texture), parent = new pixi.Container();
     parent.position.set(10, 20); parent.addChild(sprite);
@@ -1378,7 +1429,10 @@ test('Magicienii ISAT checks hidden animation bounds and optional alpha with cur
         actor.__call = (method, args) => ({ method, args });
         assert.deepEqual(actor.ISAT(100, 200, true), { method: 'ISAT', args: [100, 200, true] });
     }
-    actor.engine.compat = createEngineCompat('magicienii'); actor.sprite = null;
+    actor.engine.compat = createEngineCompat('magicienii'); actor.annFile = { annImages: [] };
+    assert.equal(actor.ISAT(point.x, point.y, false), false, 'An empty placeholder has no image bounds');
+    assert.equal(actor.ISAT(point.x, point.y, true), false);
+    actor.sprite = null;
     assert.equal(actor.ISAT(0, 0, true), false);
     parent.destroy({ children: true, texture: true, baseTexture: true });
 });

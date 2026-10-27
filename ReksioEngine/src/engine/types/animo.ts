@@ -183,6 +183,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
         this.sprite.name = `${this.name} [ANIMO]` // For PIXI Devtools
         this.sprite.eventMode = 'none'
         this.sprite.visible = this.definition.VISIBLE
+        if (this.engine.compat.magicieniiAssets && !this.annFile.annImages.length) this.sprite.hitmap = new Uint8Array()
         this.SETPRIORITY(this.definition.PRIORITY ?? 0)
 
         if (this.definition.TOCANVAS) {
@@ -711,7 +712,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
     @method()
     ISAT(x: number, y: number, checkAlpha: boolean = false) {
         if (!this.engine.compat.animationHitTests) return this.__call('ISAT', [x, y, checkAlpha])
-        if (!this.sprite) return false
+        if (!this.sprite || !this.annFile?.annImages.length) return false
         this.sprite.toGlobal(new PIXI.Point())
         const point = new PIXI.Point(x, y)
         // Check half-open image bounds before alpha lookup, independent of visibility or button hit testing.

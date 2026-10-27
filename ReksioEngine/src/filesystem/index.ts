@@ -13,7 +13,7 @@ import { loadJpegBackground } from '../engine/compatAssets'
 import { patchTimeMachineDefinitions } from '../engine/patches/timpului'
 import { patchOznSource } from '../engine/patches/ozn'
 import { patchNemoDefinitions } from '../engine/patches/nemo'
-import { patchMagicieniiArray, patchMagicieniiSequence, patchMagicieniiSource } from '../engine/patches/magicienii'
+import { getMagicieniiPlaceholderAnimation, patchMagicieniiArray, patchMagicieniiSequence, patchMagicieniiSource } from '../engine/patches/magicienii'
 
 const PIRATES_RIVER_THREE_PATH = 'dane/intro/mainmenu/09rzekac/rzeka3.cnv'
 const PIRATES_WIOSKA_PATH = 'dane/intro/mainmenu/10wioska/wioska10.cnv'
@@ -300,6 +300,10 @@ export default class Filesystem {
     }
 
     async getANNFile(filename: string) {
+        if (this.compat.magicieniiAssets) {
+            const placeholder = getMagicieniiPlaceholderAnimation(normalizePath(filename))
+            if (placeholder && !await this.hasFile(filename)) return placeholder
+        }
         const data = await this.getFile(filename)
         return loadAnn(data, this.compat.trailingAnnFrameData)
     }
