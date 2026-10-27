@@ -1,5 +1,5 @@
 import { ParentType, Type } from './index'
-import { KeyboardDefinition, MusicDefinition } from '../../fileFormats/cnv/types'
+import { KeyboardDefinition } from '../../fileFormats/cnv/types'
 import { Engine } from '../index'
 import { method } from '../../common/types'
 import { logger } from '../logging'
@@ -15,17 +15,18 @@ const keysMapping = {
 } as any
 
 type KeyState = { name: string; state: boolean }
+type KeyChange = KeyState | { character: string }
 
 export class Keyboard extends Type<KeyboardDefinition> {
     private keysState = new Map<string, boolean>()
-    private changeQueue: KeyState[] = []
+    private changeQueue: KeyChange[] = []
     private enabled: boolean = true
     private autoRepeat: boolean = false
 
     private readonly onKeyDownCallback: (event: KeyboardEvent) => void
     private readonly onKeyUpCallback: (event: KeyboardEvent) => void
 
-    constructor(engine: Engine, parent: ParentType<any> | null, definition: MusicDefinition) {
+    constructor(engine: Engine, parent: ParentType<any> | null, definition: KeyboardDefinition) {
         super(engine, parent, definition)
         this.onKeyDownCallback = this.onKeyDown.bind(this)
         this.onKeyUpCallback = this.onKeyUp.bind(this)
@@ -43,7 +44,9 @@ export class Keyboard extends Type<KeyboardDefinition> {
 
     async tick() {
         for (const change of this.changeQueue) {
-            if (change.state) {
+            if ('character' in change) {
+                if (this.enabled) await this.callbacks.run('ONCHAR', change.character)
+            } else if (change.state) {
                 await this.callbacks.run('ONKEYDOWN', change.name)
             } else {
                 await this.callbacks.run('ONKEYUP', change.name)
@@ -82,12 +85,17 @@ export class Keyboard extends Type<KeyboardDefinition> {
     }
 
     private onKeyDown(event: KeyboardEvent) {
-        if (!this.autoRepeat && this.keysState.get(keysMapping[event.code])) {
+        if (!this.autoRepeat && this.keysState.get(this.getKeyName(event.code))) {
             return
         }
 
         if (this.enabled) {
             this.setKeyState(event.code, true)
+            if (this.engine.compat.keyboardCharacters && !event.ctrlKey && !event.altKey && !event.metaKey) {
+                // Native character events preserve letter case and use unshifted top-row digits.
+                const character = /^Digit(\d)$/.exec(event.code)?.[1] ?? event.key
+                if (character?.length === 1) this.changeQueue.push({ character })
+            }
         }
     }
 
@@ -98,7 +106,7 @@ export class Keyboard extends Type<KeyboardDefinition> {
     }
 
     private setKeyState(keyCode: string, value: boolean) {
-        const mapped = keysMapping[keyCode]
+        const mapped = this.getKeyName(keyCode)
         if (this.engine.compat.underwaterPhysics) this.engine.diagnostics.keyboardState(mapped ?? keyCode, value)
         if (!mapped) {
             logger.warn(`Unsupported keyboard key code ${keyCode}`, {
@@ -107,5 +115,10 @@ export class Keyboard extends Type<KeyboardDefinition> {
         }
         this.keysState.set(mapped, value)
         this.changeQueue.push({ name: mapped, state: value })
+    }
+
+    private getKeyName(code: string) {
+        return keysMapping[code] ?? (this.engine.compat.keyboardCharacters
+            ? /^(?:Digit(\d)|Key([A-Z]))$/.exec(code)?.slice(1).find(Boolean) : undefined)
     }
 }

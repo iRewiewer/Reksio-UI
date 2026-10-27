@@ -56,6 +56,7 @@ export type EngineCompat = {
     stringSlices: boolean
     animationHitTests: boolean
     animationCloneRendering: boolean
+    keyboardCharacters: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -129,5 +130,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         stringSlices: name === 'magicienii',
         animationHitTests: name === 'magicienii',
         animationCloneRendering: name === 'magicienii',
+        keyboardCharacters: name === 'magicienii',
     }
 }

@@ -55,6 +55,7 @@ const { Interpreter, RuntimeContext } = load('interpreter/interpreter.ts');
 const { loadAnn } = load('fileFormats/ann/index.ts');
 const { Animo } = load('engine/types/animo.ts');
 const { Mouse } = load('engine/types/mouse.ts');
+const { Keyboard } = load('engine/types/keyboard.ts');
 const { Group } = load('engine/types/group.ts');
 const { Struct } = load('engine/types/struct.ts');
 const { World } = load('engine/types/world.ts');
@@ -154,8 +155,10 @@ async function createFixture() {
 
 async function createArcadeFixture(scene, folder, filename, overlay) {
     const directory = path.join(assets, 'Dane/Game/Przygoda', folder);
-    const defs = parseCNV(decryptCNV(bytes(path.join(directory, filename))));
-    if (overlay) Object.assign(defs, parseCNV(decryptCNV(bytes(path.join(directory, overlay)))));
+    const definitions = name => parseCNV(patchMagicieniiSource(`dane/game/przygoda/${folder}/${name}`.toLowerCase(),
+        decryptCNV(bytes(path.join(directory, name)))));
+    const defs = definitions(filename);
+    if (overlay) Object.assign(defs, definitions(overlay));
     const scopeManager = new ScopeManager();
     const scope = scopeManager.newScope('scene');
     const engine = {
@@ -454,6 +457,132 @@ async function verifyMazeEnemies() {
     }
     assert.ok(accepted > 0 && rejected > 0, 'Patrols must exercise both opaque and transparent path pixels');
     console.log(`MAZE: all three original enemy initializers, ${enemies} registered clones, curse/DARK guards and patrols passed; ${accepted} accepted/${rejected} rejected path pixels`);
+}
+
+async function verifyMazePlayers() {
+    const previousWindow = globalThis.window;
+    globalThis.window = new EventTarget();
+    let moved = 0, blocked = 0, selections = 0;
+    try {
+        for (const level of [0, 1, 2]) {
+            const { engine, parent, scope, directory, defs, get } =
+                await createArcadeFixture('LABIRYNT', 'Labirynt', 'Labirynt.cnv', `cnvLevel${level}.cnv`);
+            const stage = engine.app.stage;
+            engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
+            engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
+            engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+            engine.filesystem.getIMGFile = async filename => loadImage(bytes(filename));
+            engine.filesystem.saveFile = async () => assert.fail('Maze control checks must not write game saves');
+            // Enemy/pressure-button setup, exit artwork, dialogue audio and story persistence are boundaries.
+            get('BEHINITENEMY').RUN = () => {};
+            get('BEHONBUTTON').RUN = () => {};
+            for (const def of Object.values(defs).filter(def => /^ANNENEMY/.test(def.NAME))) get(def.NAME).LOAD = () => {};
+            for (const def of Object.values(defs).filter(def => def.TYPE === 'BUTTON')) {
+                scope.set(def.NAME, new Button(engine, parent, def));
+            }
+            const companion = new constructors.INTEGER(engine, parent, { TYPE: 'INTEGER', NAME: 'G_IKRETACTIVE', VALUE: 1 });
+            scope.set(companion.name, companion);
+            for (const def of Object.values(defs).filter(def => /^ANNPLAYER([0-8]|MASK|FIELD|ELAPSE|DARKELAPSE)$/.test(def.NAME) || def.NAME === 'ANNMENU')) {
+                const actor = new Animo(engine, parent, def);
+                actor.annFile = loadAnn(bytes(path.join(directory, def.FILENAME)));
+                await actor.initSprite(); scope.set(actor.name, actor);
+            }
+            const mask = new Image(engine, parent, defs.IMGMASK);
+            mask.sprite = await loadSprite(engine.filesystem, path.join(directory, defs.IMGMASK.FILENAME));
+            mask.sprite.visible = false; await mask.applyDefaults(); stage.addChild(mask.sprite); scope.set(mask.name, mask);
+            const keyboard = new Keyboard(engine, parent, defs.KEYBOARD);
+            scope.set(keyboard.name, keyboard); await keyboard.ready(); keyboard.SETAUTOREPEAT(false);
+            const key = async (code, character, down = true) => {
+                const event = new Event(down ? 'keydown' : 'keyup');
+                Object.assign(event, { code, key: character });
+                window.dispatchEvent(event); await keyboard.tick();
+            };
+            const select = async number => { await key(`Digit${number}`, `${number}`); await key(`Digit${number}`, `${number}`, false); };
+            try {
+                get('ARRAYSAVE').restoreCheckpointValue([0, 0]);
+                const ast = load('interpreter/parser.ts').parseCode(defs.__INIT__.CODE.code);
+                const arrays = ast.filter(entry => entry.type === 'FunctionCall' && entry.target?.type === 'ObjectTarget' &&
+                    /^ARRAY(KEYBOARD|PLAYERACTIVE|UP|DOWN|LEFT|RIGHT|IDLE)$/.test(entry.target.ref.name));
+                await new Interpreter(new RuntimeContext(engine, null, defs.__INIT__.CODE.code)).execute(arrays);
+                await get('BEHPLAYERS').RUN(); await get('BEHINITPLAYERS').RUN();
+                await get('ANNMENU').CLONE(get('ARRAYPLAYERS').GETSIZE());
+                await get('VARPLAYERNAME').SET('ANNPLAYER0'); await get('VARMASKNAME').SET('ANNPLAYERMASK_1');
+                await get('ANNPLAYER0').PLAY('IDLE_DOWN');
+                const collisionRequests = [], collision = get('BEHPLAYERCOLL'), checkCollision = collision.RUN.bind(collision);
+                collision.RUN = async (...args) => {
+                    collisionRequests.push(get('VARSTRING0').value);
+                    return checkCollision(...args);
+                };
+                await select(2);
+                assert.equal(get('VARPLAYERNAME').value, 'ANNPLAYER1', 'The original ONCHAR handler must select the companion');
+                selections++;
+                if (level === 1) {
+                    await select(3);
+                    assert.equal(get('VARPLAYERNAME').value, 'ANNPLAYER1', 'Imprisoned characters must remain unselectable');
+                    // Rescue prerequisites are a boundary; release actors to exercise all nine selection handlers.
+                    for (let index = 2; index < 9; index++) await get(`ANNPLAYER${index}`).PLAY('WAIT_DOWN');
+                }
+                for (let number = 1; number <= get('ARRAYPLAYERS').GETSIZE(); number++) {
+                    await select(number);
+                    const player = get(`ANNPLAYER${number - 1}`);
+                    assert.equal(get('VARPLAYERNAME').value, player.name, `Maze ${level} selection key ${number}`);
+                    selections++;
+                    for (const [code, direction, dx, dy] of [['ArrowUp', 'UP', 0, -40], ['ArrowDown', 'DOWN', 0, 40],
+                        ['ArrowLeft', 'LEFT', -40, 0], ['ArrowRight', 'RIGHT', 40, 0]]) {
+                        let cell;
+                        for (let y = 60; y < 540 && !cell; y += 40) {
+                            for (let x = 60; x < 740; x += 40) {
+                                if ([[0, 0], [dx * .75, dy * .75]].every(([ox, oy]) =>
+                                    !get('CANVASOBSERVER').GETGRAPHICSAT(x + ox, y + oy, false, 110, 130, false))) {
+                                    cell = { x, y }; break;
+                                }
+                            }
+                        }
+                        assert.ok(cell, `Maze ${level} must contain a free ${direction} movement cell`);
+                        await player.SETPOSITION(cell.x, cell.y);
+                        await player.PLAY(number <= 2 ? 'IDLE_DOWN' : 'SELECTED_DOWN');
+                        const checks = collisionRequests.length;
+                        await key(code, direction); await get('BEHPLAYERMOVE').RUN();
+                        assert.equal(collisionRequests.length, checks + 1, `${player.name} movement must invoke its collision callback`);
+                        assert.equal(collisionRequests.at(-1), player.name, 'Collision queries must refer to the moving actor');
+                        await key(code, direction, false);
+                        for (let tick = 0; tick < 9; tick++) await player.tick(1000 / 30);
+                        assert.deepEqual([player.positionX, player.positionY], [cell.x + dx, cell.y + dy],
+                            `${player.name} must finish exactly one ${direction} tile after releasing the arrow`);
+                        moved++;
+                        let wallCell;
+                        for (let y = 60; y < 540 && !wallCell; y += 40) {
+                            for (let x = 60; x < 740; x += 40) {
+                                if (!get('CANVASOBSERVER').GETGRAPHICSAT(x, y, false, 110, 130, false) &&
+                                    get('CANVASOBSERVER').GETGRAPHICSAT(x + dx * .75, y + dy * .75,
+                                        false, 110, 130, false) === 'IMGMASK') { wallCell = { x, y }; break; }
+                            }
+                        }
+                        assert.ok(wallCell, `Maze ${level} must have a ${direction} wall to test`);
+                        await player.SETPOSITION(wallCell.x, wallCell.y);
+                        await player.PLAY(number <= 2 ? 'IDLE_DOWN' : 'SELECTED_DOWN');
+                        await key(code, direction); await get('BEHPLAYERMOVE').RUN(); await key(code, direction, false);
+                        for (let tick = 0; tick < 9; tick++) await player.tick(1000 / 30);
+                        assert.deepEqual([player.positionX, player.positionY], [wallCell.x, wallCell.y],
+                            `${player.name} must not enter the original ${direction} wall`);
+                        blocked++;
+                    }
+                }
+                if (level !== 1) {
+                    const selected = get('VARPLAYERNAME').value;
+                    await select(9);
+                    assert.equal(get('VARPLAYERNAME').value, selected, 'Unavailable character numbers must be ignored');
+                }
+            } finally {
+                assert.deepEqual(engine.scopeManager.destroy(), [], `Maze ${level} player cleanup`);
+                assert.equal(stage.children.length, 0);
+            }
+        }
+    } finally {
+        if (previousWindow === undefined) delete globalThis.window;
+        else globalThis.window = previousWindow;
+    }
+    console.log(`MAZE PLAYERS: original player initialization, ${selections} keyboard selections, ${moved} tile moves and ${blocked} wall blocks passed`);
 }
 
 async function verifyBroomPhysics() {
@@ -878,6 +1007,7 @@ async function main() {
     await verifyBarandalf();
     await verifyBarandalfBoat();
     await verifyMazeEnemies();
+    await verifyMazePlayers();
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();

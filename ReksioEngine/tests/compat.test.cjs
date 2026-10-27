@@ -2932,6 +2932,94 @@ test('modern keyboard input can be re-enabled after a transition', () => {
     assert.equal(keyboard.ISENABLED(), false);
 });
 
+test('KEYBOARD schema retains every case-sensitive character handler and its fallback', () => {
+    const logger = { warn: message => assert.fail(message) };
+    const common = loadModule('fileFormats/common/index.ts', { '../logger': { logger } });
+    const { structureDefinitions } = loadModule('fileFormats/cnv/types.ts', { '../common': common });
+    const { parseCNV } = loadModule('fileFormats/cnv/parser.ts', {
+        './types': { structureDefinitions }, '../common': common, '../logger': { logger },
+    });
+    const chars = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'o', 'O'];
+    const keyboard = parseCNV(['OBJECT=KEYS', 'KEYS:TYPE=KEYBOARD', 'KEYS:ONCHAR={FALLBACK^RUN();}',
+        ...chars.map(char => `KEYS:ONCHAR^${char}={SELECT^RUN("${char}");}`)].join('\n')).KEYS;
+    assert.equal(keyboard.ONCHAR.parametrized.size, chars.length);
+    for (const char of chars) assert.equal(keyboard.ONCHAR.parametrized.get(char).code, `SELECT^RUN("${char}");`);
+    assert.equal(keyboard.ONCHAR.nonParametrized.code, 'FALLBACK^RUN();');
+});
+
+function keyboardFixture(profile = 'magicienii') {
+    const warnings = [], calls = [];
+    const { Keyboard } = loadModule('engine/types/keyboard.ts', {
+        './index': { Type: FakeType }, '../../common/types': decorator,
+        '../logging': { logger: { warn: message => warnings.push(message) } },
+    });
+    const keyboard = new Keyboard({ compat: createEngineCompat(profile), diagnostics: { keyboardState() {} } });
+    keyboard.callbacks = { run: async (...args) => calls.push(args) };
+    const down = (code, key, modifiers = {}) => keyboard.onKeyDown({ code, key, ...modifiers });
+    const up = (code, key) => keyboard.onKeyUp({ code, key });
+    return { keyboard, down, up, calls, warnings };
+}
+
+test('Magicienii queues character input after keydown, preserves case and honors repeat/disable gates', async () => {
+    const { keyboard, down, up, calls, warnings } = keyboardFixture();
+    down('Digit9', '('); down('Digit9', '9');
+    assert.equal(keyboard.ISKEYDOWN('9'), true);
+    assert.deepEqual(calls, []);
+    await keyboard.tick();
+    assert.deepEqual(calls, [['ONKEYDOWN', '9'], ['ONCHAR', '9']]);
+    up('Digit9', '9'); await keyboard.tick();
+    assert.equal(keyboard.ISKEYDOWN('9'), false);
+    assert.deepEqual(calls.at(-1), ['ONKEYUP', '9']);
+    calls.length = 0;
+    keyboard.SETAUTOREPEAT(true);
+    down('KeyO', 'o'); down('KeyO', 'O'); up('KeyO', 'O'); await keyboard.tick();
+    assert.deepEqual(calls, [['ONKEYDOWN', 'O'], ['ONCHAR', 'o'], ['ONKEYDOWN', 'O'], ['ONCHAR', 'O'], ['ONKEYUP', 'O']]);
+    calls.length = 0;
+    for (const modifier of ['ctrlKey', 'altKey', 'metaKey']) { down('KeyO', 'o', { [modifier]: true }); up('KeyO', 'o'); }
+    await keyboard.tick();
+    assert.equal(calls.some(([name]) => name === 'ONCHAR'), false, 'Browser/system chords must not generate printable input');
+    calls.length = 0;
+    down('Digit3', '3'); keyboard.DISABLE(); await keyboard.tick();
+    assert.equal(calls.some(([name]) => name === 'ONCHAR'), false, 'Disabling must suppress an already queued character');
+    calls.length = 0; down('Digit4', '4'); await keyboard.tick();
+    assert.deepEqual(calls, []);
+    keyboard.ENABLE(); down('Digit4', '4'); await keyboard.tick();
+    assert.deepEqual(calls, [['ONKEYDOWN', '4'], ['ONCHAR', '4']]);
+    assert.deepEqual(warnings, []);
+});
+
+test('Magicienii character listeners are removed on teardown and not duplicated by repeated ready calls', async () => {
+    const previousWindow = globalThis.window, target = new EventTarget(); globalThis.window = target;
+    const { keyboard, calls } = keyboardFixture();
+    const press = () => {
+        const event = new Event('keydown'); Object.assign(event, { code: 'Digit8', key: '8' });
+        target.dispatchEvent(event);
+    };
+    try {
+        await keyboard.ready(); await keyboard.ready();
+        press(); await keyboard.tick();
+        assert.deepEqual(calls, [['ONKEYDOWN', '8'], ['ONCHAR', '8']]);
+        keyboard.destroy(); calls.length = 0; press(); await keyboard.tick();
+        assert.deepEqual(calls, []);
+    } finally {
+        keyboard.destroy();
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+    }
+});
+
+test('Other profiles retain legacy keyboard mapping and never emit ONCHAR', async () => {
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        const { keyboard, down, up, calls } = keyboardFixture(profile);
+        for (const [code, key] of [['Digit1', '1'], ['Digit2', '2'], ['Digit9', '9'], ['KeyO', 'o']]) {
+            down(code, key); up(code, key);
+        }
+        await keyboard.tick();
+        assert.equal(calls.some(([name]) => name === 'ONCHAR'), false);
+        assert.deepEqual(calls.slice(0, 4), [['ONKEYDOWN', '1'], ['ONKEYUP', '1'], ['ONKEYDOWN', '2'], ['ONKEYUP', '2']]);
+        assert.equal(keyboard.ISKEYDOWN('9'), false);
+    }
+});
+
 test('Nemo persisted checkpoints wait for the active tick and copy current slot, values and files', async () => {
     const { captureNemoCheckpoint } = loadModule('engine/patches/nemo.ts');
     const entry = { version: 1, scene: 'ARCADE', previousScene: 'CUTSCENKI',
