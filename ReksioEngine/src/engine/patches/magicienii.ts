@@ -116,6 +116,11 @@ export function patchMagicieniiSource(filename: string, source: string): string 
             '__WEB_MAZEPAUSE__:CODE={LABIRYNT^GETPLAYINGANIMO("__WEB_MAZEPLAYING__");' +
             '__WEB_MAZEPLAYING__^PAUSE();KEYBOARD^DISABLE();MOUSE^DISABLESIGNAL();BTNRESTART^DISABLE();}\n'
     }
+    if (filename === 'dane/game/przygoda/arcade/arcade.cnv') {
+        // DEFAULT hotspots store their walking targets in image positions, not event offsets.
+        return source.replaceAll('VARITEMP1^SET(*VARSTEMP0^GETCURRFRAMEPOSX());VARITEMP2^SET(*VARSTEMP0^GETCURRFRAMEPOSY());',
+            'VARITEMP1^SET(*VARSTEMP0^GETPOSITIONX());VARITEMP2^SET(*VARSTEMP0^GETPOSITIONY());')
+    }
     if (filename === 'dane/game/przygoda/arcade/alchemy.cnv') {
         return source.replaceAll('^SETPTIORITY(', '^SETPRIORITY(')
     }
@@ -127,6 +132,9 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         // This board stores node coordinates on its images, not its zero-offset event frames.
         source = source.replaceAll('ANNPOLA^GETCURRFRAMEPOSX()', 'ANNPOLA^GETPOSITIONX()')
             .replaceAll('ANNPOLA^GETCURRFRAMEPOSY()', 'ANNPOLA^GETPOSITIONY()')
+        // This handler owns its arrival dialogue; the generic DOMEK.ARR cue is absent.
+        source = source.replaceAll('BEHCLICK_DOMEK:CODE={BEHSELECTTEMPOBJS',
+            'BEHCLICK_DOMEK:CODE={VARSLASTFOCUS^SET("NULL");BEHSELECTTEMPOBJS')
         // The card is not attached to a room object; an omitted parent becomes switch zero.
         return source.replaceAll('BEHADDITEM^RUN("KARTA_BUT");', 'BEHADDITEM^RUN("KARTA_BUT",-1);')
     }

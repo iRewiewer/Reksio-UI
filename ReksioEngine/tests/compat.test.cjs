@@ -535,6 +535,18 @@ test('Magicienii repairs only the spell lesson drawing wand event references', (
         'BEHPLAYRANDSOUND^RUN();OTHER^PLAY();');
 });
 
+test('Magicienii adventure initialization derives DEFAULT walking destinations from each positioned image', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/arcade.cnv';
+    const source = 'VARITEMP1^SET(*VARSTEMP0^GETCURRFRAMEPOSX());VARITEMP2^SET(*VARSTEMP0^GETCURRFRAMEPOSY());OTHER^GETCURRFRAMEPOSX();';
+    const expected = 'VARITEMP1^SET(*VARSTEMP0^GETPOSITIONX());VARITEMP2^SET(*VARSTEMP0^GETPOSITIONY());OTHER^GETCURRFRAMEPOSX();';
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    for (const other of ['dane/game/przygoda/arcade/piklibia.cnv', 'dane/game/przygoda/arcade/alchemy.cnv', 'other/arcade.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
 test('Magicienii repairs misspelled alchemy image priorities only in that source file', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const source = 'IMG_EXIT_STD^SETPTIORITY(610);IMG_EXIT_GLOW^SETPTIORITY(610);IMG_EXIT_CLICK^SETPTIORITY(610);';
@@ -567,6 +579,19 @@ test('Only Piklibia reads board node positions from the positioned image instead
     assert.equal(patchMagicieniiSource(file, source), expected);
     assert.equal(patchMagicieniiSource(file, expected), expected);
     for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/alchemy.cnv', 'other/piklibia.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
+test('Only Piklibia house entry suppresses its absent generic arrival cue while preserving the explicit dialogue', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/piklibia.cnv';
+    const source = 'BEHCLICK_DOMEK:CODE={BEHSELECTTEMPOBJS^RUN("SPIELMAUSTER");}\n' +
+        'BFITMP424:CODE={BEHLOADSEQARREX^RUN("DOMEK_A",FALSE);}';
+    const expected = source.replace('CODE={BEHSELECTTEMPOBJS', 'CODE={VARSLASTFOCUS^SET("NULL");BEHSELECTTEMPOBJS');
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/domspiel.cnv', 'other/piklibia.cnv']) {
         assert.equal(patchMagicieniiSource(other, source), source);
     }
 });
