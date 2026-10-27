@@ -57,6 +57,8 @@ The raw ISO endpoint is still available at `/api/games/<game-id>/iso` for diagno
 
 ## Snapshots
 
+Open Snapshots with the archive icon in the game toolbar. It stays available at narrow window widths, where the game-details sidebar is hidden.
+
 Snapshots normally use **scene-entry checkpoints**, not exact mid-animation save states. They capture the scene name, persistent global values, save JSON, and IndexedDB files from entry into the current scene. Restoring rebuilds the engine inside the existing iframe and returns directly to that scene. A minigame restarts from its entry state; earlier scenes do not need to be replayed.
 
 To preserve puzzle changes made inside a room, leave and re-enter that room before creating a checkpoint. For example, Magicienii teleport parts fitted after entering the yard are included only after a yard round trip.
