@@ -283,11 +283,7 @@ async function verifyBarandalf() {
     console.log('BARANDALF: both original map initializers, mouse-follow movement, stable rotation centers and stop branches passed');
 }
 
-async function verifyBarandalfBoat() {
-    const { engine, parent, scope, directory, defs, get } =
-        await createArcadeFixture('BARANDALF', 'Barandalf', 'Barandalf.cnv', 'cnvLevel1.cnv');
-    const names = ['ANNKRET', 'ANNLOVELAS', 'ANNMIMLI', 'ANNREX', 'ANNCHOMIK'];
-    const buttons = ['BTNKRET', 'BTNLOVELAS', 'BTNMIMLI', 'BTNREX', 'BTNCHOMIK'];
+function planBarandalfBoat() {
     const forbidden = [[0, 1], [0, 2], [4, 3], [2, 3]];
     const independent = mask => forbidden.every(([a, b]) => !(mask & (1 << a)) || !(mask & (1 << b)));
     const queue = [{ right: 0, side: 0, trips: [] }], visited = new Set(['0:0']);
@@ -306,6 +302,15 @@ async function verifyBarandalfBoat() {
         }
     }
     assert.ok(solution, 'The authored pair constraints must admit a two-seat boat solution');
+    return solution;
+}
+
+async function verifyBarandalfBoat() {
+    const { engine, parent, scope, directory, defs, get } =
+        await createArcadeFixture('BARANDALF', 'Barandalf', 'Barandalf.cnv', 'cnvLevel1.cnv');
+    const names = ['ANNKRET', 'ANNLOVELAS', 'ANNMIMLI', 'ANNREX', 'ANNCHOMIK'];
+    const buttons = ['BTNKRET', 'BTNLOVELAS', 'BTNMIMLI', 'BTNREX', 'BTNCHOMIK'];
+    const solution = planBarandalfBoat();
     get('CANVASOBSERVER').SETBACKGROUND = () => {};
     get('IMGNAKLADKA1').LOAD = () => {};
     const progress = [];
@@ -559,6 +564,82 @@ async function verifyBarandalfRoutes() {
             console.log(`BARANDALF ${level}: full mouse-follow route, ${plan.length} collision-planned points, hidden exit and original story transition passed`);
         } finally { dispose(); }
     }
+}
+
+function planBarandalfDepartures(get, direction) {
+    const rectangles = (actor, name) => {
+        const event = actor.annFile.events.find(event => event.name === name);
+        return event.frames.map((frame, index) => {
+            const image = actor.annFile.annImages[event.framesImageMapping[index]];
+            return { x: actor.positionX + image.positionX + frame.positionX - actor.anchorOffsetX,
+                y: actor.positionY + image.positionY + frame.positionY - actor.anchorOffsetY, width: image.width, height: image.height };
+        });
+    };
+    const hazard = rectangles(get('ANNORKA'), 'PLAY'), route = rectangles(get('ANNLODKA'), direction), safe = new Set();
+    for (let phase = 0; phase < hazard.length; phase++) {
+        let risk = 0;
+        for (let frame = 0; frame < route.length; frame++) for (let offset = -2; offset <= 2; offset++) {
+            const actor = hazard[(phase + frame + offset + hazard.length) % hazard.length], boat = route[frame];
+            const width = Math.max(0, Math.min(actor.x + actor.width, boat.x + boat.width) - Math.max(actor.x, boat.x));
+            const height = Math.max(0, Math.min(actor.y + actor.height, boat.y + boat.height) - Math.max(actor.y, boat.y));
+            risk = Math.max(risk, width * height / (actor.width * actor.height));
+        }
+        // The original hazard uses 12% overlap; leave margin for animation-callback timing.
+        if (risk <= .01) safe.add(phase);
+    }
+    assert.ok(safe.size > 0, `The original ${direction} crossing must have a safe departure window`);
+    return { safe, period: hazard.length };
+}
+
+async function verifyBarandalfBoatCompletion() {
+    const { get, step, click, routes, audio, screenshots, dispose } = await createBarandalfFixture(1);
+    const names = ['ANNKRET', 'ANNLOVELAS', 'ANNMIMLI', 'ANNREX', 'ANNCHOMIK'];
+    const buttons = ['BTNKRET', 'BTNLOVELAS', 'BTNMIMLI', 'BTNREX', 'BTNCHOMIK'];
+    const solution = planBarandalfBoat();
+    let waited = 0;
+    try {
+        await step(120);
+        assert.equal(get('SEQLEVEL').ISPLAYING(), false, 'The original introduction must finish before boarding');
+        const departures = Object.fromEntries(['LEFT', 'RIGHT'].map(name => [name, planBarandalfDepartures(get, name)]));
+        for (const passengers of solution) {
+            const indices = names.map((_name, index) => index).filter(index => passengers & (1 << index));
+            for (const index of indices) await click(buttons[index]);
+            assert.equal(get('ARRAYBOAT').value.filter(name => name !== 'NULL').length, indices.length);
+            const { safe, period } = departures[get('ANNLODKA').GETEVENTNAME() === 'LEFT' ? 'RIGHT' : 'LEFT'];
+            const phase = () => (get('ANNORKA').GETCFRAMEINEVENT() - 1 + period) % period;
+            for (let tick = 0; tick < 1200 && !safe.has(phase()) && !routes.length; tick++) { await step(); waited++; }
+            assert.ok(safe.has(phase()) && get('ANNORKA').ISPLAYING(), 'Wait for a safe departure without stopping the hazard');
+            await click('BTNLODKA');
+            const boat = get('ANNLODKA');
+            assert.equal(boat.ISPLAYING(), true, 'Each valid crossing must start through its original button');
+            for (let tick = 0; tick < 900 && boat.ISPLAYING(); tick++) await step();
+            assert.equal(boat.ISPLAYING(), false, 'The actual boat animation and named frame callback must finish');
+            for (const index of indices) await click(buttons[index]);
+            assert.deepEqual(get('ARRAYBOAT').value, ['NULL', 'NULL']);
+        }
+        for (const name of ['VARKRET', 'VARLOVELAS', 'VARMIMLI', 'VARREX', 'VARCHOMIK']) assert.equal(get(name).value, 'RIGHT');
+        await step(900);
+        assert.deepEqual(routes, ['BARANDALF']); assert.equal(get('G_SARCADEOBJECTS').value, '2');
+        assert.equal(get('SEQLEVEL').ISPLAYING(), false); assert.equal(screenshots.length, 1);
+        assert.deepEqual(audio.slice(-2).map(name => name.toLowerCase()), ['wavs/nar_b093.wav', 'wavs/bulbo_b094.wav']);
+        assert.ok(waited > 0);
+        console.log(`BARANDALF BOAT: ${solution.length} complete original crossings, ${waited} hazard-timing waits, both success voices and next-map request passed`);
+    } finally { dispose(); }
+}
+
+async function verifyBarandalfBoatHazard() {
+    const { get, step, click, routes, memory, audio, screenshots, dispose } = await createBarandalfFixture(1);
+    try {
+        await step(120);
+        await click('BTNKRET'); await click('BTNREX'); await click('BTNLODKA');
+        await step(900);
+        assert.deepEqual(routes, ['BARANDALF']); assert.equal(get('G_SARCADEOBJECTS').value, 'BARANDALF');
+        assert.equal(get('ANNORKA').ISPLAYING(), false); assert.equal(get('ANNLODKA').ISPLAYING(), false);
+        assert.ok(audio.some(name => name.toLowerCase() === 'wavs/nar_b090.wav'));
+        assert.deepEqual(deserializeArray(memory.get('common/barandalf0.arr')), [1, 1]);
+        assert.equal(screenshots.length, 1);
+        console.log('BARANDALF BOAT: original moving-hazard capture, failure voice, retained progress and reload request passed');
+    } finally { dispose(); }
 }
 
 async function verifyMazeEnemies() {
@@ -2812,6 +2893,8 @@ async function main() {
     await verifyBarandalfBoat();
     await verifyBarandalfRecovery();
     await verifyBarandalfRoutes();
+    await verifyBarandalfBoatCompletion();
+    await verifyBarandalfBoatHazard();
     await verifyMazeEnemies();
     await verifyMazePlayers();
     await verifyMazePuzzleInitialization();
