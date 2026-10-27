@@ -3,13 +3,16 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { Point } = require('pixi.js');
 
-async function createLesson(runtime, fighterId) {
+async function createLesson(runtime, fighterId, options = {}) {
     const { assets, createFixture, load, Filesystem, normalizePath, Struct, Database, Type, Animo, Button,
         CanvasObserver, constructors, serializeArray, deserializeArray } = runtime;
     const fixture = await createFixture(), { engine, parent, scope, defs, get, value, wand } = fixture;
-    const initial = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 64, fighterId === 13 ? 0 : 150, 0, fighterId === 13 ? 0 : 1, fighterId === 13 ? 0 : 1];
+    const memory = new Map(options.files?.map(([name, data]) => [name, data.slice(0)]));
+    const initial = memory.has('common/spells0.arr') ? deserializeArray(memory.get('common/spells0.arr')) :
+        [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 64, fighterId === 13 ? 0 : 150, 0, fighterId === 13 ? 0 : 1, fighterId === 13 ? 0 : 1];
     // Pudding is granted by the original mannequin entry; later lessons require 150 XP.
-    const memory = new Map([['common/spells0.arr', serializeArray(initial)]]), writes = [], routes = [];
+    if (!memory.has('common/spells0.arr')) memory.set('common/spells0.arr', serializeArray(initial));
+    const writes = [], routes = [];
     const relative = name => normalizePath(name.startsWith('$') ? name.slice(1) : `dane/game/przygoda/magic/${name}`);
     engine.currentScene = parent; parent.getRelativePath = async name => relative(name);
     engine.resolvePath = async (name, base = '') => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
@@ -44,15 +47,8 @@ async function createLesson(runtime, fighterId) {
     await get('ARRENERGIZETIME').CHANGEAT(1, await get('SFIGHTER').GETFIELD('TIME').getValue());
     const { Rand } = load('engine/types/rand.ts'); scope.set('RANDOM', new Rand(engine, parent, { TYPE: 'RAND', NAME: 'RANDOM' }));
 
-    // Keep the menu's actual XP/level/save behaviours. Only its presentation is outside this fixture.
-    const { Scope } = load('engine/scope.ts'), menuScope = new Scope('class_instance'), menuParent = { name: 'G_MENU', scope: menuScope };
     class Ui extends Type { PLAY(event) { this.event = event; } SHOW() {} HIDE() {} SETFRAME() {} STOP() {} SETMUSICVOLUME() {} }
-    const menuDefs = await engine.filesystem.getCNVFile('common/classes/mainmenu.class');
-    for (const def of Object.values(menuDefs)) {
-        const Constructor = constructors[def.TYPE] ?? Ui; menuScope.set(def.NAME, new Constructor(engine, menuParent, def));
-    }
-    const menu = new Ui(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_MENU' });
-    menu.LEVELUP = () => menuScope.get('LEVELUP').RUN(); scope.set(menu.name, menu);
+    const menuState = await require('./magicienii-menu-fixture.cjs')(runtime, fixture);
     scope.set('MAGIC', new Ui(engine, parent, { TYPE: 'SCENE', NAME: 'MAGIC' }));
     const settings = new constructors.ARRAY(engine, parent, { TYPE: 'ARRAY', NAME: 'G_ARRSETTINGS' });
     settings.ADD(1, 500); scope.set(settings.name, settings);
@@ -105,15 +101,16 @@ async function createLesson(runtime, fighterId) {
     const intro = fighterId === 13 ? 'SNDTUT0' : 'SNDTUTDARKENTER'; await get(intro).PLAY();
     const dispose = () => {
         assert.deepEqual(engine.scopeManager.destroy(), []); assert.equal(stage.children.length, 0);
-        for (const object of menuScope.objects) object.destroy();
+        menuState.dispose();
     };
     return { ...fixture, spell, place, book, initial, memory, writes, routes, mouse, pointer, intro, clickExit, dispose,
         saved: () => deserializeArray(memory.get('common/spells0.arr')),
-        finishPanel: () => menuScope.get('M_KLEPSYDRA').callbacks.run('ONFINISHED', 'PANEL') };
+        finishPanel: menuState.finishPanel };
 }
 
-module.exports = async function verifyLessonProgress(runtime) {
-    const first = await createLesson(runtime, 13);
+module.exports = async function verifyLessonProgress(runtime, entry = {}) {
+    if (entry.files) { assert.equal(entry.destination, 'MAGIC'); assert.equal(entry.fighter, 13); }
+    const first = await createLesson(runtime, 13, entry);
     try {
         await first.get(first.intro).callbacks.run('ONFINISHED'); await first.get('SNDTUT1').callbacks.run('ONFINISHED');
         assert.equal(first.value('VARITUTORIAL'), 2);

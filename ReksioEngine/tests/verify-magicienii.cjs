@@ -218,9 +218,14 @@ async function verifyPiklibia() {
         Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray });
 }
 
-async function verifyLessonProgress() {
+async function verifyTeacherEntry() {
+    return await require('./verify-magicienii-teacher-entry.cjs')({ assets, createArcadeFixture, Filesystem, normalizePath,
+        Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray, load, CanvasObserver, Mouse, StaticFilter, Sequence });
+}
+
+async function verifyLessonProgress(entry) {
     return await require('./verify-magicienii-lesson-progress.cjs')({ assets, createFixture, load, Filesystem, normalizePath,
-        Struct, Database, Type, Animo, Button, CanvasObserver, constructors, serializeArray, deserializeArray });
+        Struct, Database, Type, Animo, Button, CanvasObserver, constructors, serializeArray, deserializeArray }, entry);
 }
 
 async function verifyPiklibiaLive(files) {
@@ -3209,7 +3214,8 @@ async function main() {
     await get('SNDTUT11').callbacks.run('ONFINISHED');
     assert.equal(value('VARITUTORIAL'), 5);
     console.log('LESSON: three casts, target defeat, completion voice callbacks, learned flag and effect reset passed');
-    const learnedSpellbook = await verifyLessonProgress();
+    const firstLessonEntry = await verifyTeacherEntry();
+    const learnedSpellbook = await verifyLessonProgress(firstLessonEntry);
     for (let spell = 0; spell < 12; spell++) {
         for (const rotation of [0, 25, 50]) {
             const fixture = await createFixture();

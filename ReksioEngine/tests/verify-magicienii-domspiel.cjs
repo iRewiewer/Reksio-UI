@@ -4,6 +4,9 @@ const createRoom = require('./magicienii-adventure-fixture.cjs');
 module.exports = async function verifyDomspiel(runtime, checkpoint) {
     assert.equal(checkpoint.destination, 'DOMSPIEL');
     let files = checkpoint.files;
+    const bookFile = files.find(([name]) => name === 'common/spells0.arr')?.[1];
+    const initialXp = bookFile ? runtime.deserializeArray(bookFile)[13] : 0;
+    const savedXp = room => runtime.deserializeArray(room.memory.get('common/spells0.arr'))[13];
     const consumed = new Set();
     const waitFor = async (room, predicate, message, limit = 1200) => {
         for (let tick = 0; tick < limit && !predicate(); tick++) await room.step(1);
@@ -84,6 +87,8 @@ module.exports = async function verifyDomspiel(runtime, checkpoint) {
         await use(prepared, 8, 'GARNEK_BUT', 'ANNOBJECT5', 8);
         assert.equal(await field(prepared, 5, 'IPARAM0'), 2);
         assert.deepEqual(prepared.calls, [['ADDEXP', 10], ['ADDEXP', 10]]);
+        assert.equal(savedXp(prepared), initialXp + 20, 'Both original item-use XP awards must be saved through the real menu');
+        assert.equal(prepared.get('G_ARRREXSPELLS').GET(13), initialXp + 20);
         assert.ok(prepared.saves.includes('common/przepasc0.dta'), 'Hanging the pot must persist its destination-room state');
         await exit(prepared, 'ANNOBJECT2', 'PRZEPASC');
         console.log('DOMSPIEL: earned scrap checkpoint, pot/rope pickup, full inventory, native item selection/use, both XP awards and PRZEPASC exit passed');
@@ -106,6 +111,7 @@ module.exports = async function verifyDomspiel(runtime, checkpoint) {
             assert.equal(cliff.get('ANNOBJECT1').GETEVENTNAME(), `STATE${scrap}`);
         }
         assert.deepEqual(cliff.calls, [['ADDEXP', 30]], 'Completing the trap must award XP exactly once');
+        assert.equal(savedXp(cliff), initialXp + 50, 'The native rescue reward must accumulate on the persisted item-use XP');
         // Inspect the real cross-room save, without seeding the prisoner's rescued state.
         const database = cliff.get('DBTEMPOBJ');
         database.REMOVEALL(); await database.LOAD('$COMMON\\DOMSPIEL0.DTA');

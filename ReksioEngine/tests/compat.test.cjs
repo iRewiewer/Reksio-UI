@@ -585,6 +585,47 @@ test('Only Magicienii Przepasc skips its absent first-visit dialogue and retains
     }
 });
 
+test('Magicienii university rooms preserve authored first-visit handling instead of loading absent WST0', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const source = 'BEHINITSCRIPT:CODE={BEHLOADSEQARR^RUN("WST0_BEZBURDIAL13");}';
+    for (const name of ['guldryk', 'holglowny', 'korytarz']) {
+        const file = `dane/game/przygoda/arcade/${name}.cnv`;
+        const repaired = patchMagicieniiSource(file, source);
+        assert.equal(repaired, source + '\nOBJECT=BFITMP1023\nBFITMP1023:TYPE=BEHAVIOUR\n' +
+            'BFITMP1023:CODE={SOBJECT|IPARAM0^SET(1);BEHUPDATEOBJECTS^RUN();}\n');
+        assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    }
+    for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'other/guldryk.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
+test('Magicienii classroom and corridor clicks skip only their absent generic arrival cues', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    for (const [name, source] of [
+        ['guldryk', 'BEHCLICK_MANEKIN:CODE={BEHSELECTOBJS^RUN("MANEKIN");}'],
+        ['korytarz', 'BEHCLICK_DRZWI_GULDRYK:CODE={BEHTOGGLEDOOR^RUN(3);}'],
+    ]) {
+        const file = `dane/game/przygoda/arcade/${name}.cnv`;
+        const repaired = patchMagicieniiSource(file, source);
+        assert.ok(repaired.startsWith(source.replace('CODE={', 'CODE={VARSLASTFOCUS^SET("NULL");')));
+        assert.equal(patchMagicieniiSource(file, repaired), repaired);
+        assert.equal(patchMagicieniiSource(`other/${name}.cnv`, source), source);
+    }
+});
+
+test('Only Magicienii adventure magic entry drops redundant native redraw calls and preserves its capture', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/arcade.cnv';
+    const source = 'BEHGOTOMAGIC:CODE={GRPHIDE^HIDE();CANVASOBSERVER^REDRAW();CANVASOBSERVER^SAVE("ZOOM.IMG",2,2,210,250,610,550);' +
+        'GRPHIDE^SHOW();CANVASOBSERVER^REDRAW();CANVASOBSERVER^REFRESH();}\nOTHER:CODE={CANVASOBSERVER^REDRAW();}';
+    const expected = source.replaceAll('GRPHIDE^HIDE();CANVASOBSERVER^REDRAW();', 'GRPHIDE^HIDE();')
+        .replaceAll('GRPHIDE^SHOW();CANVASOBSERVER^REDRAW();', 'GRPHIDE^SHOW();');
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    assert.equal(patchMagicieniiSource('other/arcade.cnv', source), source);
+});
+
 test('Magicienii repairs misspelled alchemy image priorities only in that source file', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const source = 'IMG_EXIT_STD^SETPTIORITY(610);IMG_EXIT_GLOW^SETPTIORITY(610);IMG_EXIT_CLICK^SETPTIORITY(610);';

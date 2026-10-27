@@ -125,12 +125,25 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         // DEFAULT hotspots store their walking targets in image positions, not event offsets.
         return source.replaceAll('VARITEMP1^SET(*VARSTEMP0^GETCURRFRAMEPOSX());VARITEMP2^SET(*VARSTEMP0^GETCURRFRAMEPOSY());',
             'VARITEMP1^SET(*VARSTEMP0^GETPOSITIONX());VARITEMP2^SET(*VARSTEMP0^GETPOSITIONY());')
+            // Browser SAVE renders the current stage itself; the native pre/post REDRAW calls are unnecessary.
+            .replace(/^BEHGOTOMAGIC:CODE=\{[^\r\n]*/gm, line => line.replaceAll('CANVASOBSERVER^REDRAW();', ''))
     }
     if (filename === 'dane/game/przygoda/arcade/alchemy.cnv') {
         return source.replaceAll('^SETPTIORITY(', '^SETPRIORITY(')
     }
-    if (filename === 'dane/game/przygoda/arcade/przepasc.cnv' && !source.includes('OBJECT=BFITMP1023')) {
-        // This room ships no WST0.ARR intro; retain its visit flag and normal arrival movement.
+    if (filename === 'dane/game/przygoda/arcade/guldryk.cnv') {
+        // The mannequin has no generic arrival cue, including while its briefing gate is still locked.
+        source = source.replaceAll('BEHCLICK_MANEKIN:CODE={BEHSELECTOBJS',
+            'BEHCLICK_MANEKIN:CODE={VARSLASTFOCUS^SET("NULL");BEHSELECTOBJS')
+    }
+    if (filename === 'dane/game/przygoda/arcade/korytarz.cnv') {
+        // Opening this door is its complete interaction; DRZWI_GULDRYK.ARR does not exist.
+        source = source.replaceAll('BEHCLICK_DRZWI_GULDRYK:CODE={BEHTOGGLEDOOR',
+            'BEHCLICK_DRZWI_GULDRYK:CODE={VARSLASTFOCUS^SET("NULL");BEHTOGGLEDOOR')
+    }
+    if (['przepasc', 'guldryk', 'holglowny', 'korytarz'].some(name => filename === `dane/game/przygoda/arcade/${name}.cnv`) &&
+        !source.includes('OBJECT=BFITMP1023')) {
+        // These rooms ship no WST0.ARR; keep the visit save and any room-owned introduction.
         return source + '\nOBJECT=BFITMP1023\nBFITMP1023:TYPE=BEHAVIOUR\n' +
             'BFITMP1023:CODE={SOBJECT|IPARAM0^SET(1);BEHUPDATEOBJECTS^RUN();}\n'
     }

@@ -11,8 +11,9 @@ function getAdventureFactory(runtime) {
     };
     const create = async (options = {}) => {
         const room = options.room ?? 'Piklibia', roomKey = room.toUpperCase();
-        const dialogs = roomKey === 'DIALOGS', folder = dialogs ? 'dialogs' : 'arcade';
-        const fixture = dialogs ? await createArcadeFixture('DIALOGS', 'Dialogs', 'Dialogs.cnv') :
+        const dialogs = roomKey === 'DIALOGS', choice = roomKey === 'CHOICE';
+        const folder = dialogs ? 'dialogs' : choice ? 'choice' : 'arcade';
+        const fixture = dialogs || choice ? await createArcadeFixture(roomKey, room, `${room}.cnv`) :
             await createArcadeFixture('ARCADE', 'Arcade', 'Arcade.cnv', `${room}.cnv`);
         const { engine, parent, scope, defs, get } = fixture;
         const memory = new Map(options.files?.map(([name, data]) => [name, data.slice(0)]));
@@ -88,12 +89,14 @@ function getAdventureFactory(runtime) {
                 ['G_SARCADEOBJECTS', 'STRING', roomKey], ['G_SLASTOBJECTS', 'STRING', options.previous ?? 'PIKMIOT'],
                 ['G_ISUCCESS', 'INTEGER', options.success ?? 0], ['G_IGAMESLOT', 'INTEGER', 0],
                 ['G_SDIALOGCHARACTER', 'STRING', options.character ?? 'BUREKTOR'], ['G_SDIALOGRETURN', 'STRING', 'BUREKTOR'],
+                ['S_IMAGICFIGHTER', 'INTEGER', 0], ['S_SMAGICPLACE', 'STRING', ''],
+                ['S_SLIMBORETURN', 'STRING', ''],
             ]) scope.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name, VALUE: value }));
             const menu = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_MENU' });
             menu.ADDEXP = value => calls.push(['ADDEXP', value]); scope.set(menu.name, menu);
             const card = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_CARD' });
             card.LOAD = () => calls.push(['CARD_LOAD']); scope.set(card.name, card);
-            if (!dialogs) {
+            if (!dialogs && !choice) {
                 await get('VARSCURRARCADE').SET(`$COMMON\\${roomKey}0.DTA`);
                 await get('VARSCURRITEMS').SET('$COMMON\\ITEMS0.DTA');
                 await get('DBOBJECTS').LOAD(`$COMMON\\${roomKey}0.DTA`);
@@ -101,7 +104,7 @@ function getAdventureFactory(runtime) {
             }
             // Optional seed data represents persisted state on entry, never post-initialization success.
             await options.seed?.({ ...fixture, memory }); saves.length = 0; calls.length = 0;
-            if (options.initialize !== false && !dialogs) {
+            if (options.initialize !== false && !dialogs && !choice) {
                 await get('VARINO').SET(0);
                 for (let index = 0; index < get('DBOBJECTS').GETROWSNO(); index++) {
                     await get('BEHSELECTOBJ').RUN(index);
