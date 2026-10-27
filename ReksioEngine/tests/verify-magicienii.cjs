@@ -1198,8 +1198,13 @@ async function verifyMazeFirstRoute() {
 }
 
 async function verifyMazeRescueRoute() {
-    await require('./verify-magicienii-maze-rescue.cjs')({ assets, createMazePuzzleFixture, load, Keyboard, Mouse,
-        Interpreter, RuntimeContext, Type, Animo, Sequence, constructors });
+    await require('./verify-magicienii-maze-route.cjs')({ assets, createMazePuzzleFixture, load, Keyboard, Mouse,
+        Interpreter, RuntimeContext, Type, Animo, Sequence, constructors }, 1);
+}
+
+async function verifyMazeCardRoute() {
+    await require('./verify-magicienii-maze-route.cjs')({ assets, createMazePuzzleFixture, load, Keyboard, Mouse,
+        Interpreter, RuntimeContext, Type, Animo, Sequence, constructors }, 2);
 }
 
 async function verifyMazeSpellControls() {
@@ -3226,6 +3231,7 @@ async function main() {
     await verifyMazePuzzleInitialization();
     await verifyMazeFirstRoute();
     await verifyMazeRescueRoute();
+    await verifyMazeCardRoute();
     await verifyMazeSpellControls();
     await verifyMazeEnemySpellHits();
     await verifyMazeRecovery();

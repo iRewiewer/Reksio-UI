@@ -1,12 +1,14 @@
 const assert = require('node:assert/strict');
 
-module.exports = async function verifyMazeRescueRoute(runtime) {
+module.exports = async function verifyMazeRoute(runtime, level) {
+    assert.ok(level === 1 || level === 2);
+    const rescue = level === 1;
     const { assets, createMazePuzzleFixture, load, Keyboard, Mouse, Interpreter, RuntimeContext,
         Type, Animo, Sequence, constructors } = runtime;
-    const recording = require('./fixtures/magicienii-maze-rescue.json');
+    const recording = rescue ? require('./fixtures/magicienii-maze-rescue.json') : require('./fixtures/magicienii-maze-card.json');
     const previousWindow = globalThis.window;
     globalThis.window = new EventTarget();
-    const { engine, parent, scope, defs, get, stage, backgrounds, reads } = await createMazePuzzleFixture(1, true);
+    const { engine, parent, scope, defs, get, stage, backgrounds, reads } = await createMazePuzzleFixture(level, true);
     const assetLoader = load('filesystem/assetsLoader.ts'), previousSound = assetLoader.loadSound;
     const voices = [], audio = [], loaded = new Set(), routes = [], screenshots = [];
     let elapsed = 0, waypoints = 0, drawn = 0;
@@ -65,8 +67,8 @@ module.exports = async function verifyMazeRescueRoute(runtime) {
             if (voices.length) voices.shift()();
             for (const object of scope.objects) await object.tick(1000 / 30);
             assert.ok(get('VARREXZYCIA').value > 0 && get('VARKRETZYCIA').value > 0,
-                `Both heroes must survive rescue frame ${elapsed}`);
-            assert.deepEqual(routes, [], 'Normal rescue inputs must not enter a failure/restart route');
+                `Both heroes must survive maze ${level} frame ${elapsed}`);
+            assert.deepEqual(routes, [], 'Normal maze inputs must not enter a failure/restart route');
         };
         const draw = async spell => {
             let x = 400, y = 300;
@@ -83,7 +85,7 @@ module.exports = async function verifyMazeRescueRoute(runtime) {
             assert.equal(get('VARPLAYERSPELLTYPE').value, spell, 'Recorded mouse strokes must arm the learned spell');
             drawn++;
         };
-        await sequence.PLAY('ENTRE_LAB1');
+        await sequence.PLAY(`ENTRE_LAB${level}`);
         // This is a native-input transcript, not saved state: never write positions, health or rescue flags.
         for (const [frame, command, ...args] of recording.inputs) {
             assert.ok(frame >= elapsed && frame <= recording.frames);
@@ -100,28 +102,48 @@ module.exports = async function verifyMazeRescueRoute(runtime) {
             } else if (command === 'at') {
                 const [number, x, y] = args, actor = get(`ANNPLAYER${number - 1}`);
                 assert.equal(get('VARPLAYERNAME').value, actor.name);
-                assert.deepEqual([actor.GETCENTERX(), actor.GETCENTERY()], [x, y], `Rescue waypoint ${++waypoints}`);
+                assert.deepEqual([actor.GETCENTERX(), actor.GETCENTERY()], [x, y], `Maze ${level} waypoint ${++waypoints}`);
                 assert.notEqual(actor.GETEVENTNAME(), 'PRISONER');
-            } else assert.fail(`Unknown rescue input: ${command}`);
+                if (!rescue && number === 1 && x === 580 && y === 500) {
+                    assert.equal(get('ANNBTNMASK_29').GETCFRAMEINEVENT(), 1,
+                        'The original pressure plate must open the card chamber while Rex holds it');
+                }
+                if (!rescue && number === 2 && x === 660 && y === 460) {
+                    assert.equal(get('VARITEM').value, 1, 'Kretes must collect the card through its native hotspot');
+                    assert.equal(get('G_ISUCCESS').value, 1);
+                    assert.equal(get('ANNITEM').ISVISIBLE(), false);
+                    assert.equal(get('ANNBTN_28').GETPRIORITY(), 0);
+                }
+            } else assert.fail(`Unknown maze input: ${command}`);
         }
         while (elapsed < recording.frames) await step();
         assert.deepEqual(get('ARRAYPLAYERS').value.map(name => [get(name).GETCENTERX(), get(name).GETCENTERY()]),
-            [[380, 100], [140, 100], [180, 100], [100, 100], [60, 100], [340, 100], [220, 100], [300, 100], [260, 100]],
-            'Both heroes and all seven prisoners must reach the original exit through ordinary controls');
-        assert.equal(get('G_ISUCCESS').value, 1, 'The original all-prisoners callback must award success');
+            rescue ? [[380, 100], [140, 100], [180, 100], [100, 100], [60, 100], [340, 100], [220, 100], [300, 100], [260, 100]]
+                : [[60, 100], [100, 100]],
+            'Every required character must reach the original exit through ordinary controls');
+        assert.equal(get('G_ISUCCESS').value, 1, 'The original objective callback must award success');
         assert.equal(get('BTNEXIT').logic.enabled, true);
         assert.deepEqual([get('VARREXZYCIA').value, get('VARKRETZYCIA').value], recording.health);
-        assert.ok(audio.includes('wavs/krasnal_k289.wav'), 'The original completion dialogue must play');
-        assert.ok(reads.includes('wavs/kretes_k289.wav'), 'The installed rescue voice must load through the compatibility fallback');
+        if (rescue) {
+            assert.ok(audio.includes('wavs/krasnal_k289.wav'), 'The original completion dialogue must play');
+            assert.ok(reads.includes('wavs/kretes_k289.wav'), 'The installed rescue voice must load through the compatibility fallback');
+        } else {
+            assert.equal(get('VARITEM').value, 1, 'The card must remain collected throughout the return route');
+            assert.ok(audio.includes('wavs/kretes_d049.wav'), 'The original card-pickup dialogue must play');
+            assert.equal(get('ANNITEM').ISVISIBLE(), false);
+            assert.equal(get('ANNBTNMASK_29').GETCFRAMEINEVENT(), 0, 'Leaving the plate must close the chamber again');
+            assert.ok(get('ANNBTN').clones.filter(plate => plate.GETCLONEINDEX() <= 26).every(plate => plate.GETPRIORITY() === 0),
+                'Kretes must clear all 26 permanent gates through the original plate callbacks');
+        }
         const button = get('BTNEXIT'), sprite = get(button.definition.GFXSTANDARD.objectName).getRenderObject();
         for (const event of ['pointerover', 'pointerdown', 'pointerup']) sprite.emit(event);
         await button.tick();
-        assert.deepEqual(routes, ['ARCADE']); assert.equal(get('G_SARCADEOBJECTS').value, 'CALINECZKA');
+        assert.deepEqual(routes, ['ARCADE']); assert.equal(get('G_SARCADEOBJECTS').value, rescue ? 'CALINECZKA' : 'PIKLIBIA');
         assert.equal(screenshots.length, 1);
-        console.log(`MAZE 1 RESCUE: ${waypoints} natural-input waypoints, ${drawn} drawn spells, all seven prisoners, live guards, pressure hand-offs, completion voice and original story exit passed`);
+        console.log(`MAZE ${level} ${rescue ? 'RESCUE' : 'CARD'}: ${waypoints} natural-input waypoints, ${drawn} drawn spells, ${rescue ? 'all seven prisoners' : 'all 26 gates and card collection/return'}, live guards, pressure hand-offs, original dialogue and story exit passed`);
     } finally {
         assetLoader.loadSound = previousSound;
-        assert.deepEqual(engine.scopeManager.destroy(), [], 'Maze rescue cleanup'); assert.equal(stage.children.length, 0);
+        assert.deepEqual(engine.scopeManager.destroy(), [], 'Maze route cleanup'); assert.equal(stage.children.length, 0);
         backgrounds.forEach(texture => texture.destroy(true));
         if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
     }
