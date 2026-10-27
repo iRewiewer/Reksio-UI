@@ -21,6 +21,7 @@ export class Button extends Type<ButtonDefinition> {
     private draggingPosition: Point | null = null
     private readonly onPointerMoveHandler
     private readonly onPointerUpHandler
+    private readonly onPointerDownHandler
 
     private gfxStandard: Image | Animo | null = null
     private gfxOnClick: Image | Animo | null = null
@@ -36,6 +37,9 @@ export class Button extends Type<ButtonDefinition> {
         this.logic = new ButtonLogicComponent(this.onStateChange.bind(this))
         this.onPointerMoveHandler = this.onPointerMove.bind(this)
         this.onPointerUpHandler = this.onPointerUp.bind(this)
+        this.onPointerDownHandler = (event: FederatedPointerEvent) => {
+            this.lastMousePosition.set(Math.floor(event.screen.x), Math.floor(event.screen.y))
+        }
     }
 
     init() {
@@ -138,6 +142,13 @@ export class Button extends Type<ButtonDefinition> {
     }
 
     destroy() {
+        if (this.engine.compat.buttonStateGraphics) {
+            this.engine.app.stage.off('pointermove', this.onPointerMoveHandler)
+            this.engine.app.stage.off('pointerup', this.onPointerUpHandler)
+            this.draggingActive = false
+            this.draggingEnded = false
+            this.draggingPosition = null
+        }
         if (this.interactArea) {
             this.logic.unregisterInteractive(this.interactArea)
             this.engine.rendering.removeFromStage(this.interactArea)
@@ -205,7 +216,10 @@ export class Button extends Type<ButtonDefinition> {
 
     private async onStateChange(prevState: State, event: Event, state: State) {
         this.engine.diagnostics.buttonState(this, event, prevState, state)
-        if (this.draggingActive) return
+        if (this.draggingActive) {
+            if (this.engine.compat.buttonStateGraphics && event === Event.UP) this.onPointerUp()
+            else return
+        }
         this.updateGraphics(state)
 
         if (event == Event.ENABLE) {
@@ -234,12 +248,24 @@ export class Button extends Type<ButtonDefinition> {
             if (this.definition.DRAGGABLE) {
                 const renderObject = this.gfxStandard?.getRenderObject()
                 assert(renderObject)
+                const dragBounds = this.engine.compat.buttonStateGraphics ? renderObject.getBounds().clone() : null
 
                 this.originalPriority = renderObject.zIndex
                 this.gfxStandard?.SETPRIORITY(99999999)
                 await this.callbacks.run('ONSTARTDRAGGING')
                 this.engine.app.stage.on('pointerup', this.onPointerUpHandler)
-                if (this.callbacks.has('ONDRAGGING')) {
+                if (this.engine.compat.buttonStateGraphics) {
+                    // Anchor/frame changes in ONSTARTDRAGGING must not move the grabbed graphic away.
+                    await this.gfxStandard?.MOVE(0, 0)
+                    const current = this.gfxStandard?.getRenderObject()?.getBounds()
+                    if (dragBounds && current) await this.gfxStandard?.MOVE(
+                        dragBounds.x + dragBounds.width / 2 - current.x - current.width / 2,
+                        dragBounds.y + dragBounds.height / 2 - current.y - current.height / 2
+                    )
+                    this.draggingPosition = this.lastMousePosition.clone()
+                    this.draggingActive = true
+                }
+                if (this.engine.compat.buttonStateGraphics || this.callbacks.has('ONDRAGGING')) {
                     this.engine.app.stage.on('pointermove', this.onPointerMoveHandler)
                 }
             }
@@ -284,8 +310,10 @@ export class Button extends Type<ButtonDefinition> {
         }
     }
 
-    private onPointerUp(event: FederatedPointerEvent) {
+    private onPointerUp(event?: FederatedPointerEvent) {
         if (this.draggingActive) {
+            // A moved or hidden drag source may miss PIXI's pointerupoutside event.
+            if (this.engine.compat.buttonStateGraphics) this.logic.releasePointer()
             this.draggingActive = false
             this.draggingEnded = true
             this.draggingPosition = null
@@ -347,14 +375,19 @@ export class Button extends Type<ButtonDefinition> {
     @method()
     SETSTD(graphicObjectName: string, removeFromCanvas: boolean = false, onBoundingBox: boolean = false) {
         if (!this.engine.compat.modernScripts) throw new NotImplementedError()
-        const graphic = this.getObject(graphicObjectName)
-        assert(graphic instanceof Image || graphic instanceof Animo, 'button graphic should be an image or animation')
+        const graphic = this.getObject<Image | Animo>(graphicObjectName)
+        assert(
+            graphic instanceof Image || graphic instanceof Animo ||
+                (this.engine.compat.buttonStateGraphics && graphicObjectName === 'NULL' && graphic === null),
+            'button graphic should be an image or animation'
+        )
         if (this.gfxStandard) {
             this.unregisterInteractive(this.gfxStandard)
             if (removeFromCanvas) this.gfxStandard.HIDE()
         }
         this.gfxStandard = graphic
         this.prepareGraphic(graphic)
+        if (!graphic) return
         if (this.logic.enabled && !this.rect) this.registerInteractive(graphic)
         const sprite = graphic.getRenderObject()
         if (sprite) sprite.checkPixelPerfect = !onBoundingBox
@@ -391,6 +424,10 @@ export class Button extends Type<ButtonDefinition> {
         assert(renderObject !== null)
 
         this.logic.registerInteractive(renderObject)
+        if (this.engine.compat.buttonStateGraphics && this.definition.DRAGGABLE) {
+            renderObject.off('pointerdown', this.onPointerDownHandler)
+            renderObject.on('pointerdown', this.onPointerDownHandler)
+        }
 
         renderObject.checkPixelPerfect = true
         if (object instanceof Image) {
@@ -403,6 +440,7 @@ export class Button extends Type<ButtonDefinition> {
         assert(renderObject !== null)
 
         this.logic.unregisterInteractive(renderObject)
+        if (this.engine.compat.buttonStateGraphics) renderObject.off('pointerdown', this.onPointerDownHandler)
 
         renderObject.checkPixelPerfect = true
         if (object instanceof Image) {

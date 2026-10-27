@@ -1001,6 +1001,111 @@ async function verifyFredRecovery() {
     console.log('FRED RECOVERY: original failure/restart sequences, actor/input freeze and fresh-scene requests passed');
 }
 
+async function verifyCupsPuzzle() {
+    const assetLoader = load('filesystem/assetsLoader.ts'), previousLoadSound = assetLoader.loadSound;
+    const voices = [], routes = [], screenshots = [];
+    assetLoader.loadSound = async () => ({ play: options => {
+        const instance = { isPlaying: true, stop() { this.isPlaying = false; }, pause() {}, resume() {} };
+        voices.push(() => { instance.isPlaying = false; options?.onEnd?.(); }); return instance;
+    } });
+    const { engine, parent, scope, defs, get } = await createArcadeFixture('KUBKI', 'Kubki', 'Kubki.cnv');
+    const scenePath = 'dane/game/przygoda/kubki', stage = engine.app.stage;
+    parent.getRelativePath = name => normalizePath(name.startsWith('$') ? name.slice(1) : `${scenePath}/${name}`);
+    engine.resolvePath = async (name, base = scenePath) => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
+    engine.filesystem = new Filesystem({
+        hasFile: name => fs.existsSync(path.join(assets, name)), registerLogicalFilenames() {},
+        getRawFile: async name => bytes(path.join(assets, name)),
+    }, { get: async () => null, has: async () => false }, engine.compat);
+    engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
+    engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
+    engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+    try {
+        for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
+            const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+            if (actor instanceof Animo) actor.loadSfx = async () => {};
+            scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+        }
+        for (const def of Object.values(defs).filter(def => def.TYPE === 'BUTTON')) {
+            const button = new Button(engine, parent, def);
+            scope.set(button.name, button); button.init(); await button.applyDefaults();
+        }
+        const mouse = new Mouse(engine, parent, defs.MOUSE); scope.set(mouse.name, mouse);
+        const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+        episode.GOTO = scene => routes.push(scene); scope.set(episode.name, episode);
+        const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+        screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+        for (const name of ['G_SLASTOBJECTS', 'G_SARCADEOBJECTS']) scope.set(name,
+            new constructors.STRING(engine, parent, { TYPE: 'STRING', NAME: name, VALUE: 'KUBKI' }));
+        const pixel = new Animo(engine, parent, { TYPE: 'ANIMO', NAME: '__CUPS_PIXEL__',
+            FILENAME: '$\\COMMON\\PIXEL.ANN', TOCANVAS: true, VISIBLE: true });
+        pixel.loadSfx = async () => {}; scope.set(pixel.name, pixel);
+        const sequence = new Sequence(engine, parent, defs.SEQKUBKI);
+        sequence.getAnimo = async filename => { assert.equal(filename, '$\\COMMON\\PIXEL.ANN'); return pixel; };
+        scope.set(sequence.name, sequence);
+        await pixel.init(); await pixel.applyDefaults(); await pixel.ready(); await sequence.init();
+        const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
+        const start = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'ANNKUBEK0');
+        assert.ok(start > 0);
+        await new Interpreter(new RuntimeContext(engine, null, code)).execute(ast.slice(start));
+        const step = async () => { for (const object of scope.objects) await object.tick(1000 / 60); };
+        const finishVoice = async () => {
+            for (let tick = 0; tick < 240 && sequence.ISPLAYING(); tick++) {
+                if (voices.length) voices.shift()(); await step();
+            }
+            assert.equal(sequence.ISPLAYING(), false);
+        };
+        await finishVoice();
+        const move = async point => {
+            const event = { screen: point, button: 0 };
+            mouse.onMouseMove(event); stage.emit('pointermove', event); await step();
+        };
+        const center = name => {
+            const sprite = get(name).getRenderObject(), bounds = sprite.getBounds();
+            return { x: Math.floor(bounds.x + bounds.width / 2), y: Math.floor(bounds.y + bounds.height / 2) };
+        };
+        const drag = async (buttonName, from, to) => {
+            await move(from);
+            const button = get(buttonName), graphic = get(button.GETSTD()), sprite = graphic?.getRenderObject();
+            assert.ok(sprite, `${buttonName} must have a real graphic at drag start`);
+            assert.ok(sprite.containsPoint(from, true), `${buttonName} drag must start on a real opaque pixel`);
+            const before = sprite.getBounds().clone();
+            sprite.emit('pointerover', { screen: from }); sprite.emit('pointerdown', { screen: from }); await step();
+            assert.equal(get('VARDRAGGING').value, 1);
+            for (let part = 1; part <= 4; part++) {
+                const pointer = { x: Math.round(from.x + (to.x - from.x) * part / 4),
+                    y: Math.round(from.y + (to.y - from.y) * part / 4) };
+                await move(pointer);
+                const bounds = sprite.getBounds();
+                assert.ok(Math.abs(bounds.x + bounds.width / 2 - before.x - before.width / 2 - pointer.x + from.x) < 1,
+                    `${buttonName} must stay under the pointer horizontally`);
+                assert.ok(Math.abs(bounds.y + bounds.height / 2 - before.y - before.height / 2 - pointer.y + from.y) < 1,
+                    `${buttonName} must stay under the pointer vertically`);
+            }
+            stage.emit('pointerup', { screen: to }); await step();
+            assert.equal(get('VARDRAGGING').value, 0);
+            assert.equal(stage.listenerCount('pointermove'), 0); assert.equal(stage.listenerCount('pointerup'), 0);
+        };
+        await move({ x: 780, y: 30 }); assert.equal(get('BTNKUBEK').GETSTD(), 'UNKNOWN');
+        await drag('BTNMONETA0', center('ANNMONETA0'), { x: 780, y: 30 });
+        assert.deepEqual(get('ARRAYMONETA0').value, [-1, -1], 'Invalid drops must return a coin to its start');
+        await drag('BTNKUBEK', center('ANNDRAGKUBEK0'), center('IMGFIELD1'));
+        assert.equal(get('ANNKUBEK0').GETFRAMENAME(), '0'); assert.equal(get('ANNKUBEK1').GETFRAMENAME(), '2');
+        await drag('BTNKUBEK', center('ANNDRAGKUBEK2'), center('IMGFIELD1'));
+        assert.equal(get('ANNKUBEK2').GETFRAMENAME(), '0'); assert.equal(get('ANNKUBEK1').GETFRAMENAME(), '3');
+        for (let coin = 0; coin < 3; coin++) {
+            await drag(`BTNMONETA${coin}`, center(`ANNMONETA${coin}`), center('IMGMONFIELD1'));
+            assert.deepEqual(get(`ARRAYMONETA${coin}`).value, [1, '3']);
+        }
+        assert.equal(sequence.ISPLAYING(), true, 'The original three-coins/three-cups guard must trigger success');
+        await finishVoice(); assert.deepEqual(routes, ['ARCADE']); assert.equal(screenshots.length, 1);
+        assert.equal(get('G_SLASTOBJECTS').value, 'KUBKI'); assert.equal(get('G_SARCADEOBJECTS').value, 'SEZAM');
+        console.log('CUPS: real mouse/button dragging, invalid-drop recovery, three nested cups, all three coins and SEZAM story return passed');
+    } finally {
+        assetLoader.loadSound = previousLoadSound;
+        assert.deepEqual(engine.scopeManager.destroy(), [], 'Cups cleanup'); assert.equal(stage.children.length, 0);
+    }
+}
+
 async function verifyBroomPhysics() {
     const { world, get, addMedia } = await createArcadeFixture('MIOTLY', 'miotly', 'Miotly.cnv');
     for (let index = 1; index <= 10; index++) addMedia(`ANNKURZ_${index}`);
@@ -1716,6 +1821,7 @@ async function main() {
     await verifyMazeRecovery();
     await verifyFredRoute();
     await verifyFredRecovery();
+    await verifyCupsPuzzle();
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();

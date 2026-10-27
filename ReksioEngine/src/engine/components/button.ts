@@ -137,6 +137,10 @@ export class ButtonLogicComponent {
     }
 
     private onMouseUp() {
+        this.releasePointer()
+    }
+
+    releasePointer() {
         this.eventsQueue.push(Event.UP)
     }
 

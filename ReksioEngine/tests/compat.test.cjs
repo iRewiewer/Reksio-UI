@@ -1327,6 +1327,84 @@ test('Other profiles keep image and dynamic button graphic calls unsupported', a
     }
 });
 
+test('Magicienii SETSTD NULL clears a button without hiding or retaining the old graphic listener', async () => {
+    for (const profile of ['magicienii', 'nemo', 'timpului']) {
+        const { engine, image, Button } = alchemyControls(profile);
+        const first = image('FIRST'), next = image('NEXT');
+        const button = new Button(engine, null, { TYPE: 'BUTTON', NAME: 'DRAG', ENABLE: true,
+            GFXSTANDARD: { objectName: 'FIRST' } });
+        button.init(); await button.applyDefaults();
+        assert.throws(() => button.SETSTD('MISSING'), /button graphic/);
+        if (profile !== 'magicienii') {
+            assert.throws(() => button.SETSTD('NULL'), /button graphic/);
+            button.destroy(); continue;
+        }
+        button.SETSTD('NULL', false);
+        assert.equal(first.sprite.visible, true); assert.equal(first.sprite.listenerCount('pointerdown'), 0);
+        assert.equal(button.GETSTD(), 'UNKNOWN');
+        button.SETSTD('NEXT'); assert.equal(next.sprite.listenerCount('pointerdown'), 1);
+        button.SETSTD('NULL', true); assert.equal(next.sprite.visible, false);
+        assert.equal(next.sprite.listenerCount('pointerdown'), 0); button.destroy();
+    }
+});
+
+test('Magicienii draggable buttons move on the first pointer delta without an ONDRAGGING handler', async () => {
+    const { engine, image, Button } = alchemyControls();
+    const graphic = image('COIN'), stage = engine.app.stage;
+    graphic.SETPRIORITY = priority => { graphic.sprite.zIndex = priority; };
+    graphic.sprite.position.set(100, 100);
+    const button = new Button(engine, null, { TYPE: 'BUTTON', NAME: 'DRAG', ENABLE: true,
+        DRAGGABLE: true, GFXSTANDARD: { objectName: 'COIN' } });
+    const calls = []; button.callbacks.run = async name => calls.push(name);
+    button.init(); await button.applyDefaults(); calls.length = 0;
+    const pointer = (x, y) => ({ screen: { x, y } });
+    graphic.sprite.emit('pointerdown', pointer(100, 100)); await button.tick();
+    assert.equal(stage.listenerCount('pointermove'), 1);
+    stage.emit('pointermove', pointer(160, 170)); await button.tick();
+    assert.deepEqual([graphic.sprite.x, graphic.sprite.y], [160, 170]);
+    stage.emit('pointerup', pointer(160, 170)); await button.tick();
+    assert.ok(calls.includes('ONSTARTDRAGGING')); assert.ok(calls.includes('ONENDDRAGGING'));
+    assert.equal(stage.listenerCount('pointermove'), 0); assert.equal(stage.listenerCount('pointerup'), 0);
+    graphic.sprite.emit('pointerdown', pointer(160, 170)); await button.tick();
+    assert.equal(stage.listenerCount('pointermove'), 1, 'A stage-only release must allow the next drag');
+    button.destroy(); await button.tick();
+    assert.equal(stage.listenerCount('pointermove'), 0); assert.equal(stage.listenerCount('pointerup'), 0);
+    assert.equal(graphic.sprite.listenerCount('pointerdown'), 0);
+});
+
+test('Ordinary drag movement remains unchanged in all other game profiles', async () => {
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        const { engine, image, Button } = alchemyControls(profile);
+        const graphic = image('COIN'), stage = engine.app.stage;
+        graphic.SETPRIORITY = priority => { graphic.sprite.zIndex = priority; };
+        const button = new Button(engine, null, { TYPE: 'BUTTON', NAME: 'DRAG', ENABLE: true,
+            DRAGGABLE: true, GFXSTANDARD: { objectName: 'COIN' } });
+        button.init(); await button.applyDefaults();
+        graphic.sprite.emit('pointerdown', { screen: { x: 10, y: 20 } }); await button.tick();
+        assert.equal(stage.listenerCount('pointermove'), 0);
+        assert.equal(button.draggingActive, false);
+        button.destroy(); stage.removeAllListeners();
+    }
+});
+
+test('Magicienii finishes clicks released before drag setup has run', async () => {
+    const { engine, image, Button } = alchemyControls();
+    const graphic = image('COIN'), stage = engine.app.stage, calls = [];
+    graphic.SETPRIORITY = priority => { graphic.sprite.zIndex = priority; };
+    const button = new Button(engine, null, { TYPE: 'BUTTON', NAME: 'DRAG', ENABLE: true,
+        DRAGGABLE: true, GFXSTANDARD: { objectName: 'COIN' } });
+    button.callbacks.run = async name => calls.push(name);
+    button.init(); await button.applyDefaults(); calls.length = 0;
+    for (let click = 0; click < 2; click++) {
+        graphic.sprite.emit('pointerdown', { screen: { x: 10, y: 20 } });
+        graphic.sprite.emit('pointerup', { screen: { x: 10, y: 20 } }); await button.tick();
+        assert.equal(button.draggingActive, false);
+        assert.equal(stage.listenerCount('pointermove'), 0); assert.equal(stage.listenerCount('pointerup'), 0);
+    }
+    assert.equal(calls.filter(name => name === 'ONENDDRAGGING').length, 2);
+    assert.equal(calls.filter(name => name === 'ONRELEASED').length, 2); button.destroy();
+});
+
 test('IMAGE schema keeps alchemy focus and click callbacks', () => {
     const logger = { warn: message => assert.fail(message) };
     const common = loadModule('fileFormats/common/index.ts', { '../logger': { logger } });
