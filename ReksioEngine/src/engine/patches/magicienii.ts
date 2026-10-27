@@ -124,6 +124,9 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         for (const index of ['_I_', 'ARRKNIGHTFRAME^GET(VARITER)', 'VARITEMP1']) {
             source = source.replaceAll(`["ARRFIELDS_"+${index}]`, `["ARRFIELDS_"+[${index}+1]]`)
         }
+        // This board stores node coordinates on its images, not its zero-offset event frames.
+        source = source.replaceAll('ANNPOLA^GETCURRFRAMEPOSX()', 'ANNPOLA^GETPOSITIONX()')
+            .replaceAll('ANNPOLA^GETCURRFRAMEPOSY()', 'ANNPOLA^GETPOSITIONY()')
         // The card is not attached to a room object; an omitted parent becomes switch zero.
         return source.replaceAll('BEHADDITEM^RUN("KARTA_BUT");', 'BEHADDITEM^RUN("KARTA_BUT",-1);')
     }

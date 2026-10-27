@@ -6,6 +6,7 @@ import { readSekWorld, SekPoint } from '../../fileFormats/sek'
 import { SekaiNavigation } from '../compat/sekaiNavigation'
 import { TimeMachinePhysics } from '../compat/timeMachinePhysics'
 import { createMagicieniiPhysics } from '../compat/magicieniiPhysics'
+import { MagicieniiPathCamera } from '../compat/magicieniiPathCamera'
 import type { TimeMachineVehiclePhysics } from '../compat/timeMachineVehiclePhysics'
 
 type WorldBody = {
@@ -39,6 +40,7 @@ export class World extends Type<WorldDefinition> {
     private paths = new Map<number, SekaiNavigation>()
     private physics: TimeMachinePhysics | TimeMachineVehiclePhysics | null = null
     private physicsElapsedMS = 0
+    private pathCamera: MagicieniiPathCamera | null = null
 
     async init() {
         if (this.usesPhysics(this.definition.FILENAME)) await this.LOAD(this.definition.FILENAME)
@@ -258,6 +260,7 @@ export class World extends Type<WorldDefinition> {
     MOVEOBJECTS() {
         this.ensurePathingEnabled()
         if (this.physics) return this.movePhysicsObjects()
+        if (this.pathCamera && this.started) return this.movePathCamera()
         return this.elapsedMS
     }
 
@@ -293,6 +296,11 @@ export class World extends Type<WorldDefinition> {
     SETBKGSIZE(x0: number, x1: number, y0: number, y1: number) {
         this.ensurePathingEnabled()
         this.physics?.setBackgroundSize(x0, x1, y0, y1)
+        if (this.engine.compat.magicieniiAssets && this.engine.currentScene?.name === 'ARCADE' &&
+            this.name === 'WPATH' && !this.physics) {
+            this.pathCamera ??= new MagicieniiPathCamera()
+            this.pathCamera.setBounds(x0, x1, y0, y1)
+        }
     }
 
     @method()
@@ -306,6 +314,7 @@ export class World extends Type<WorldDefinition> {
     SETMOVEFLAGS(x: number, y: number) {
         this.ensurePathingEnabled()
         this.physics?.setMoveFlags(!!x, !!y)
+        this.pathCamera?.setMoveFlags(!!x, !!y)
     }
 
     @method()
@@ -328,11 +337,14 @@ export class World extends Type<WorldDefinition> {
         targetY: number,
         targetZ: number,
         force?: boolean,
-        signal?: boolean
+        screenCoordinates?: boolean
     ) {
         this.ensurePathingEnabled()
         const body = this.getBody(id)
-        const target = { x: targetX, y: targetY, z: targetZ }
+        // The native seventh argument defaults to screen coordinates; hotspots pass FALSE.
+        const relative = this.pathCamera && screenCoordinates !== false
+        const target = { x: targetX + (relative ? this.backgroundX : 0),
+            y: targetY + (relative ? this.backgroundY : 0), z: targetZ }
         let route: SekPoint[] | null = [target]
         if (this.loadedFilename) {
             const toWorld = ({ x, y, z }: SekPoint) => ({ x: x - 400, y: 300 - y, z })
@@ -410,14 +422,14 @@ export class World extends Type<WorldDefinition> {
     @method()
     GETPOSITIONX(id: number) {
         this.ensurePathingEnabled()
-        const position = this.physics?.position(id).x ?? this.getBody(id).x
+        const position = this.physics?.position(id).x ?? this.getBody(id).x - (this.pathCamera ? this.backgroundX : 0)
         return this.engine.compat.integerWorldPositions ? Math.trunc(position) + 0 : position
     }
 
     @method()
     GETPOSITIONY(id: number) {
         this.ensurePathingEnabled()
-        const position = this.physics?.position(id).y ?? this.getBody(id).y
+        const position = this.physics?.position(id).y ?? this.getBody(id).y - (this.pathCamera ? this.backgroundY : 0)
         return this.engine.compat.integerWorldPositions ? Math.trunc(position) + 0 : position
     }
 
@@ -491,6 +503,16 @@ export class World extends Type<WorldDefinition> {
         this.bodies.delete(id)
     }
 
+    private async movePathCamera() {
+        const reference = this.refObjectId === null ? null : this.bodies.get(this.refObjectId)
+        if (!reference || !this.pathCamera) return this.elapsedMS
+        const camera = this.pathCamera.follow(reference.x, reference.y)
+        this.backgroundX = camera.x
+        this.backgroundY = camera.y
+        for (const body of this.bodies.values()) await this.syncLinkedAnimo(body)
+        return this.elapsedMS
+    }
+
     private async movePhysicsObjects() {
         if (!this.physics || !this.started) return 0
         const { elapsed, collisions } = this.physics.step(this.physicsElapsedMS)
@@ -535,7 +557,8 @@ export class World extends Type<WorldDefinition> {
 
         const linkedAnimo = this.engine.getObject<any>(body.linkedAnimoName, this.parentScope)
         if (linkedAnimo && typeof linkedAnimo.SETPOSITION === 'function') {
-            await linkedAnimo.SETPOSITION(body.x, body.y)
+            await linkedAnimo.SETPOSITION(body.x - (this.pathCamera ? this.backgroundX : 0),
+                body.y - (this.pathCamera ? this.backgroundY : 0))
         }
     }
 
@@ -550,8 +573,8 @@ export class World extends Type<WorldDefinition> {
             typeof linkedAnimo.GETPOSITIONX === 'function' &&
             typeof linkedAnimo.GETPOSITIONY === 'function'
         ) {
-            body.x = linkedAnimo.GETPOSITIONX()
-            body.y = linkedAnimo.GETPOSITIONY()
+            body.x = linkedAnimo.GETPOSITIONX() + (this.pathCamera ? this.backgroundX : 0)
+            body.y = linkedAnimo.GETPOSITIONY() + (this.pathCamera ? this.backgroundY : 0)
             body.targetX = body.x
             body.targetY = body.y
             body.positionInitialized = true

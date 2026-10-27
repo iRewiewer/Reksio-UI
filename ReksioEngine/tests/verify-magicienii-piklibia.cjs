@@ -2,9 +2,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 
-module.exports = async function verifyPiklibia(runtime) {
+function getPiklibiaFactory(runtime) {
     const { assets, createArcadeFixture, Filesystem, normalizePath, Database, Struct, Animo,
-        Type, constructors, serializeArray, deserializeArray } = runtime;
+        Type, constructors, serializeArray } = runtime;
     const bytes = filename => {
         const buffer = fs.readFileSync(path.join(assets, filename));
         return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
@@ -81,15 +81,23 @@ module.exports = async function verifyPiklibia(runtime) {
             await get('DBITEMS').LOAD('$COMMON\\ITEMS0.DTA');
             // Optional seed data represents persisted state on entry, never post-initialization success.
             await options.seed?.({ ...fixture, memory }); saves.length = 0; calls.length = 0;
-            await get('VARINO').SET(0);
-            for (let index = 0; index < get('DBOBJECTS').GETROWSNO(); index++) {
-                await get('BEHSELECTOBJ').RUN(index);
-                if (await get('SOBJECT').GETFIELD('TYPE').getValue() < 100) await get('BFITMP1051').RUN();
+            if (options.initialize !== false) {
+                await get('VARINO').SET(0);
+                for (let index = 0; index < get('DBOBJECTS').GETROWSNO(); index++) {
+                    await get('BEHSELECTOBJ').RUN(index);
+                    if (await get('SOBJECT').GETFIELD('TYPE').getValue() < 100) await get('BFITMP1051').RUN();
+                }
+                await get('BEHINITSCRIPT').RUN();
             }
-            await get('BEHINITSCRIPT').RUN();
             return { ...fixture, memory, saves, calls, missing, dispose };
         } catch (error) { dispose(); throw error; }
     };
+    return create;
+}
+
+module.exports = async function verifyPiklibia(runtime) {
+    const { serializeArray, deserializeArray } = runtime;
+    const create = getPiklibiaFactory(runtime);
     const roomField = async (fixture, index, field) => {
         await fixture.get('BEHSELECTOBJ').RUN(index);
         return fixture.get('SOBJECT').GETFIELD(field).getValue();
@@ -110,6 +118,11 @@ module.exports = async function verifyPiklibia(runtime) {
         for (let index = 0; index < frames.length; index++) {
             const expected = frames[index].name.split('-').map(Number).filter(node => node !== index);
             assert.deepEqual(get('ARRFIELDS').clones[index].value, expected, `Board node ${index} must retain every authored edge`);
+            const image = get('ANNPOLA').annFile.annImages[get('ANNPOLA').annFile.events[0].framesImageMapping[index]];
+            await get('BEHPLACEATFIELD').RUN(0, index);
+            assert.deepEqual([get('ARRKNIGHTX').GET(0), get('ARRKNIGHTY').GET(0)],
+                [image.positionX + frames[index].positionX, image.positionY + frames[index].positionY],
+                `Board node ${index} must use its actual image coordinates, not zero event offsets`);
         }
         // Component inputs deliberately exercise both ends of the original graph, including node zero.
         for (const [node, next] of [[0, 1], [229, 228]]) {
@@ -192,3 +205,5 @@ module.exports = async function verifyPiklibia(runtime) {
     } finally { existing.dispose(); }
     console.log('PIKLIBIA: all 230 graph nodes, both endpoint moves, 24 three-way switches, card/XP reward, persisted re-entry and duplicate/asked-question guards passed');
 };
+
+module.exports.createFixture = (runtime, options) => getPiklibiaFactory(runtime)(options);

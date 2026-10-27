@@ -55,6 +55,7 @@ const { TimeMachinePhysics } = loadModule('engine/compat/timeMachinePhysics.ts',
 const { createMagicieniiPhysics } = loadModule('engine/compat/magicieniiPhysics.ts', {
     './timeMachinePhysics': { TimeMachinePhysics },
 });
+const { MagicieniiPathCamera } = loadModule('engine/compat/magicieniiPathCamera.ts');
 const { TimeMachineVehiclePhysics } = loadModule('engine/compat/timeMachineVehiclePhysics.ts', {
     '@dimforge/rapier3d-compat': require('@dimforge/rapier3d-compat'), 'cannon-es': require('cannon-es'),
 });
@@ -551,6 +552,18 @@ test('Magicienii Piklibia maps zero-based board nodes to one-based array clones 
     const indices = ['_I_', 'ARRKNIGHTFRAME^GET(VARITER)', 'VARITEMP1'];
     const source = indices.map(index => `VARSTEMP0^SET(["ARRFIELDS_"+${index}]);`).join('');
     const expected = indices.map(index => `VARSTEMP0^SET(["ARRFIELDS_"+[${index}+1]]);`).join('');
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/alchemy.cnv', 'other/piklibia.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
+test('Only Piklibia reads board node positions from the positioned image instead of zero event offsets', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/piklibia.cnv';
+    const source = 'ANNPOLA^GETCURRFRAMEPOSX();ANNPOLA^GETCURRFRAMEPOSY();OTHER^GETCURRFRAMEPOSX();';
+    const expected = 'ANNPOLA^GETPOSITIONX();ANNPOLA^GETPOSITIONY();OTHER^GETCURRFRAMEPOSX();';
     assert.equal(patchMagicieniiSource(file, source), expected);
     assert.equal(patchMagicieniiSource(file, expected), expected);
     for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/alchemy.cnv', 'other/piklibia.cnv']) {
@@ -2296,7 +2309,47 @@ const { World } = loadModule('engine/types/world.ts', {
     '../compat/sekaiNavigation': { SekaiNavigation },
     '../compat/timeMachinePhysics': { TimeMachinePhysics },
     '../compat/magicieniiPhysics': { createMagicieniiPhysics },
+    '../compat/magicieniiPathCamera': { MagicieniiPathCamera },
     '../compat/timeMachineVehiclePhysics': { TimeMachineVehiclePhysics },
+});
+
+test('Only Magicienii adventure navigation scrolls its camera and converts screen destinations', async () => {
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        for (const [scene, name] of [['ARCADE', 'WPATH'], ['ARCADE', 'WORLD'], ['MAGIC', 'WPATH']]) {
+            const compat = createEngineCompat(profile), positions = [], signals = [];
+            const world = new World({ compat, currentScene: { name: scene },
+                getObject: () => ({ SETPOSITION: (x, y) => positions.push([x, y]), SIGNAL: value => signals.push(value) }),
+                diagnostics: { worldState() {} } });
+            world.name = name;
+            if (!compat.simpleWorldPathing) { assert.throws(() => world.SETBKGSIZE(0, 800, -300, 900)); continue; }
+            const enabled = profile === 'magicienii' && scene === 'ARCADE' && name === 'WPATH';
+            world.SETBKGSIZE(0, 800, -300, 900); world.SETREFOBJECT(100); world.SETMOVEFLAGS(0, 600);
+            await world.SETPOSITION(100, 200, 800, 0); world.LINK(100, 'ANNREX'); world.START();
+            await world.MOVEOBJECTS();
+            assert.equal(world.GETBKGPOSY(), enabled ? 300 : 0);
+            assert.equal(world.GETPOSITIONY(100), enabled ? 500 : 800);
+            if (enabled) assert.deepEqual(positions.at(-1), [200, 500]);
+            world.FINDPATH(100, 9000, 250, 200, 0, false);
+            assert.equal(world.bodies.get(100).targetY, enabled ? 500 : 200);
+            world.FINDPATH(100, 9000, 250, 200, 0, false, false);
+            assert.equal(world.bodies.get(100).targetY, 200, 'Explicit map destinations must not receive the camera twice');
+            await world.SETPOSITION(100, 200, -100, 0); await world.MOVEOBJECTS();
+            assert.equal(world.GETBKGPOSY(), enabled ? -300 : 0);
+            assert.equal(world.GETPOSITIONY(100), enabled ? 200 : -100);
+            world.STOP(); await world.SETPOSITION(100, 200, 800, 0); await world.MOVEOBJECTS();
+            assert.equal(world.GETBKGPOSY(), enabled ? -300 : 0, 'Stopped worlds must retain their camera');
+            assert.deepEqual(signals, []); world.destroy();
+        }
+    }
+});
+
+test('Magicienii adventure camera clamps horizontal and vertical maps independently', () => {
+    const camera = new MagicieniiPathCamera();
+    camera.setBounds(-500, 1300, -300, 900); camera.setMoveFlags(true, true);
+    assert.deepEqual(camera.follow(0, -1000), { x: -400, y: -300 });
+    assert.deepEqual(camera.follow(2000, 2000), { x: 500, y: 300 });
+    camera.setMoveFlags(false, false);
+    assert.deepEqual(camera.follow(2000, 2000), { x: 0, y: 0 });
 });
 
 test('Only Magicienii truncates script WORLD X/Y positions without changing solver precision', () => {

@@ -28,7 +28,7 @@ function load(name, bypass = false) {
     const module = { exports: {} };
     cache.set(name, module);
     const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
         transformers: scriptTransformer ? { before: [scriptTransformer] } : undefined,
     }).outputText;
     new Function('require', 'module', 'exports', code)((request) => {
@@ -216,6 +216,12 @@ async function createArcadeFixture(scene, folder, filename, overlay) {
 async function verifyPiklibia() {
     await require('./verify-magicienii-piklibia.cjs')({ assets, createArcadeFixture, Filesystem, normalizePath,
         Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray });
+}
+
+async function verifyPiklibiaLive() {
+    await require('./verify-magicienii-piklibia-live.cjs')({ assets, createArcadeFixture, Filesystem, normalizePath,
+        Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray, load,
+        CanvasObserver, Mouse, StaticFilter, Sequence });
 }
 
 async function verifyBarandalf() {
@@ -3238,6 +3244,7 @@ async function main() {
     await verifyMazeRescueRoute();
     await verifyMazeCardRoute();
     await verifyPiklibia();
+    await verifyPiklibiaLive();
     await verifyMazeSpellControls();
     await verifyMazeEnemySpellHits();
     await verifyMazeRecovery();
