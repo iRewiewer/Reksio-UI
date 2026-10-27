@@ -1292,6 +1292,9 @@ test('Magicienii frame selection uses native event indexes and event-zero fallba
 
 function transformFixture(profile) {
     const pixi = require('pixi.js');
+    const { AdvancedSprite } = loadModule('engine/rendering.ts', {
+        'pixi.js': pixi, './types': { DisplayType: FakeType }, '../common/errors': { assert: assert.ok },
+    });
     const { Animo } = loadModule('engine/types/animo.ts', {
         './index': { DisplayType: FakeType }, '../../common/errors': { assert: assert.ok }, 'pixi.js': pixi,
         '../components/button': {}, '../../filesystem/assetsLoader': {}, '../../filesystem/fileLoader': {},
@@ -1304,7 +1307,7 @@ function transformFixture(profile) {
     const actor = Object.create(Animo.prototype), engine = { compat: createEngineCompat(profile) };
     actor.engine = engine;
     const texture = new pixi.Texture(pixi.BaseTexture.fromBuffer(new Uint8Array(80 * 40 * 4), 80, 40));
-    const sprite = new pixi.Sprite(texture), parent = new pixi.Container();
+    const sprite = new AdvancedSprite(texture), parent = new pixi.Container();
     parent.position.set(10, 20); parent.addChild(sprite);
     Object.assign(actor, { sprite, positionX: 200, positionY: 300, positionOffsetX: 7,
         positionOffsetY: -3, anchorOffsetX: 47, anchorOffsetY: 17 });
@@ -1346,6 +1349,38 @@ test('Other profiles retain their existing animation center and rotation-filter 
         assert.deepEqual([sprite.anchor.x, sprite.anchor.y, sprite.angle], [.5, .5, 0]);
         parent.destroy({ children: true, texture: true, baseTexture: true });
     }
+});
+
+test('Magicienii ISAT checks hidden animation bounds and optional alpha with current transforms', () => {
+    const { actor, sprite, parent } = transformFixture('magicienii');
+    parent.position.set(0, 0); sprite.position.set(100, 200);
+    sprite.hitmap = new Uint8Array(80 * 40); sprite.hitmap[0] = 255;
+    sprite.hitmap[1] = 1; sprite.hitmap[80] = 255;
+    sprite.visible = false; sprite.checkPixelPerfect = true;
+    assert.equal(actor.ISAT(100, 200, true), true);
+    assert.equal(actor.ISAT(101, 200, true), true, 'Any nonzero alpha is a hit');
+    assert.equal(actor.ISAT(102, 200, true), false);
+    assert.equal(actor.ISAT(102, 200, false), true, 'Bounding-box queries ignore button pixel testing');
+    assert.equal(actor.ISAT(102, 200), true);
+    for (const [x, y] of [[99, 200], [100, 199], [180, 200], [100, 240]]) {
+        assert.equal(actor.ISAT(x, y, true), false, 'Half-open image edges must not wrap into another pixel row');
+        assert.equal(actor.ISAT(x, y, false), false);
+    }
+    sprite.position.set(500, 100);
+    assert.equal(actor.ISAT(100, 200, true), false);
+    assert.equal(actor.ISAT(500, 100, true), true, 'Unrendered position changes must refresh the transform');
+    parent.position.set(10, 20); parent.scale.set(2, 3);
+    sprite.anchor.set(.5, .5); sprite.scale.set(2, .5); sprite.angle = 90;
+    const point = sprite.toGlobal(new (require('pixi.js').Point)(-39.75, -19.75));
+    assert.equal(actor.ISAT(point.x, point.y, true), true);
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        actor.engine.compat = createEngineCompat(profile);
+        actor.__call = (method, args) => ({ method, args });
+        assert.deepEqual(actor.ISAT(100, 200, true), { method: 'ISAT', args: [100, 200, true] });
+    }
+    actor.engine.compat = createEngineCompat('magicienii'); actor.sprite = null;
+    assert.equal(actor.ISAT(0, 0, true), false);
+    parent.destroy({ children: true, texture: true, baseTexture: true });
 });
 
 test('Only Magicienii prioritizes named animation-frame callbacks over event callbacks', async () => {
@@ -2515,6 +2550,36 @@ test('Only Magicienii replaces every nonoverlapping literal substring and awaits
         await text.REPLACE('a', 'b');
         assert.equal(text.value, 'a');
         assert.deepEqual(calls, [['REPLACE', ['a', 'b']]]);
+    }
+});
+
+test('Only Magicienii CUT keeps the requested slice and treats nonpositive lengths as the remainder', async () => {
+    class Value extends FakeType {
+        async setValue(value) {
+            await Promise.resolve(); const oldValue = this.value; this.value = value;
+            await this.valueChanged(oldValue, value);
+        }
+    }
+    const { String: Text } = loadModule('engine/types/string.ts', {
+        './index': { ValueType: Value }, '../../common/types': decorator,
+    });
+    const text = new Text({ compat: createEngineCompat('magicienii') }), calls = [];
+    text.callbacks = { run: async (...args) => { await Promise.resolve(); calls.push(args); } };
+    for (const [source, start, length, expected] of [
+        ['ANNENEMY0_12', 0, 9, 'ANNENEMY0'], ['abcdef', 2, 2, 'cd'],
+        ['abcdef', 2, 0, 'cdef'], ['abcdef', 2, -1, 'cdef'], ['abcdef', 2, 99, 'cdef'],
+        ['abcdef', 0, 0, 'abcdef'], ['abcdef', 6, 1, ''], ['abcdef', 6, 0, ''], ['', 0, 1, ''],
+    ]) {
+        text.value = source; calls.length = 0;
+        assert.equal(await text.CUT(start, length), undefined);
+        assert.equal(text.value, expected);
+        assert.deepEqual(calls, [...(source === expected ? [] : [['ONCHANGED', expected]]), ['ONBRUTALCHANGED', expected]]);
+    }
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        text.engine.compat = createEngineCompat(profile); text.value = 'abc';
+        text.__call = (method, args) => ({ method, args });
+        assert.deepEqual(await text.CUT(0, 1), { method: 'CUT', args: [0, 1] });
+        assert.equal(text.value, 'abc');
     }
 });
 

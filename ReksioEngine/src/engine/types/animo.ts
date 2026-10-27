@@ -709,6 +709,17 @@ export class Animo extends DisplayType<AnimoDefinition> {
     }
 
     @method()
+    ISAT(x: number, y: number, checkAlpha: boolean = false) {
+        if (!this.engine.compat.animationHitTests) return this.__call('ISAT', [x, y, checkAlpha])
+        if (!this.sprite) return false
+        this.sprite.toGlobal(new PIXI.Point())
+        const point = new PIXI.Point(x, y)
+        // Check half-open image bounds before alpha lookup, independent of visibility or button hit testing.
+        return Sprite.prototype.containsPoint.call(this.sprite, point) &&
+            (!checkAlpha || this.sprite.getAlphaAt(point) > 0)
+    }
+
+    @method()
     GETCENTERX(): number {
         assert(this.sprite !== null)
         if (this.engine.compat.animationTransforms) return Math.round(this.getTransformedCenter().x)

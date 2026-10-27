@@ -36,6 +36,14 @@ export class String extends ValueType<StringDefinition, string> {
     }
 
     @method()
+    async CUT(index: number, length: number) {
+        if (!this.engine.compat.stringSlices) return this.__call('CUT', [index, length])
+        const start = Math.max(0, Math.trunc(index)), count = Math.trunc(length)
+        // Native nonpositive lengths keep the remainder of the string.
+        await this.setValue(this.value.slice(start, count <= 0 ? undefined : start + count))
+    }
+
+    @method()
     FIND(needle: string, start?: number) {
         return this.value.indexOf(needle, start)
     }

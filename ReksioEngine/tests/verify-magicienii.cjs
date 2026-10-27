@@ -194,7 +194,7 @@ async function createArcadeFixture(scene, folder, filename, overlay) {
     };
     const get = (name) => engine.getObject(name);
     const world = get('WORLD');
-    await world.init();
+    await world?.init();
     return { engine, parent, scope, directory, defs, world, get, addMedia };
 }
 
@@ -359,6 +359,95 @@ async function verifyBarandalfBoat() {
     } finally {
         assert.deepEqual(engine.scopeManager.destroy(), [], 'Boat puzzle scene cleanup');
     }
+}
+
+async function verifyMazeEnemies() {
+    let enemies = 0, accepted = 0, rejected = 0;
+    for (const level of [0, 1, 2]) {
+        const { engine, parent, scope, directory, defs, get } =
+            await createArcadeFixture('LABIRYNT', 'Labirynt', 'Labirynt.cnv', `cnvLevel${level}.cnv`);
+        // Player/story setup and global obstacle queries are boundaries; enemy actors and helpers are real.
+        get('ARRAYSAVE').restoreCheckpointValue([0, 2]);
+        get('CANVASOBSERVER').GETGRAPHICSAT = () => null;
+        const ast = load('interpreter/parser.ts').parseCode(defs.__INIT__.CODE.code);
+        const directions = ast.filter(entry => entry.type === 'FunctionCall' && entry.target?.type === 'ObjectTarget' &&
+            /^ARRAY(UP|DOWN|LEFT|RIGHT|IDLE|SLEEP)$/.test(entry.target.ref.name));
+        await new Interpreter(new RuntimeContext(engine, null, defs.__INIT__.CODE.code)).execute(directions);
+        for (const def of Object.values(defs).filter(def => /^ANNENEMY[01](PATH|FIELD|MASK|MMASK|ELAPSE|CURSE)?$/.test(def.NAME))) {
+            const actor = new Animo(engine, parent, def);
+            actor.LOAD = async filename => {
+                if (actor.getRenderObject()) actor.destroy();
+                actor.textures = new Map(); actor.hitmaps = new Map();
+                actor.annFile = loadAnn(bytes(path.join(directory, filename)));
+                await actor.initSprite();
+            };
+            await actor.LOAD(/^ANNENEMY[01]$/.test(def.NAME) ? 'GES.ANN' : def.FILENAME);
+            scope.set(actor.name, actor);
+        }
+        try {
+            await get('BEHPLAYERS').RUN();
+            for (const family of [0, 1]) {
+                const prefix = `ANNENEMY${family}`, actor = get(prefix);
+                const count = get(`ARRAYENEMY${family}STARTX`).GETSIZE();
+                assert.equal(actor.clones.length, count);
+                for (let index = 1; index <= count; index++) {
+                    const enemy = get(`${prefix}_${index}`), x = enemy.GETCENTERX(), y = enemy.GETCENTERY();
+                    enemies++;
+                    for (const suffix of ['FIELD', 'MASK', 'MMASK']) {
+                        const helper = get(`${prefix}${suffix}_${index}`);
+                        assert.equal(helper.GETEVENTNAME(), 'IDLE');
+                        assert.deepEqual([helper.positionX, helper.positionY], [x, y], 'Initial masks must follow their own enemy clone');
+                        assert.equal(helper.ISVISIBLE(), false);
+                    }
+                    for (const [direction, dx, dy] of [['UP', 0, -5], ['DOWN', 0, 5], ['LEFT', -5, 0], ['RIGHT', 5, 0]]) {
+                        const oldX = enemy.positionX, oldY = enemy.positionY;
+                        await enemy.PLAY(direction);
+                        assert.deepEqual([enemy.positionX, enemy.positionY], [oldX + dx, oldY + dy]);
+                        const curse = get(`${prefix}CURSE_${index}`);
+                        assert.deepEqual([curse.positionX, curse.positionY], [enemy.GETCENTERX(), enemy.GETCENTERY()],
+                            'The original frame callback must move the matching curse clone');
+                    }
+                }
+                if (count) {
+                    const enemy = actor.clones[0], mask = get(`${prefix}MASK_1`);
+                    await mask.SETPOSITION(23, 31);
+                    await get(`ARRAYENEMY${family}STATE`).CHANGEAT(0, 'DARK');
+                    await enemy.callbacks.run('ONSTARTED', enemy.GETEVENTNAME());
+                    assert.deepEqual([mask.positionX, mask.positionY], [23, 31], 'DARK must skip normal-mask synchronization');
+                    await get(`ARRAYENEMY${family}STATE`).CHANGEAT(0, 'NULL');
+                }
+            }
+            for (const family of [0, 1]) {
+                for (const [index, enemy] of get(`ANNENEMY${family}`).clones.entries()) {
+                    const positions = new Set();
+                    const path = get(`ANNENEMY${family}PATH_${index + 1}`), isAt = path.ISAT.bind(path);
+                    const sprite = path.getRenderObject(), imageIndex = path.currentEvent.framesImageMapping[0];
+                    const image = path.annFile.annImages[imageIndex], pixels = path.annFile.images[imageIndex];
+                    let queries = 0;
+                    path.ISAT = (x, y, alpha) => {
+                        const result = isAt(x, y, alpha), px = Math.floor(x - sprite.x), py = Math.floor(y - sprite.y);
+                        const expected = px >= 0 && px < image.width && py >= 0 && py < image.height &&
+                            pixels[(py * image.width + px) * 4 + 3] > 0;
+                        assert.equal(result, expected, `${path.name} must match the shipped path's raw alpha pixels`);
+                        queries++; if (result) accepted++; else rejected++;
+                        return result;
+                    };
+                    await enemy.PLAY('IDLE');
+                    for (let tick = 0; tick < 180; tick++) {
+                        await enemy.tick(62.5);
+                        positions.add(`${enemy.GETCENTERX()},${enemy.GETCENTERY()}`);
+                    }
+                    assert.ok(positions.size > 8, `${enemy.name} must patrol using its shipped alpha path`);
+                    assert.ok(queries > 0, `${enemy.name} must query its own path clone`);
+                    assert.ok(enemy.ISPLAYING(), `${enemy.name} must restart movement from its completion callback`);
+                }
+            }
+        } finally {
+            assert.deepEqual(engine.scopeManager.destroy(), [], `Maze ${level} scene cleanup`);
+        }
+    }
+    assert.ok(accepted > 0 && rejected > 0, 'Patrols must exercise both opaque and transparent path pixels');
+    console.log(`MAZE: all three original enemy initializers, ${enemies} clones, curse/DARK guards and patrols passed; ${accepted} accepted/${rejected} rejected path pixels`);
 }
 
 async function verifyBroomPhysics() {
@@ -782,6 +871,7 @@ async function main() {
     await verifyBroomPhysics();
     await verifyBarandalf();
     await verifyBarandalfBoat();
+    await verifyMazeEnemies();
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();
