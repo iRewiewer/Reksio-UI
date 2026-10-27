@@ -55,6 +55,7 @@ export type EngineCompat = {
     namedAnimationCallbacks: boolean
     stringSlices: boolean
     animationHitTests: boolean
+    animationCloneRendering: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -127,5 +128,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         namedAnimationCallbacks: name === 'magicienii',
         stringSlices: name === 'magicienii',
         animationHitTests: name === 'magicienii',
+        animationCloneRendering: name === 'magicienii',
     }
 }

@@ -1383,6 +1383,54 @@ test('Magicienii ISAT checks hidden animation bounds and optional alpha with cur
     parent.destroy({ children: true, texture: true, baseTexture: true });
 });
 
+test('Only Magicienii registers off-canvas animation clones and copies the current canvas priority', async () => {
+    const pixi = require('pixi.js');
+    class Base {
+        constructor(engine, parent, definition) {
+            Object.assign(this, { engine, parent, definition, name: definition.NAME });
+            this.callbacks = { run: async () => {} };
+        }
+        SETPRIORITY(value) { this.priority = value; this.getRenderObject().zIndex = value; }
+        GETPRIORITY() { return this.priority; }
+        async clone() { return new Animo(this.engine, this.parent, this.definition); }
+    }
+    const { AdvancedSprite } = loadModule('engine/rendering.ts', {
+        'pixi.js': pixi, './types': { DisplayType: Base }, '../common/errors': { assert: assert.ok },
+    });
+    const { Animo } = loadModule('engine/types/animo.ts', {
+        './index': { DisplayType: Base }, '../../common/errors': { assert: assert.ok }, 'pixi.js': pixi,
+        '../components/button': { ButtonLogicComponent: class {} }, '../../filesystem/assetsLoader': {},
+        '../../filesystem/fileLoader': {}, '../rendering': { AdvancedSprite, createHitmapFromImageBytes: () => Uint8Array.of(255, 255) },
+        '../../common/types': decorator, '../components/collisions': { CollisionsComponent: class {} }, '../audio': {}, '../logging': {},
+    });
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        for (const onCanvas of [true, false]) {
+            const stage = new pixi.Container();
+            const engine = { compat: createEngineCompat(profile), rendering: {
+                addToStage: sprite => stage.addChild(sprite), removeFromStage: sprite => stage.removeChild(sprite),
+            } };
+            const source = new Animo(engine, null, { NAME: 'TEMPLATE', TYPE: 'ANIMO',
+                VISIBLE: false, TOCANVAS: onCanvas, PRIORITY: 5 });
+            source.annFile = { images: [new Uint8Array(8).fill(255)],
+                annImages: [{ width: 2, height: 1, positionX: 0, positionY: 0 }],
+                events: [{ name: 'IDLE', framesCount: 1, framesImageMapping: [0],
+                    frames: [{ positionX: 0, positionY: 0 }] }] };
+            await source.initSprite(); source.SETPRIORITY(712);
+            const clone = await source.clone(), sprite = clone.getRenderObject();
+            assert.equal(sprite.parent === stage, onCanvas || profile === 'magicienii');
+            assert.equal(sprite.zIndex, profile === 'magicienii' ? onCanvas ? 712 : 0 : 5);
+            assert.equal(sprite.visible, false);
+            assert.equal(sprite.texture, source.getRenderObject().texture);
+            assert.equal(stage.children.filter(child => child === sprite).length, sprite.parent ? 1 : 0);
+            clone.destroy();
+            assert.equal(stage.children.length, onCanvas ? 1 : 0);
+            assert.ok(source.getRenderObject().texture.baseTexture, 'Clone teardown must not release shared textures');
+            source.destroy();
+            assert.equal(stage.children.length, 0);
+        }
+    }
+});
+
 test('Only Magicienii prioritizes named animation-frame callbacks over event callbacks', async () => {
     for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
         const { actor, sprite, parent } = transformFixture(profile), calls = [];

@@ -368,6 +368,8 @@ async function verifyMazeEnemies() {
             await createArcadeFixture('LABIRYNT', 'Labirynt', 'Labirynt.cnv', `cnvLevel${level}.cnv`);
         // Player/story setup and global obstacle queries are boundaries; enemy actors and helpers are real.
         get('ARRAYSAVE').restoreCheckpointValue([0, 2]);
+        engine.rendering.addToStage = sprite => engine.app.stage.addChild(sprite);
+        engine.rendering.removeFromStage = sprite => engine.app.stage.removeChild(sprite);
         get('CANVASOBSERVER').GETGRAPHICSAT = () => null;
         const ast = load('interpreter/parser.ts').parseCode(defs.__INIT__.CODE.code);
         const directions = ast.filter(entry => entry.type === 'FunctionCall' && entry.target?.type === 'ObjectTarget' &&
@@ -393,6 +395,9 @@ async function verifyMazeEnemies() {
                 for (let index = 1; index <= count; index++) {
                     const enemy = get(`${prefix}_${index}`), x = enemy.GETCENTERX(), y = enemy.GETCENTERY();
                     enemies++;
+                    assert.ok(enemy.getRenderObject().parent === engine.app.stage,
+                        'Enemy clones must join the renderer even when their source template is off-canvas');
+                    assert.equal(enemy.ISVISIBLE(), true);
                     for (const suffix of ['FIELD', 'MASK', 'MMASK']) {
                         const helper = get(`${prefix}${suffix}_${index}`);
                         assert.equal(helper.GETEVENTNAME(), 'IDLE');
@@ -444,10 +449,11 @@ async function verifyMazeEnemies() {
             }
         } finally {
             assert.deepEqual(engine.scopeManager.destroy(), [], `Maze ${level} scene cleanup`);
+            assert.equal(engine.app.stage.children.length, 0, `Maze ${level} must release registered enemy/helper sprites`);
         }
     }
     assert.ok(accepted > 0 && rejected > 0, 'Patrols must exercise both opaque and transparent path pixels');
-    console.log(`MAZE: all three original enemy initializers, ${enemies} clones, curse/DARK guards and patrols passed; ${accepted} accepted/${rejected} rejected path pixels`);
+    console.log(`MAZE: all three original enemy initializers, ${enemies} registered clones, curse/DARK guards and patrols passed; ${accepted} accepted/${rejected} rejected path pixels`);
 }
 
 async function verifyBroomPhysics() {

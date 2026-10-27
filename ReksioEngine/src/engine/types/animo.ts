@@ -955,6 +955,11 @@ export class Animo extends DisplayType<AnimoDefinition> {
         await clone.initSprite()
         clone.sprite!.visible = this.sprite!.visible
         clone.sprite!.setClippingRect(this.sprite!.getClippingRect())
+        if (this.engine.compat.animationCloneRendering) {
+            // Native clones join the canvas even when their template was not registered.
+            clone.SETPRIORITY(this.sprite!.parent ? this.GETPRIORITY() : 0)
+            if (!clone.sprite!.parent) this.engine.rendering.addToStage(clone.sprite!)
+        }
         return clone
     }
 
