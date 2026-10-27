@@ -43,6 +43,9 @@ export type EngineCompat = {
     patternMaps: boolean
     nativeFrameSelection: boolean
     magicieniiArcadePhysics: boolean
+    dragonAnimationPlayback: boolean
+    arraySubtraction: boolean
+    systemTime: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -103,5 +106,8 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         patternMaps: name === 'magicienii',
         nativeFrameSelection: name === 'magicienii',
         magicieniiArcadePhysics: name === 'magicienii',
+        dragonAnimationPlayback: name === 'magicienii',
+        arraySubtraction: name === 'magicienii',
+        systemTime: name === 'magicienii',
     }
 }

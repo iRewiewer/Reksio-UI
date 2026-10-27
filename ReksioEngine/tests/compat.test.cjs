@@ -1121,6 +1121,92 @@ test('Magicienii frame selection uses native event indexes and event-zero fallba
     }
 });
 
+function playbackFixture(profile = 'magicienii', scene = 'DRAGON') {
+    const { Animo } = loadModule('engine/types/animo.ts', {
+        './index': { DisplayType: FakeType }, '../../common/errors': { assert: assert.ok }, 'pixi.js': {},
+        '../components/button': {}, '../../filesystem/assetsLoader': {}, '../../filesystem/fileLoader': {},
+        '../rendering': {}, '../../common/types': decorator, '../components/collisions': {}, '../audio': {},
+        '../logging': { logger: { debug() {} } },
+    });
+    const animation = Object.create(Animo.prototype), rendered = [], callbacks = [];
+    animation.engine = { compat: createEngineCompat(profile), currentScene: { name: scene },
+        diagnostics: new Proxy({}, { get: () => () => {} }) };
+    const event = { name: 'UP', framesCount: 4, loopFramesStartIndex: 0, loopFramesEndIndex: 0,
+        frames: Array.from({ length: 4 }, () => ({ sounds: [] })) };
+    Object.assign(animation, { annFile: { events: [event] }, currentEvent: event, currentFrame: 0,
+        playbackDirection: 1, sprite: {}, sounds: new Map(), eventEndedLastTick: null });
+    animation.callbacks = { run: async (name, event) => callbacks.push([name, event]) };
+    animation.changeFrame = async (event, frame) => {
+        rendered.push(frame);
+        await animation.callbacks.run('ONFRAMECHANGED', event.name);
+    };
+    return { animation, rendered, callbacks, event };
+}
+
+test('Magicienii dragon plays backward through frame zero and signals completion once', async () => {
+    const { animation, rendered, callbacks } = playbackFixture();
+    await animation.PLAY('UP');
+    await animation.SETFRAME('UP', 3);
+    animation.SETBACKWARD();
+    assert.equal(animation.currentFrame, 3, 'Changing direction must not seek the current frame');
+    for (let tick = 0; tick < 4; tick++) await animation.tickAnimation();
+    assert.deepEqual(rendered, [0, 3, 2, 1, 0]);
+    assert.equal(animation.isPlaying, false);
+    assert.equal(animation.currentFrame, 0);
+    assert.equal(callbacks.filter(([name]) => name === 'ONSTARTED').length, 1);
+    assert.equal(callbacks.filter(([name]) => name === 'ONFINISHED').length, 1);
+});
+
+test('Magicienii dragon completion can restart and reverse the same animation', async () => {
+    const { animation, rendered, callbacks } = playbackFixture();
+    let completions = 0;
+    const run = animation.callbacks.run;
+    animation.callbacks.run = async (name, event) => {
+        await run(name, event);
+        if (name === 'ONFINISHED' && ++completions === 1) {
+            await animation.PLAY('UP');
+            await animation.SETFRAME('UP', 3);
+            animation.SETBACKWARD();
+        }
+    };
+    await animation.PLAY('UP');
+    for (let tick = 0; tick < 8; tick++) await animation.tickAnimation();
+    assert.deepEqual(rendered, [0, 1, 2, 3, 0, 3, 2, 1, 0]);
+    assert.equal(completions, 2);
+    assert.equal(animation.isPlaying, false);
+    assert.equal(callbacks.filter(([name]) => name === 'ONSTARTED').length, 2);
+});
+
+test('Dragon direction switches preserve the displayed frame and wrap loop endpoints', async () => {
+    const { animation, rendered, event } = playbackFixture();
+    event.loopFramesStartIndex = 1; event.loopFramesEndIndex = 3;
+    await animation.PLAY('UP');
+    await animation.SETFRAME('UP', 2);
+    animation.SETBACKWARD();
+    await animation.tickAnimation();
+    await animation.tickAnimation();
+    animation.SETFORWARD();
+    await animation.tickAnimation();
+    assert.deepEqual(rendered, [0, 2, 1, 3, 1]);
+    assert.equal(animation.isPlaying, true);
+});
+
+test('Other games and Magicienii scenes retain their previous forward animation timing', async () => {
+    for (const [profile, scene] of [['default', 'DRAGON'], ['ozn', 'DRAGON'], ['nemo', 'DRAGON'],
+        ['timpului', 'DRAGON'], ['magicienii', 'MAGIC'], ['magicienii', 'MIOTLY']]) {
+        const { animation, rendered } = playbackFixture(profile, scene);
+        const unsupported = [];
+        animation.__call = name => unsupported.push(name);
+        await animation.PLAY('UP');
+        assert.equal(animation.currentFrame, 1);
+        animation.SETBACKWARD();
+        await animation.tickAnimation();
+        animation.SETFORWARD();
+        assert.deepEqual(rendered, [0, 1]);
+        assert.deepEqual(unsupported, ['SETBACKWARD', 'SETFORWARD']);
+    }
+});
+
 function arrayBuffer(bytes) {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
@@ -2015,6 +2101,56 @@ test('Magicienii entrance arrays match NULL fields and script string names', () 
     assert.equal(entries.FIND('missing'), -1);
     entries.engine.compat = createEngineCompat();
     assert.equal(entries.FIND('NULL'), -1);
+});
+
+test('Only Magicienii subtracts every array element and awaits each indexed change callback', async () => {
+    const { ArrayObject } = loadModule('engine/types/array.ts', {
+        './index': { ValueType: FakeType }, '../../common/errors': { assert: assert.ok },
+        '../../common/types': decorator, '../../filesystem/fileLoader': {},
+        '../../fileFormats/archive/array': {}, '../logging': {},
+    });
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const array = new ArrayObject({ compat: createEngineCompat(profile) });
+        array.value = [-10, 0, 80.5];
+        const changes = [], unsupported = [];
+        array.__call = (...args) => unsupported.push(args);
+        array.callbacks = { run: async (name, index) => {
+            await Promise.resolve();
+            changes.push([name, index, [...array.value]]);
+        } };
+        await array.SUB(-2.5);
+        if (profile === 'magicienii') {
+            assert.deepEqual(array.value, [-7.5, 2.5, 83]);
+            assert.deepEqual(changes, [['ONCHANGED', 0, [-7.5, 0, 80.5]],
+                ['ONCHANGED', 1, [-7.5, 2.5, 80.5]], ['ONCHANGED', 2, [-7.5, 2.5, 83]]]);
+            assert.deepEqual(unsupported, []);
+            array.REMOVEALL(); await array.SUB(5);
+            assert.equal(changes.length, 3);
+        } else {
+            assert.deepEqual(array.value, [-10, 0, 80.5]);
+            assert.deepEqual(changes, []);
+            assert.deepEqual(unsupported, [['SUB', [-2.5]]]);
+        }
+    }
+});
+
+test('Only Magicienii exposes a monotonic millisecond system timer across script instances', () => {
+    const { System } = loadModule('engine/types/system.ts', {
+        './index': { Type: FakeType }, '../../common/types': decorator,
+    });
+    const before = Math.floor(performance.now());
+    const clock = new System({ compat: createEngineCompat('magicienii') });
+    const first = clock.GETSYSTEMTIME();
+    const second = new System({ compat: createEngineCompat('magicienii') }).GETSYSTEMTIME();
+    assert.ok(Number.isInteger(first) && first >= before && first <= second);
+    assert.ok(second <= Math.floor(performance.now()));
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        const system = new System({ compat: createEngineCompat(profile) });
+        const calls = [];
+        system.__call = (...args) => { calls.push(args); };
+        assert.equal(system.GETSYSTEMTIME(), undefined);
+        assert.deepEqual(calls, [['GETSYSTEMTIME', []]]);
+    }
 });
 
 test('Magicienii dialogue sequences resolve dynamically loaded SOUND objects', async () => {

@@ -60,6 +60,15 @@ export class ArrayObject extends ValueType<ArrayDefinition, any[]> {
     }
 
     @method()
+    async SUB(arg: number) {
+        if (!this.engine.compat.arraySubtraction) return this.__call('SUB', [arg])
+        for (let index = 0; index < this.value.length; index++) {
+            this.value[index] -= arg
+            await this.callbacks.run('ONCHANGED', index)
+        }
+    }
+
+    @method()
     SUBAT(position: number, value: number) {
         assert(position < this.value.length, generateMessage('modify', position, this.value))
         this.value[position] -= value

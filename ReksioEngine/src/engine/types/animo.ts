@@ -21,6 +21,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
     public isPlaying: boolean = false
     private currentFrame: number = 0
     private currentEvent: Event | null = null
+    private playbackDirection: 1 | -1 = 1
 
     private eventEndedLastTick: Event | null = null
     private buttonInteractArea: Graphics | null = null
@@ -226,6 +227,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
 
     private async tickAnimation() {
         assert(this.annFile !== null && this.sprite !== null)
+        if (this.usesDirectedPlayback()) return this.tickDirectedAnimation()
 
         const event = this.currentEvent
         if (!event) {
@@ -257,7 +259,42 @@ export class Animo extends DisplayType<AnimoDefinition> {
             return
         }
 
-        // Random sound out of them?
+        this.playFrameSound(event)
+
+        if (event.loopFramesEndIndex != 0 && this.currentFrame == event.loopFramesEndIndex) {
+            // TODO: handle event.loopRepeatsCount
+            this.currentFrame = event.loopFramesStartIndex
+        } else if (this.currentFrame + 1 >= event.framesCount) {
+            this.currentFrame = 0
+            this.eventEndedLastTick = this.currentEvent
+        } else {
+            this.currentFrame++
+        }
+    }
+
+    private usesDirectedPlayback() {
+        return this.engine.compat.dragonAnimationPlayback && this.engine.currentScene?.name === 'DRAGON'
+    }
+
+    private async tickDirectedAnimation() {
+        const event = this.currentEvent
+        if (!event) return
+        let frame = this.currentFrame + this.playbackDirection
+        if (event.loopFramesEndIndex !== 0) {
+            if (this.playbackDirection === 1 && frame > event.loopFramesEndIndex) frame = event.loopFramesStartIndex
+            else if (this.playbackDirection === -1 && frame < event.loopFramesStartIndex) frame = event.loopFramesEndIndex
+        }
+        if (frame < 0 || frame >= event.framesCount) {
+            this.isPlaying = false
+            await this.ONFINISHED()
+            return
+        }
+        this.currentFrame = frame
+        await this.changeFrame(event, frame)
+        if (this.isPlaying && this.currentEvent === event) this.playFrameSound(event)
+    }
+
+    private playFrameSound(event: Event) {
         const eventFrame = event.frames[this.currentFrame]
         if (eventFrame.sounds) {
             const filenames = eventFrame.sounds
@@ -270,16 +307,6 @@ export class Animo extends DisplayType<AnimoDefinition> {
                 const sound = this.sounds.get(randomFilename)!
                 sound.play()
             }
-        }
-
-        if (event.loopFramesEndIndex != 0 && this.currentFrame == event.loopFramesEndIndex) {
-            // TODO: handle event.loopRepeatsCount
-            this.currentFrame = event.loopFramesStartIndex
-        } else if (this.currentFrame + 1 >= event.framesCount) {
-            this.currentFrame = 0
-            this.eventEndedLastTick = this.currentEvent
-        } else {
-            this.currentFrame++
         }
     }
 
@@ -397,7 +424,13 @@ export class Animo extends DisplayType<AnimoDefinition> {
         // Animation could be paused before next tick, and it wouldn't render new frame
         // Tick animation so that it's not signaling twice for 0 frame
         // + it has to call ONSTARTED instantly
-        await this.tickAnimation()
+        if (this.usesDirectedPlayback()) {
+            await this.changeFrame(event, 0)
+            await this.ONSTARTED()
+            if (this.isPlaying && this.currentEvent === event) this.playFrameSound(event)
+        } else {
+            await this.tickAnimation()
+        }
         this.engine.diagnostics.displayState(this, `PLAY:${name}`)
     }
 
@@ -445,6 +478,18 @@ export class Animo extends DisplayType<AnimoDefinition> {
     @method()
     RESUME() {
         this.isPlaying = true
+    }
+
+    @method()
+    SETFORWARD() {
+        if (!this.usesDirectedPlayback()) return this.__call('SETFORWARD', [])
+        this.playbackDirection = 1
+    }
+
+    @method()
+    SETBACKWARD() {
+        if (!this.usesDirectedPlayback()) return this.__call('SETBACKWARD', [])
+        this.playbackDirection = -1
     }
 
     @method()
@@ -854,6 +899,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
         clone.isPlaying = this.isPlaying
         clone.currentFrame = this.currentFrame
         clone.currentEvent = this.currentEvent
+        clone.playbackDirection = this.playbackDirection
         clone.annFile = this.annFile
         clone.textures = this.textures
         clone.sounds = this.sounds

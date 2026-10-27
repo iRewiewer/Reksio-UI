@@ -142,43 +142,52 @@ async function createFixture() {
     return { get, value, set, wand, audio };
 }
 
-async function verifyBroomPhysics() {
-    const directory = path.join(assets, 'Dane/Game/Przygoda/miotly');
-    const defs = parseCNV(decryptCNV(bytes(path.join(directory, 'Miotly.cnv'))));
+async function createArcadeFixture(scene, folder, filename) {
+    const directory = path.join(assets, 'Dane/Game/Przygoda', folder);
+    const defs = parseCNV(decryptCNV(bytes(path.join(directory, filename))));
     const scopeManager = new ScopeManager();
     const scope = scopeManager.newScope('scene');
     const engine = {
         compat: createEngineCompat('magicienii'), scopeManager, speed: 1,
         saveFile: { loadValue: () => null, saveValue() {} },
         diagnostics: new Proxy({}, { get: () => () => {} }),
+        app: { stage: new Container(), screen: new Rectangle(0, 0, 800, 600) },
+        rendering: { addToStage() {}, removeFromStage() {}, putAtZindex() {}, sortObjects() {} },
         getObject: (name) => scopeManager.findByName(name?.objectName ?? name),
-        currentScene: { name: 'MIOTLY', getRelativePath: async (name) => path.join(directory, name) },
+        currentScene: { name: scene, getRelativePath: async (name) => path.join(directory, name) },
         filesystem: { getFile: async (name) => bytes(name) },
     };
     engine.scripting = new ScriptingManager(engine);
-    const parent = { name: 'MIOTLY', scope };
+    const parent = { name: scene, scope };
     // Empty collision masks isolate original movement scripts from rendering and level obstacles.
     class Media extends Type {
-        x = 0; y = 0; event = 'PLAY';
+        x = 0; y = 0; event = 'PLAY'; playing = false;
         SETPOSITION(x, y) { this.x = Math.floor(x); this.y = Math.floor(y); }
         MOVE(x, y) { this.x += Math.floor(x); this.y += Math.floor(y); }
         GETCENTERX() { return this.x; } GETCENTERY() { return this.y; }
         GETEVENTNAME() { return this.event; } GETCFRAMEINEVENT() { return 0; }
-        PLAY(event) { this.event = String(event); }
+        PLAY(event = 'PLAY') { this.event = String(event); this.playing = true; }
+        STOP() { this.playing = false; } ISPLAYING() { return this.playing; }
         GETGRAPHICSAT() { return 'UNKNOWN'; }
+        ISKEYDOWN() { return false; }
         SETANCHOR() {} SETFRAME() {}
     }
     for (const def of Object.values(defs)) {
         const Constructor = def.TYPE === 'WORLD' ? World : def.TYPE === 'GROUP' ? Group : constructors[def.TYPE] ?? Media;
         scope.set(def.NAME, new Constructor(engine, parent, def));
     }
-    for (let index = 1; index <= 10; index++) {
-        const name = `ANNKURZ_${index}`;
+    const addMedia = (name) => {
         scope.set(name, new Media(engine, parent, { TYPE: 'ANIMO', NAME: name }));
-    }
+    };
     const get = (name) => engine.getObject(name);
     const world = get('WORLD');
     await world.init();
+    return { engine, parent, scope, directory, defs, world, get, addMedia };
+}
+
+async function verifyBroomPhysics() {
+    const { world, get, addMedia } = await createArcadeFixture('MIOTLY', 'miotly', 'Miotly.cnv');
+    for (let index = 1; index <= 10; index++) addMedia(`ANNKURZ_${index}`);
     try {
         await get('VARENERGIA').SET(200);
         await get('BEHINITWORLD').RUN();
@@ -209,6 +218,48 @@ async function verifyBroomPhysics() {
         console.log('BROOM: original initialization, nine joined bodies, thrust reversal and script-owned scrolling passed');
     } finally {
         world.destroy();
+    }
+}
+
+async function verifyDragonControls() {
+    const { engine, parent, scope, directory, defs, world, get, addMedia } =
+        await createArcadeFixture('DRAGON', 'Dragon', 'Dragon.cnv');
+    const wings = new Animo(engine, parent, defs.ANNSKRZYDLA);
+    wings.annFile = loadAnn(bytes(path.join(directory, 'SKRZYDLA.ANN')));
+    await wings.initSprite();
+    scope.set(wings.name, wings);
+    for (const name of ['IMGBKGA_1', 'IMGBKGA_2', 'IMGBKGB_1', 'IMGBKGB_2']) addMedia(name);
+    try {
+        // Exercise original physics/control initialization without loading the map or projectile clones.
+        const source = defs.BEHINITLEVEL.CODE.code;
+        const statements = load('interpreter/parser.ts').parseCode(source).filter((entry) =>
+            entry.type === 'FunctionCall' && entry.target?.type === 'ObjectTarget' &&
+            ['WORLD', 'ARRAYFORCE', 'VARDIR', 'VARPOSY', 'VARENERGY', 'GRDRAGON', 'GRBKG', 'ANNSKRZYDLA']
+                .includes(entry.target.ref.name));
+        await new Interpreter(new RuntimeContext(engine, null, source)).execute(statements);
+        get('ARRAYBKG').ADD(0, 800, 1600, 2400);
+        get('ARRAYBKGA').ADD(0, 1600); get('ARRAYBKGB').ADD(0, 2000);
+        let reverseObserved = false, liftObserved = false, minimumY = 200;
+        for (let tick = 0; tick < 120; tick++) {
+            const previous = wings.GETCFRAMEINEVENT(), direction = get('VARDIR').value;
+            await wings.tick(16);
+            if (direction === 'B' && get('VARDIR').value === 'B' && wings.GETCFRAMEINEVENT() < previous) {
+                reverseObserved = true;
+            }
+            if (get('VARFORCEY').value > 0) liftObserved = true;
+            world.tick(16);
+            await get('BEHMOVEWORLD').RUN();
+            minimumY = Math.min(minimumY, world.GETPOSITIONY(100));
+        }
+        assert.ok(reverseObserved, 'Original completion callback must play the wing stroke backward');
+        assert.ok(liftObserved, 'Original wing callbacks must supply upward thrust');
+        assert.ok(world.GETPOSITIONX(100) < 380);
+        assert.ok(minimumY < 200, `The wing stroke must lift the body; minimum Y was ${minimumY}`);
+        assert.ok(get('VARPOSX').value > 0);
+        assert.ok(get('ARRAYBKG').value[0] < 0 && get('ARRAYBKGB').value[0] < 0);
+        console.log('DRAGON: original wing callbacks, reverse strokes, lift, WORLD movement and array scrolling passed');
+    } finally {
+        world.destroy(); wings.destroy();
     }
 }
 
@@ -306,6 +357,7 @@ async function main() {
     }
     console.log('PATTERNS: all 12 exact and rotated shapes recognized; all 12 out-of-tolerance shapes rejected');
     await verifyBroomPhysics();
+    await verifyDragonControls();
     assert.deepEqual(errors, [], 'The original scripts must not call unsupported methods');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });
