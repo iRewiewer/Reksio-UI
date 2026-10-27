@@ -1172,6 +1172,22 @@ test('Magicienii button state graphics refresh in place without firing input cal
     assert.equal(standard.sprite.listenerCount('pointerdown'), 0);
 });
 
+test('Magicienii GETSTD reports the current standard graphic, including replacements and clones', async () => {
+    const { engine, image, Button } = alchemyControls();
+    const standard = image('STANDARD'); image('NEXT_2'); image('HOVER');
+    const button = new Button(engine, null, { TYPE: 'BUTTON', NAME: 'PLAYER', ENABLE: true,
+        GFXSTANDARD: { objectName: 'STANDARD' } });
+    assert.equal(button.GETSTD(), 'UNKNOWN');
+    button.init(); await button.applyDefaults();
+    assert.equal(button.GETSTD(), 'STANDARD');
+    button.SETONMOVE('HOVER');
+    standard.sprite.emit('pointerover'); await button.tick();
+    assert.equal(button.GETSTD(), 'STANDARD');
+    button.SETSTD('NEXT_2');
+    assert.equal(button.GETSTD(), 'NEXT_2');
+    button.destroy();
+});
+
 test('Other profiles keep image and dynamic button graphic calls unsupported', async () => {
     for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
         const { engine, image, Button } = alchemyControls(profile);
@@ -1181,7 +1197,9 @@ test('Other profiles keep image and dynamic button graphic calls unsupported', a
         button.__call = (...args) => calls.push(args);
         await paper.SETASBUTTON(true, true);
         button.SETONMOVE('PAPER'); button.SETONCLICK('PAPER');
-        assert.deepEqual(calls, [['SETASBUTTON', [true, true]], ['SETONMOVE', ['PAPER']], ['SETONCLICK', ['PAPER']]]);
+        button.GETSTD();
+        assert.deepEqual(calls, [['SETASBUTTON', [true, true]], ['SETONMOVE', ['PAPER']],
+            ['SETONCLICK', ['PAPER']], ['GETSTD', []]]);
         assert.equal(paper.sprite.listenerCount('pointerdown'), 0);
     }
 });
@@ -1326,6 +1344,31 @@ test('Other profiles retain their existing animation center and rotation-filter 
         filter.UNLINK('ACTOR');
         assert.equal(sprite.anchor, anchor);
         assert.deepEqual([sprite.anchor.x, sprite.anchor.y, sprite.angle], [.5, .5, 0]);
+        parent.destroy({ children: true, texture: true, baseTexture: true });
+    }
+});
+
+test('Only Magicienii prioritizes named animation-frame callbacks over event callbacks', async () => {
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const { actor, sprite, parent } = transformFixture(profile), calls = [];
+        const handlers = new Set(['SWAP', 'RIGHT']);
+        actor.callbacks = { hasParametrized: (name, param) => name === 'ONFRAMECHANGED' && handlers.has(param),
+            run: async (...args) => calls.push(args) };
+        actor.annFile = { annImages: [{ width: 80, height: 40, positionX: 0, positionY: 0 }] };
+        actor.getTexture = () => sprite.texture; actor.getHitmap = () => new Uint8Array(80 * 40);
+        sprite.getClippingRect = () => null; sprite.setClippingRect = () => {};
+        actor.buttonInteractArea = null;
+        const event = { name: 'RIGHT', framesImageMapping: [0, 0],
+            frames: [{ name: 'swap', positionX: 0, positionY: 0 }, { name: '', positionX: 0, positionY: 0 }] };
+        await actor.changeFrame(event, 0);
+        assert.deepEqual(calls.pop(), ['ONFRAMECHANGED', profile === 'magicienii' ? 'SWAP' : 'RIGHT']);
+        handlers.delete('SWAP');
+        await actor.changeFrame(event, 0);
+        assert.deepEqual(calls.pop(), ['ONFRAMECHANGED', 'RIGHT']);
+        await actor.changeFrame(event, 1);
+        assert.deepEqual(calls.pop(), ['ONFRAMECHANGED', 'RIGHT']);
+        await actor.changeFrame(event, 0, false);
+        assert.deepEqual(calls, []);
         parent.destroy({ children: true, texture: true, baseTexture: true });
     }
 });

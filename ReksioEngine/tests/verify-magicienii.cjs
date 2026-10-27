@@ -266,6 +266,101 @@ async function verifyBarandalf() {
     console.log('BARANDALF: both original map initializers, mouse-follow movement, stable rotation centers and stop branches passed');
 }
 
+async function verifyBarandalfBoat() {
+    const { engine, parent, scope, directory, defs, get } =
+        await createArcadeFixture('BARANDALF', 'Barandalf', 'Barandalf.cnv', 'cnvLevel1.cnv');
+    const names = ['ANNKRET', 'ANNLOVELAS', 'ANNMIMLI', 'ANNREX', 'ANNCHOMIK'];
+    const buttons = ['BTNKRET', 'BTNLOVELAS', 'BTNMIMLI', 'BTNREX', 'BTNCHOMIK'];
+    const forbidden = [[0, 1], [0, 2], [4, 3], [2, 3]];
+    const independent = mask => forbidden.every(([a, b]) => !(mask & (1 << a)) || !(mask & (1 << b)));
+    const queue = [{ right: 0, side: 0, trips: [] }], visited = new Set(['0:0']);
+    let solution;
+    while (queue.length) {
+        const state = queue.shift();
+        if (state.right === 31) { solution = state.trips; break; }
+        const available = state.side ? state.right : 31 ^ state.right;
+        for (let passengers = 0; passengers < 32; passengers++) {
+            if ((passengers & available) !== passengers || passengers.toString(2).replaceAll('0', '').length > 2 ||
+                !independent(passengers) || !independent(state.right & ~passengers) ||
+                !independent((31 ^ state.right) & ~passengers)) continue;
+            const right = state.right ^ passengers, side = 1 - state.side, key = `${right}:${side}`;
+            if (visited.has(key)) continue;
+            visited.add(key); queue.push({ right, side, trips: [...state.trips, passengers] });
+        }
+    }
+    assert.ok(solution, 'The authored pair constraints must admit a two-seat boat solution');
+    get('CANVASOBSERVER').SETBACKGROUND = () => {};
+    get('IMGNAKLADKA1').LOAD = () => {};
+    const progress = [];
+    const savedProgress = new Type(engine, parent, { TYPE: 'GROUP', NAME: 'G_SARCADEOBJECTS' });
+    savedProgress.SET = level => progress.push(level);
+    scope.set(savedProgress.name, savedProgress);
+    get('ARRAYSAVE').restoreCheckpointValue([0, 1]);
+    await get('VARLEVEL').SET(1);
+    for (const name of [...names, 'ANNLODKA', 'ANNLISCIE', 'ANNLISCIESLOTY']) {
+        const actor = new Animo(engine, parent, defs[name]);
+        actor.annFile = loadAnn(bytes(path.join(directory, defs[name].FILENAME)));
+        await actor.initSprite(); scope.set(name, actor);
+    }
+    await get('ANNLISCIE').CLONE(get('ANNLISCIESLOTY').GETNOE());
+    for (const name of [...buttons, 'BTNLODKA']) {
+        const button = new Button(engine, parent, defs[name]);
+        scope.set(name, button); button.init(); await button.applyDefaults();
+    }
+    const click = async name => {
+        const button = get(name), sprite = get(button.definition.GFXSTANDARD.objectName).getRenderObject();
+        for (const event of ['pointerover', 'pointerdown', 'pointerup']) sprite.emit(event);
+        await button.tick();
+    };
+    try {
+        await get('BEHINITLEVEL').RUN();
+        const boat = get('ANNLODKA');
+        await click('BTNLODKA');
+        assert.equal(get('SEQLEVEL').GETEVENTNAME(), 'B_KRET_LEFT_LOVELAS', 'Unsafe unattended banks must reject a crossing');
+        assert.equal(boat.ISPLAYING(), false);
+        get('SEQLEVEL').STOP();
+        await click('BTNKRET'); await click('BTNLOVELAS');
+        await click('BTNREX');
+        assert.deepEqual(get('ARRAYBOAT').value, ['ANNKRET', 'ANNLOVELAS'], 'A third passenger must not board');
+        await click('BTNLODKA');
+        assert.equal(get('SEQLEVEL').GETEVENTNAME(), 'L_L0_KRET_LOVELAS', 'An incompatible passenger pair must reject a crossing');
+        assert.equal(boat.ISPLAYING(), false);
+        get('SEQLEVEL').STOP();
+        await click('BTNKRET'); await click('BTNLOVELAS');
+        assert.deepEqual(get('ARRAYBOAT').value, ['NULL', 'NULL']);
+        for (const passengers of solution) {
+            const indices = names.map((_name, index) => index).filter(index => passengers & (1 << index));
+            for (const index of indices) {
+                await click(buttons[index]);
+                assert.equal(get('VARPLAYERNAME').value, names[index], 'GETSTD must select the clicked character');
+                assert.ok(get('ARRAYBOAT').value.includes(names[index]), 'The selected character must board');
+            }
+            await click('BTNLODKA');
+            assert.equal(get('SEQLEVEL').ISPLAYING(), false, 'A valid crossing must not invoke a failure sequence');
+            assert.equal(boat.ISPLAYING(), true);
+            for (let tick = 0; tick < 110 && boat.ISPLAYING(); tick++) await boat.tick(62.5);
+            assert.equal(boat.ISPLAYING(), false, 'The authored boat animation must complete');
+            const bank = boat.GETEVENTNAME(), passengerSide = bank === 'LEFT' ? 'RIGHT' : 'LEFT';
+            for (const index of indices) {
+                const slot = get('ARRAYBOAT').FIND(names[index]);
+                assert.equal(get(names[index]).GETEVENTNAME(), `${passengerSide}_${slot}`,
+                    'The named SWAP frame must reposition passengers at the destination');
+                await click(buttons[index]);
+                assert.equal(get(names[index]).GETEVENTNAME(), bank);
+            }
+            assert.deepEqual(get('ARRAYBOAT').value, ['NULL', 'NULL']);
+        }
+        for (const name of ['VARKRET', 'VARLOVELAS', 'VARMIMLI', 'VARREX', 'VARCHOMIK']) {
+            assert.equal(get(name).value, 'RIGHT');
+        }
+        assert.deepEqual(progress, [2]);
+        assert.equal(get('SEQLEVEL').GETEVENTNAME(), 'SUKCES');
+        console.log(`BARANDALF BOAT: original buttons, capacity/pair/bank guards, ${solution.length} valid crossings, named passenger swaps and success decision passed`);
+    } finally {
+        assert.deepEqual(engine.scopeManager.destroy(), [], 'Boat puzzle scene cleanup');
+    }
+}
+
 async function verifyBroomPhysics() {
     const { world, get, addMedia } = await createArcadeFixture('MIOTLY', 'miotly', 'Miotly.cnv');
     for (let index = 1; index <= 10; index++) addMedia(`ANNKURZ_${index}`);
@@ -686,6 +781,7 @@ async function main() {
     console.log('PATTERNS: all 12 exact and rotated shapes recognized; all 12 out-of-tolerance shapes rejected');
     await verifyBroomPhysics();
     await verifyBarandalf();
+    await verifyBarandalfBoat();
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();

@@ -357,7 +357,11 @@ export class Animo extends DisplayType<AnimoDefinition> {
         }
 
         if (signal) {
-            await this.callbacks.run('ONFRAMECHANGED', event.name)
+            // PIKLIB tries a named-frame handler before falling back to the event's handler.
+            const frameName = eventFrame.name?.toUpperCase()
+            const callbackName = this.engine.compat.namedAnimationCallbacks && frameName &&
+                this.callbacks.hasParametrized('ONFRAMECHANGED', frameName) ? frameName : event.name
+            await this.callbacks.run('ONFRAMECHANGED', callbackName)
         }
     }
 

@@ -339,6 +339,12 @@ export class Button extends Type<ButtonDefinition> {
     }
 
     @method()
+    GETSTD() {
+        if (!this.engine.compat.buttonStateGraphics) return this.__call('GETSTD', [])
+        return this.gfxStandard?.name ?? 'UNKNOWN'
+    }
+
+    @method()
     SETSTD(graphicObjectName: string, removeFromCanvas: boolean = false, onBoundingBox: boolean = false) {
         if (!this.engine.compat.modernScripts) throw new NotImplementedError()
         const graphic = this.getObject(graphicObjectName)

@@ -52,6 +52,7 @@ export type EngineCompat = {
     stringReplacement: boolean
     integerOr: boolean
     animationTransforms: boolean
+    namedAnimationCallbacks: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -121,5 +122,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         stringReplacement: name === 'magicienii',
         integerOr: name === 'magicienii',
         animationTransforms: name === 'magicienii',
+        namedAnimationCallbacks: name === 'magicienii',
     }
 }
