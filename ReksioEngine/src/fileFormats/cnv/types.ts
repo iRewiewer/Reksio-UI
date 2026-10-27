@@ -310,6 +310,10 @@ export type ImageDefinition = TypeDefinition & {
     MONITORCOLLISION?: boolean
     MONITORCOLLISIONALPHA?: boolean
     ONINIT?: callback
+    ONFOCUSON?: callback
+    ONFOCUSOFF?: callback
+    ONCLICK?: callback
+    ONRELEASE?: callback
 }
 
 const ImageStructure = {
@@ -322,6 +326,10 @@ const ImageStructure = {
     MONITORCOLLISION: optional(boolean),
     MONITORCOLLISIONALPHA: optional(boolean),
     ONINIT: optional(callback),
+    ONFOCUSON: optional(callback),
+    ONFOCUSOFF: optional(callback),
+    ONCLICK: optional(callback),
+    ONRELEASE: optional(callback),
 }
 
 export type IntegerDefinition = TypeDefinition & {

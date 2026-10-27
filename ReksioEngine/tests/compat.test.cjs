@@ -534,6 +534,17 @@ test('Magicienii repairs only the spell lesson drawing wand event references', (
         'BEHPLAYRANDSOUND^RUN();OTHER^PLAY();');
 });
 
+test('Magicienii repairs misspelled alchemy image priorities only in that source file', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const source = 'IMG_EXIT_STD^SETPTIORITY(610);IMG_EXIT_GLOW^SETPTIORITY(610);IMG_EXIT_CLICK^SETPTIORITY(610);';
+    const file = 'dane/game/przygoda/arcade/alchemy.cnv';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.equal(repaired, source.replaceAll('SETPTIORITY', 'SETPRIORITY'));
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    assert.equal(patchMagicieniiSource('dane/game/przygoda/arcade/arcade.cnv', source), source);
+    assert.equal(patchMagicieniiSource('dane/game/przygoda/magic/magic.cnv', source), source);
+});
+
 test('Magicienii counted-loop BREAK propagates to the behaviour boundary; ONE_BREAK only skips an iteration', async () => {
     class IgnorableError extends Error {}
     class Counter { async setValue(value) { this.value = value; } }
@@ -759,7 +770,7 @@ test('OZN MATRIX script API supports coordinate overloads and three callback arg
     }
 });
 
-test('OZN image clones join the renderer at their original priority without changing Pirates', async () => {
+test('OZN and Magicienii image clones join the renderer at their original priority without changing Pirates', async () => {
     class FakeSprite {
         constructor(texture) { this.texture = texture; this.visible = true; }
     }
@@ -772,6 +783,7 @@ test('OZN image clones join the renderer at their original priority without chan
         './index': { DisplayType: FakeDisplay }, '../../common/errors': { assert: assert.ok },
         'pixi.js': {}, '../../filesystem/assetsLoader': {},
         '../rendering': { AdvancedSprite: FakeSprite }, '../../common/types': decorator,
+        '../components/button': {},
     });
     const added = [];
     const engine = { compat: createEngineCompat('ozn'), rendering: { addToStage: (sprite) => added.push(sprite) } };
@@ -790,7 +802,7 @@ test('OZN image clones join the renderer at their original priority without chan
         engine.compat = createEngineCompat(profile);
         await image.clone();
     }
-    assert.equal(added.length, 1);
+    assert.equal(added.length, 2);
 });
 
 test('Time Machine light masks multiply alpha, follow scrolling and reuse their GPU resources', () => {
@@ -821,6 +833,7 @@ test('Time Machine light masks multiply alpha, follow scrolling and reuse their 
         './index': { DisplayType: FakeType }, '../../common/errors': { assert: assert.ok },
         'pixi.js': pixi, '../../filesystem/assetsLoader': {},
         '../rendering': { AdvancedSprite: Sprite }, '../../common/types': decorator,
+        '../components/button': {},
     });
     const added = [], removed = [], rendered = [];
     const image = new Image({ compat: createEngineCompat('timpului'),
@@ -1049,6 +1062,144 @@ test('Nemo rectangular button priorities keep inventory items above the close ov
     baseline.setRect([100, 300, 160, 360]);
     baseline.SETPRIORITY(20010);
     assert.equal(baseline.interactArea.zIndex, 9999999 - 300);
+});
+
+function alchemyControls(profile = 'magicienii') {
+    const pixi = require('pixi.js');
+    const logic = loadModule('engine/components/button.ts', {
+        '../../common/stateMachine': loadModule('common/stateMachine.ts'),
+    });
+    class Base {
+        constructor(engine, parent, definition) {
+            Object.assign(this, { engine, parent, definition, name: definition.NAME });
+            this.callbacks = { run: async () => {}, has: () => false };
+        }
+        getObject(name) { return this.engine.getObject(name?.objectName ?? name); }
+    }
+    const { AdvancedSprite } = loadModule('engine/rendering.ts', {
+        'pixi.js': pixi, './types': { DisplayType: Base }, '../common/errors': { assert: assert.ok },
+    });
+    const { Image } = loadModule('engine/types/image.ts', {
+        './index': { DisplayType: Base }, '../../common/errors': { assert: assert.ok }, 'pixi.js': pixi,
+        '../../filesystem/assetsLoader': {}, '../rendering': { AdvancedSprite }, '../../common/types': decorator,
+        '../components/button': logic,
+    });
+    const { Button } = loadModule('engine/types/button.ts', {
+        './index': { Type: Base }, './image': { Image }, './animo': { Animo: class {} }, './sound': {},
+        'pixi.js': pixi, '../components/button': logic, '../../common/errors': { assert: assert.ok },
+        '../../common/types': decorator, '../logging': { logger: { debug() {} } },
+    });
+    const stage = new pixi.Container(), objects = new Map();
+    const engine = { compat: createEngineCompat(profile), getObject: name => objects.get(name) ?? null,
+        diagnostics: { buttonState() {} }, app: { stage },
+        rendering: { addToStage: sprite => stage.addChild(sprite), removeFromStage: sprite => stage.removeChild(sprite) } };
+    function image(name) {
+        const object = new Image(engine, null, { TYPE: 'IMAGE', NAME: name, TOCANVAS: true });
+        object.sprite = new AdvancedSprite(new pixi.Texture(new pixi.BaseTexture(null, { width: 2, height: 2 })));
+        object.sprite.hitmap = Uint8Array.from([0, 255, 255, 255]);
+        objects.set(name, object);
+        return object;
+    }
+    return { engine, stage, image, Image, Button };
+}
+
+test('Magicienii image buttons deliver pointer callbacks once and release listeners on disable or destruction', async () => {
+    const { image, stage } = alchemyControls();
+    const paper = image('PAPER'), calls = [];
+    paper.callbacks.run = async name => calls.push(name);
+    stage.addChild(paper.sprite);
+    await paper.SETASBUTTON(true, true);
+    await paper.SETASBUTTON(true, true);
+    assert.equal(paper.sprite.listenerCount('pointerover'), 1);
+    assert.equal(paper.sprite.cursor, 'pointer');
+    paper.MOVE(25, 10); paper.sprite.toGlobal({ x: 0, y: 0 });
+    assert.equal(paper.sprite.containsPoint({ x: 25.5, y: 10.5 }), false);
+    assert.equal(paper.sprite.containsPoint({ x: 26.5, y: 10.5 }), true);
+    for (const event of ['pointerover', 'pointerdown', 'pointerup', 'pointerout']) paper.sprite.emit(event);
+    await paper.tick();
+    assert.deepEqual(calls, ['ONFOCUSON', 'ONCLICK', 'ONRELEASE', 'ONFOCUSOFF']);
+    paper.sprite.emit('pointerdown');
+    await paper.SETASBUTTON(false, false);
+    assert.equal(paper.sprite.listenerCount('pointerdown'), 0);
+    assert.equal(paper.sprite.visible, true);
+    await paper.SETASBUTTON(true, false); await paper.tick();
+    assert.equal(paper.sprite.cursor, 'default');
+    assert.equal(calls.length, 4, 'Disabling must discard queued clicks');
+    paper.sprite.emit('pointerover');
+    paper.destroy(); await paper.tick();
+    assert.equal(paper.sprite.listenerCount('pointerover'), 0);
+    assert.equal(stage.children.length, 0);
+    assert.equal(calls.length, 4);
+});
+
+test('Magicienii button state graphics refresh in place without firing input callbacks', async () => {
+    const { engine, image, Button } = alchemyControls();
+    const standard = image('STANDARD'), hover = image('HOVER'), pressed = image('PRESSED');
+    const nextHover = image('HOVER2'), nextPressed = image('PRESSED2');
+    const button = new Button(engine, null, { TYPE: 'BUTTON', NAME: 'EXIT', ENABLE: true,
+        GFXSTANDARD: { objectName: 'STANDARD' } });
+    const calls = [];
+    button.callbacks.run = async name => calls.push(name);
+    button.init(); await button.applyDefaults();
+    button.SETONMOVE('HOVER'); button.SETONCLICK('PRESSED');
+    assert.deepEqual([standard.sprite.visible, hover.sprite.visible, pressed.sprite.visible], [true, false, false]);
+    standard.sprite.emit('pointerover'); await button.tick();
+    assert.equal(standard.sprite.alpha, 0);
+    assert.equal(hover.sprite.visible, true);
+    button.SETONMOVE('HOVER2');
+    assert.equal(hover.sprite.visible, false);
+    assert.equal(nextHover.sprite.visible, true);
+    assert.deepEqual(calls, ['ONFOCUSON']);
+    standard.sprite.emit('pointerdown'); await button.tick();
+    button.SETONCLICK('PRESSED2');
+    assert.equal(pressed.sprite.visible, false);
+    assert.equal(nextPressed.sprite.visible, true);
+    assert.equal(nextHover.sprite.visible, false);
+    assert.deepEqual(calls, ['ONFOCUSON', 'ONCLICKED']);
+    standard.sprite.emit('pointerup'); await button.tick();
+    assert.equal(nextHover.sprite.visible, true);
+    assert.deepEqual(calls, ['ONFOCUSON', 'ONCLICKED', 'ONRELEASED', 'ONACTION']);
+    await button.DISABLEBUTVISIBLE();
+    button.SETONMOVE('STANDARD');
+    assert.equal(standard.sprite.visible, true);
+    assert.equal(standard.sprite.alpha, 1);
+    await button.DISABLE(); button.SETONCLICK('STANDARD');
+    assert.equal(standard.sprite.visible, false);
+    await button.ENABLE();
+    assert.equal(standard.sprite.visible, true);
+    assert.equal(standard.sprite.listenerCount('pointerdown'), 1);
+    button.destroy();
+    assert.equal(standard.sprite.listenerCount('pointerdown'), 0);
+});
+
+test('Other profiles keep image and dynamic button graphic calls unsupported', async () => {
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        const { engine, image, Button } = alchemyControls(profile);
+        const paper = image('PAPER'), calls = [];
+        paper.__call = (...args) => calls.push(args);
+        const button = new Button(engine, null, { TYPE: 'BUTTON', NAME: 'EXIT' });
+        button.__call = (...args) => calls.push(args);
+        await paper.SETASBUTTON(true, true);
+        button.SETONMOVE('PAPER'); button.SETONCLICK('PAPER');
+        assert.deepEqual(calls, [['SETASBUTTON', [true, true]], ['SETONMOVE', ['PAPER']], ['SETONCLICK', ['PAPER']]]);
+        assert.equal(paper.sprite.listenerCount('pointerdown'), 0);
+    }
+});
+
+test('IMAGE schema keeps alchemy focus and click callbacks', () => {
+    const logger = { warn: message => assert.fail(message) };
+    const common = loadModule('fileFormats/common/index.ts', { '../logger': { logger } });
+    const { structureDefinitions } = loadModule('fileFormats/cnv/types.ts', { '../common': common });
+    const { parseCNV } = loadModule('fileFormats/cnv/parser.ts', {
+        './types': { structureDefinitions }, '../common': common, '../logger': { logger },
+    });
+    const source = ['OBJECT=PAPER', 'PAPER:TYPE=IMAGE', 'PAPER:FILENAME=PAPER.IMG',
+        'PAPER:VISIBLE=TRUE', 'PAPER:TOCANVAS=TRUE', ...['ONFOCUSON', 'ONFOCUSOFF', 'ONCLICK', 'ONRELEASE']
+            .map(name => `PAPER:${name}={BEH${name}^RUN();}`)].join('\n');
+    const paper = parseCNV(source).PAPER;
+    for (const name of ['ONFOCUSON', 'ONFOCUSOFF', 'ONCLICK', 'ONRELEASE']) {
+        assert.equal(paper[name].code, `BEH${name}^RUN();`);
+    }
 });
 
 test('Nemo inventory frame steps stay within the active event and leave Pirates unchanged', async () => {
@@ -2176,6 +2327,82 @@ test('Only Magicienii exposes a monotonic millisecond system timer across script
         system.__call = (...args) => { calls.push(args); };
         assert.equal(system.GETSYSTEMTIME(), undefined);
         assert.deepEqual(calls, [['GETSYSTEMTIME', []]]);
+    }
+});
+
+test('Only Magicienii exposes native UTC save-prefix components, including the original day offset', () => {
+    const { System } = loadModule('engine/types/system.ts', {
+        './index': { Type: FakeType }, '../../common/types': decorator,
+    });
+    const OriginalDate = globalThis.Date;
+    globalThis.Date = class {
+        getUTCSeconds() { return 57; }
+        getUTCMinutes() { return 8; }
+        getUTCDate() { return 31; }
+    };
+    try {
+        const system = new System({ compat: createEngineCompat('magicienii') });
+        assert.equal(system.GETSECONDS(), 57);
+        assert.equal(system.GETMINUTES(), 8);
+        assert.equal(system.GETDAY(), 32);
+        for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+            system.engine.compat = createEngineCompat(profile);
+            const calls = []; system.__call = (...args) => { calls.push(args); };
+            for (const method of ['GETSECONDS', 'GETMINUTES', 'GETDAY']) assert.equal(system[method](), undefined);
+            assert.deepEqual(calls, [['GETSECONDS', []], ['GETMINUTES', []], ['GETDAY', []]]);
+        }
+    } finally {
+        globalThis.Date = OriginalDate;
+    }
+});
+
+test('Only Magicienii replaces every nonoverlapping literal substring and awaits value changes', async () => {
+    class Value extends FakeType {
+        async setValue(value) { await Promise.resolve(); this.value = value; }
+    }
+    const { String: Text } = loadModule('engine/types/string.ts', {
+        './index': { ValueType: Value }, '../../common/types': decorator,
+    });
+    const text = new Text({ compat: createEngineCompat('magicienii') });
+    for (const [source, needle, replacement, expected] of [
+        ['NORMAL_MALY', '_MALY', '_UCIEKA_MALY', 'NORMAL_UCIEKA_MALY'],
+        ['MALY_maly_MALY', 'MALY', 'X', 'X_maly_X'], ['aaaa', 'aa', 'b', 'bb'],
+        ['aaaa', 'a', 'aa', 'aaaaaaaa'], ['one.one', '.', '$&', 'one$&one'],
+        ['abc', '', 'Z', 'abc'], ['abc', 'abs', 'Z', 'abc'],
+    ]) {
+        text.value = source;
+        await text.REPLACE(needle, replacement);
+        assert.equal(text.value, expected);
+    }
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        text.engine.compat = createEngineCompat(profile); text.value = 'a';
+        const calls = []; text.__call = (...args) => calls.push(args);
+        await text.REPLACE('a', 'b');
+        assert.equal(text.value, 'a');
+        assert.deepEqual(calls, [['REPLACE', ['a', 'b']]]);
+    }
+});
+
+test('Only Magicienii combines integer recipe flags with signed 32-bit OR', async () => {
+    class Value extends FakeType {
+        async setValue(value) { await Promise.resolve(); this.value = value; return value; }
+    }
+    const { Integer } = loadModule('engine/types/integer.ts', {
+        './index': { ValueType: Value }, '../../common/types': decorator,
+    });
+    const flags = new Integer({ compat: createEngineCompat('magicienii') });
+    for (const [value, argument, expected] of [[0, 1, 1], [8, 17, 25], [-2147483648, 1, -2147483647],
+        [0xffffffff, 0, -1], [3, 3, 3]]) {
+        flags.value = value;
+        assert.equal(await flags.OR(argument), expected);
+        assert.equal(flags.value, expected);
+    }
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        flags.engine.compat = createEngineCompat(profile); flags.value = 8;
+        const calls = []; flags.__call = (...args) => calls.push(args);
+        await flags.OR(4);
+        assert.equal(flags.value, 8);
+        assert.deepEqual(calls, [['OR', [4]]]);
     }
 });
 

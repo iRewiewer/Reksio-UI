@@ -41,6 +41,12 @@ export class String extends ValueType<StringDefinition, string> {
     }
 
     @method()
+    async REPLACE(needle: string, replacement: string) {
+        if (!this.engine.compat.stringReplacement) return this.__call('REPLACE', [needle, replacement])
+        await this.setValue(needle.length ? this.value.split(needle).join(replacement) : this.value)
+    }
+
+    @method()
     LENGTH() {
         return this.value.length
     }

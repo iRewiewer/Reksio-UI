@@ -6,9 +6,15 @@ import { loadSprite } from '../../filesystem/assetsLoader'
 import { AdvancedSprite } from '../rendering'
 import { method } from '../../common/types'
 import * as PIXI from 'pixi.js'
+import { ButtonLogicComponent, Event as ButtonEvent } from '../components/button'
 
 export class Image extends DisplayType<ImageDefinition> {
     public sprite: AdvancedSprite | null = null
+    private buttonLogic: ButtonLogicComponent | null = null
+
+    async tick() {
+        await this.buttonLogic?.tick()
+    }
 
     async init() {
         await this.initSprite(this.definition.FILENAME)
@@ -41,6 +47,8 @@ export class Image extends DisplayType<ImageDefinition> {
 
     destroy() {
         assert(this.sprite !== null)
+        this.buttonLogic?.unregisterInteractive(this.sprite)
+        this.buttonLogic = null
         this.releaseUnderwaterMask()
         this.engine.rendering.removeFromStage(this.sprite)
     }
@@ -63,6 +71,28 @@ export class Image extends DisplayType<ImageDefinition> {
         assert(this.sprite !== null)
         this.sprite.x = x
         this.sprite.y = y
+    }
+
+    @method()
+    async SETASBUTTON(enabled: boolean, showPointer: boolean) {
+        if (!this.engine.compat.imageButtons) return this.__call('SETASBUTTON', [enabled, showPointer])
+        assert(this.sprite !== null)
+        this.buttonLogic?.unregisterInteractive(this.sprite)
+        if (!enabled) {
+            this.buttonLogic = null
+            return
+        }
+        this.buttonLogic ??= new ButtonLogicComponent(async (_previous, event) => {
+            const callbacks: Partial<Record<ButtonEvent, string>> = {
+                [ButtonEvent.OVER]: 'ONFOCUSON', [ButtonEvent.OUT]: 'ONFOCUSOFF',
+                [ButtonEvent.DOWN]: 'ONCLICK', [ButtonEvent.UP]: 'ONRELEASE',
+            }
+            const callback = callbacks[event]
+            if (callback) await this.callbacks.run(callback)
+        })
+        this.buttonLogic.registerInteractive(this.sprite, showPointer)
+        this.sprite.checkPixelPerfect = true
+        await this.buttonLogic.enable()
     }
 
     @method()

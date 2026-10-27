@@ -146,13 +146,7 @@ export class Button extends Type<ButtonDefinition> {
         }
     }
 
-    private async onStateChange(prevState: State, event: Event, state: State) {
-        this.engine.diagnostics.buttonState(this, event, prevState, state)
-
-        if (this.draggingActive) {
-            return
-        }
-
+    private updateGraphics(state: State) {
         if (this.interactArea) {
             // For area button
             this.interactArea.visible = state != State.DISABLED
@@ -207,6 +201,12 @@ export class Button extends Type<ButtonDefinition> {
                 this.gfxOnClick?.HIDE()
             }
         }
+    }
+
+    private async onStateChange(prevState: State, event: Event, state: State) {
+        this.engine.diagnostics.buttonState(this, event, prevState, state)
+        if (this.draggingActive) return
+        this.updateGraphics(state)
 
         if (event == Event.ENABLE) {
             if (this.gfxStandard) {
@@ -354,6 +354,30 @@ export class Button extends Type<ButtonDefinition> {
         if (sprite) sprite.checkPixelPerfect = !onBoundingBox
         if (this.logic.state === State.DISABLED) graphic.HIDE()
         else graphic.SHOW()
+    }
+
+    @method()
+    SETONMOVE(graphicObjectName: string) {
+        if (!this.engine.compat.buttonStateGraphics) return this.__call('SETONMOVE', [graphicObjectName])
+        this.setStateGraphic('gfxOnMove', graphicObjectName)
+    }
+
+    @method()
+    SETONCLICK(graphicObjectName: string) {
+        if (!this.engine.compat.buttonStateGraphics) return this.__call('SETONCLICK', [graphicObjectName])
+        this.setStateGraphic('gfxOnClick', graphicObjectName)
+    }
+
+    private setStateGraphic(state: 'gfxOnMove' | 'gfxOnClick', name: string) {
+        const graphic = this.getObject(name)
+        assert(graphic instanceof Image || graphic instanceof Animo, 'button graphic should be an image or animation')
+        const previous = this[state]
+        this[state] = graphic
+        if (previous && previous !== this.gfxStandard && previous !== this.gfxOnMove && previous !== this.gfxOnClick) {
+            previous.HIDE()
+        }
+        this.prepareGraphic(graphic)
+        this.updateGraphics(this.logic.state)
     }
 
     private registerInteractive(object: Image | Animo) {

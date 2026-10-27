@@ -60,6 +60,10 @@ const { Struct } = load('engine/types/struct.ts');
 const { World } = load('engine/types/world.ts');
 const { Pattern } = load('engine/types/pattern.ts');
 const { CanvasObserver } = load('engine/types/canvasObserver.ts');
+const { Image } = load('engine/types/image.ts');
+const { Button } = load('engine/types/button.ts');
+const { loadImage } = load('fileFormats/img/index.ts');
+const { loadSprite } = load('filesystem/assetsLoader.ts');
 const { Container, Rectangle, Texture, BaseTexture } = require('pixi.js');
 const constructors = Object.fromEntries([
     ['INTEGER', 'integer', 'Integer'], ['DOUBLE', 'double', 'Double'], ['STRING', 'string', 'String'],
@@ -366,6 +370,157 @@ async function verifyDragonLevelInitialization() {
     console.log(`DRAGON MAPS: all five original level initialization routines passed; ${placements} tile/fire placements`);
 }
 
+async function createAlchemyFixture(firstVisit = false) {
+    const directory = path.join(assets, 'Dane/Game/Przygoda/Arcade');
+    const inherited = parseCNV(decryptCNV(bytes(path.join(directory, 'Arcade.cnv'))));
+    const local = parseCNV(patchMagicieniiSource('dane/game/przygoda/arcade/alchemy.cnv',
+        decryptCNV(bytes(path.join(directory, 'Alchemy.cnv')))));
+    const defs = { ...inherited, ...local }, imageCache = new Map(), calls = [], trace = [];
+    const scopeManager = new ScopeManager(), scope = scopeManager.newScope('scene');
+    const stage = new Container();
+    const resolve = name => name.startsWith('$') ? path.join(assets, name.slice(1)) : path.join(directory, name);
+    const engine = {
+        compat: createEngineCompat('magicienii'), scopeManager, speed: 1,
+        saveFile: { loadValue: () => null, saveValue() {} },
+        diagnostics: new Proxy({}, { get: (_target, name) => name === 'behaviour' ? object => {
+            trace.push(object.name); if (trace.length > 12) trace.shift();
+        } : () => {} }), app: { stage, screen: new Rectangle(0, 0, 800, 600) },
+        getObject: name => scopeManager.findByName(name?.objectName ?? name),
+        currentScene: { name: 'ARCADE', getRelativePath: async name => resolve(name) },
+        rendering: { addToStage: sprite => stage.addChild(sprite), removeFromStage: sprite => stage.removeChild(sprite),
+            putAtZindex() {}, sortObjects() {} },
+        filesystem: { getIMGFile: async filename => {
+            if (!imageCache.has(filename)) imageCache.set(filename, loadImage(bytes(filename)));
+            return imageCache.get(filename);
+        }, saveFile: async () => assert.fail('Alchemy diagnostics must not write game saves') },
+    };
+    engine.scripting = new ScriptingManager(engine);
+    const parent = { name: 'ARCADE', scope };
+    // Room persistence, audio and animation playback are boundaries; recipe scripts and image/button logic are real.
+    class Media extends Type {
+        playing = false; event = ''; x = 0; y = 0;
+        PLAY(event = 'PLAY') { this.playing = true; this.event = String(event); }
+        STOP() { this.playing = false; } ISPLAYING() { return this.playing; }
+        GETEVENTNAME() { return this.event; }
+        MOVE(x, y) { this.x += x; this.y += y; }
+        LOAD() {} SETPRIORITY() {} SETFRAME() {} SHOW() {} HIDE() {}
+    }
+    for (const def of Object.values(defs)) {
+        const Constructor = def.TYPE === 'IMAGE' ? Image : def.TYPE === 'BUTTON' ? Button :
+            def.TYPE === 'STRUCT' ? Struct : def.TYPE === 'GROUP' ? Group : constructors[def.TYPE] ?? Media;
+        const object = new Constructor(engine, parent, def);
+        scope.set(def.NAME, object);
+        if (object instanceof Struct) {
+            for (const [name, type] of object.structure) {
+                object.content.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name }));
+            }
+        }
+        if (object instanceof Image) {
+            object.sprite = await loadSprite(engine.filesystem, resolve(local[def.NAME] ? def.FILENAME : 'TEMPLATE.IMG'));
+            object.sprite.visible = def.VISIBLE;
+            await object.applyDefaults();
+            if (def.TOCANVAS) stage.addChild(object.sprite);
+        }
+    }
+    const get = name => engine.getObject(name);
+    for (const name of ['BEHSELECTOBJ', 'BEHUPDATEOBJECTS', 'BEHSAVESLOTS', 'BEHSAVEDODOS', 'BEHLOADTEMPOBJ',
+        'BEHSELECTTEMPOBJS', 'BEHUPDATETEMPOBJ', 'BEHADDITEM', 'BEHLOADSEQARR', 'BEHGOTO', 'BEHFINDITEM', 'BEHREMOVEITEM']) {
+        const boundary = new Media(engine, parent, { TYPE: 'BEHAVIOUR', NAME: name });
+        boundary.RUN = async (...args) => { calls.push([name, ...args]); return name === 'BEHFINDITEM' ? 0 : undefined; };
+        scope.set(name, boundary);
+    }
+    const menu = new Media(engine, parent, { TYPE: 'GROUP', NAME: 'G_MENU' });
+    menu.ADDEXP = number => calls.push(['ADDEXP', number]);
+    scope.set(menu.name, menu);
+    await get('SOBJECT').SETFIELD('IPARAM0', 1);
+    await get('SOBJECT').SETFIELD('SPARAM1', 'fixture');
+    await get('STEMPOBJ').SETFIELD('TYPE', 1);
+    await get('VARBFIRSTENTER').SET(firstVisit);
+    for (const def of Object.values(local).filter(def => def.TYPE === 'BUTTON')) {
+        get(def.NAME).init(); await get(def.NAME).applyDefaults();
+    }
+    try { await get('BEHINITSCRIPT').RUN(); }
+    catch (error) { console.error('ALCHEMY INIT TRACE', trace); engine.scopeManager.destroy(); throw error; }
+    return { engine, get, defs, calls, stage, trace };
+}
+
+async function verifyAlchemy() {
+    const existing = await createAlchemyFixture();
+    assert.equal(existing.get('VARSDODOPREFIX').value, 'fixture');
+    assert.deepEqual(existing.engine.scopeManager.destroy(), []);
+    const { engine, get, defs, calls, stage, trace } = await createAlchemyFixture(true);
+    try {
+        assert.match(get('VARSDODOPREFIX').value, /^S\d{6}$/);
+        assert.equal(get('VARSDODOPREFIX').value, await get('SOBJECT').GETFIELD('SPARAM1').getValue());
+        const paper = get('IMGKARTKA'), closedX = paper.GETPOSITIONX();
+        paper.sprite.emit('pointerover'); await paper.tick();
+        assert.equal(get('STLALCH1').ISPLAYING(), true);
+        for (let tick = 0; tick < 22; tick++) await get('STLALCH1').callbacks.run('ONFRAMECHANGED', 'ELAPSE');
+        assert.equal(get('VARIX').value, 0);
+        assert.equal(paper.GETPOSITIONX(), closedX - 220);
+        paper.sprite.emit('pointerout'); await paper.tick();
+        for (let tick = 0; tick < 22; tick++) await get('STLALCH1').callbacks.run('ONFRAMECHANGED', 'ELAPSE');
+        assert.equal(get('VARIX').value, 220);
+        assert.equal(paper.GETPOSITIONX(), closedX);
+        for (const name of ['IMG_EXIT_STD', 'IMG_EXIT_GLOW', 'IMG_EXIT_CLICK']) assert.equal(get(name).GETPRIORITY(), 610);
+        const ast = load('interpreter/parser.ts').parseCode(defs.BEHCALCEFFECT.CODE.code);
+        const start = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.type === 'ObjectTarget' &&
+            entry.target.ref.name === 'VARIEFFECT' && entry.method === 'SET' && entry.args[0]?.type === 'NumberLiteral' &&
+            entry.args[0].value === '0');
+        assert.ok(start >= 0);
+        assert.equal(ast[start + 1].method, 'LOOP');
+        const effects = get('ARREFFECTS').value;
+        for (let mask = 0; mask < 256; mask++) {
+            const selected = effects.filter((_value, index) => mask & (1 << index));
+            get('ARRTEMPDODO').restoreCheckpointValue(selected);
+            let expected = 0;
+            for (let first = 0; first < selected.length; first++) {
+                for (let second = first + 1; second < selected.length; second++) expected |= selected[first] & selected[second];
+            }
+            await new Interpreter(new RuntimeContext(engine, null, defs.BEHCALCEFFECT.CODE.code)).execute(ast.slice(start, start + 2));
+            assert.equal(get('VARIEFFECT').value, expected, `Alchemy ingredient mask ${mask}`);
+        }
+        const click = async name => {
+            const button = get(name), sprite = button.gfxStandard.getRenderObject();
+            sprite.emit('pointerdown'); sprite.emit('pointerup'); await button.tick();
+        };
+        const buttons = ['BTNKOLFLOW', 'BTNKOLBAT', 'BTNKOLCOOK', 'BTNKOLLEBIO',
+            'BTNKOLSPIDER', 'BTNKOLFEATHER', 'BTNKOLSHOE', 'BTNKOLSAND'];
+        await get('ANNDODO').callbacks.run('ONFINISHED', 'WYCHODZI');
+        await click('BTNPALNIK');
+        assert.equal(get('VARINUMSLOTS').value, 0, 'An empty mixture must not create a recipe');
+        for (const [ingredients, effect, success] of [[[0, 5], 8, false], [[2, 3], 1, false], [[2, 3, 4, 5], 3, true]]) {
+            await get('ANNZASLONA').callbacks.run('ONFINISHED', 'IN');
+            await get('ANNDODO').callbacks.run('ONFINISHED', 'WYCHODZI');
+            for (const index of ingredients) await click(buttons[index]);
+            assert.deepEqual(get('ARRACTIVE').value, effects.map((_value, index) => ingredients.includes(index) ? 1 : 0));
+            await click('BTNPALNIK');
+            assert.equal(get('VARIEFFECT').value, effect);
+            assert.equal(get('VARBSUCCESS').value, success);
+            const slot = get(`ARRSLOTS_${get('VARINUMSLOTS').value}`);
+            assert.ok(slot.value.length >= ingredients.length + 1);
+            for (const name of slot.value) assert.ok(stage.children.includes(get(name).getRenderObject()), `${name} must render`);
+            if (effect === 1) {
+                await get('BFITMP263').RUN();
+                assert.equal(get('VARSSTATE').value, 'NORMAL_UCIEKA_MALY');
+                assert.equal(get('ANNDODO').GETEVENTNAME(), 'NORMAL_UCIEKA_MALY');
+            }
+        }
+        assert.equal(get('VARINUMSLOTS').value, 3);
+        assert.equal(await get('STEMPOBJ').GETFIELD('TYPE').GET(), 0);
+        assert.ok(calls.some(call => call[0] === 'ADDEXP' && call[1] === 30));
+        assert.ok(calls.some(call => call[0] === 'BEHADDITEM' && call[1] === 'ELIKSIR_BUT'));
+        await click('BTNEXITALCH');
+        assert.ok(calls.some(call => call[0] === 'BEHGOTO' && call[1] === 'PIWNICA'));
+        assert.deepEqual(calls.filter(call => call[0] === 'BEHREMOVEITEM').map(call => call[1]), get('ARRSKLADNIKI').value);
+        console.log('ALCHEMY: first/repeat entry, save-prefix creation, paper scrolling, 256 ingredient subsets, three recipes and success/exit branches passed');
+    } catch (error) {
+        console.error('ALCHEMY TRACE', trace); throw error;
+    } finally {
+        assert.deepEqual(engine.scopeManager.destroy(), [], 'Alchemy scene objects must clean up');
+    }
+}
+
 async function main() {
     const { get, value, set, wand, audio } = await createFixture();
     const mouse = get('MOUSE');
@@ -463,6 +618,7 @@ async function main() {
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();
+    await verifyAlchemy();
     assert.deepEqual(errors, [], 'The original scripts must not call unsupported methods');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

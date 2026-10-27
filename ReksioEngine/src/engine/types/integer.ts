@@ -58,6 +58,12 @@ export class Integer extends ValueType<IntegerDefinition, number> {
     }
 
     @method()
+    async OR(value: number) {
+        if (!this.engine.compat.integerOr) return this.__call('OR', [value])
+        return this.setValue(this.value | value)
+    }
+
+    @method()
     // TODO: Maybe type guard could try to resolve references
     async SET(newValue?: number | string) {
         if (typeof newValue == 'string') {

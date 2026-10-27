@@ -47,6 +47,10 @@ export type EngineCompat = {
     arraySubtraction: boolean
     systemTime: boolean
     animationClipping: boolean
+    buttonStateGraphics: boolean
+    imageButtons: boolean
+    stringReplacement: boolean
+    integerOr: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -84,7 +88,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         classHotspotOwners: name === 'nemo',
         buttonAreaPriority: name === 'nemo',
         manualAnimationFrames: name === 'nemo',
-        imageCloneRendering: name === 'ozn',
+        imageCloneRendering: name === 'ozn' || name === 'magicienii',
         displayOpacity: name === 'magicienii' || name === 'timpului',
         queuedMouseCoordinates: name === 'magicienii' || name === 'timpului',
         dynamicHotspotTransforms: name === 'magicienii',
@@ -111,5 +115,9 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         arraySubtraction: name === 'magicienii',
         systemTime: name === 'magicienii',
         animationClipping: name === 'magicienii',
+        buttonStateGraphics: name === 'magicienii',
+        imageButtons: name === 'magicienii',
+        stringReplacement: name === 'magicienii',
+        integerOr: name === 'magicienii',
     }
 }
