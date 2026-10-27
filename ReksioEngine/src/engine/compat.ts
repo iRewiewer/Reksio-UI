@@ -42,6 +42,7 @@ export type EngineCompat = {
     rgb555Images: boolean
     patternMaps: boolean
     nativeFrameSelection: boolean
+    magicieniiArcadePhysics: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -101,5 +102,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         rgb555Images: name === 'nemo',
         patternMaps: name === 'magicienii',
         nativeFrameSelection: name === 'magicienii',
+        magicieniiArcadePhysics: name === 'magicienii',
     }
 }

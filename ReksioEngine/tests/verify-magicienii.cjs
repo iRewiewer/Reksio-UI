@@ -54,6 +54,7 @@ const { Animo } = load('engine/types/animo.ts');
 const { Mouse } = load('engine/types/mouse.ts');
 const { Group } = load('engine/types/group.ts');
 const { Struct } = load('engine/types/struct.ts');
+const { World } = load('engine/types/world.ts');
 const { Container, Rectangle } = require('pixi.js');
 const constructors = Object.fromEntries([
     ['INTEGER', 'integer', 'Integer'], ['DOUBLE', 'double', 'Double'], ['STRING', 'string', 'String'],
@@ -139,6 +140,76 @@ async function createFixture() {
     })) await set(name, data);
     get('STL10').playing = false;
     return { get, value, set, wand, audio };
+}
+
+async function verifyBroomPhysics() {
+    const directory = path.join(assets, 'Dane/Game/Przygoda/miotly');
+    const defs = parseCNV(decryptCNV(bytes(path.join(directory, 'Miotly.cnv'))));
+    const scopeManager = new ScopeManager();
+    const scope = scopeManager.newScope('scene');
+    const engine = {
+        compat: createEngineCompat('magicienii'), scopeManager, speed: 1,
+        saveFile: { loadValue: () => null, saveValue() {} },
+        diagnostics: new Proxy({}, { get: () => () => {} }),
+        getObject: (name) => scopeManager.findByName(name?.objectName ?? name),
+        currentScene: { name: 'MIOTLY', getRelativePath: async (name) => path.join(directory, name) },
+        filesystem: { getFile: async (name) => bytes(name) },
+    };
+    engine.scripting = new ScriptingManager(engine);
+    const parent = { name: 'MIOTLY', scope };
+    // Empty collision masks isolate original movement scripts from rendering and level obstacles.
+    class Media extends Type {
+        x = 0; y = 0; event = 'PLAY';
+        SETPOSITION(x, y) { this.x = Math.floor(x); this.y = Math.floor(y); }
+        MOVE(x, y) { this.x += Math.floor(x); this.y += Math.floor(y); }
+        GETCENTERX() { return this.x; } GETCENTERY() { return this.y; }
+        GETEVENTNAME() { return this.event; } GETCFRAMEINEVENT() { return 0; }
+        PLAY(event) { this.event = String(event); }
+        GETGRAPHICSAT() { return 'UNKNOWN'; }
+        SETANCHOR() {} SETFRAME() {}
+    }
+    for (const def of Object.values(defs)) {
+        const Constructor = def.TYPE === 'WORLD' ? World : def.TYPE === 'GROUP' ? Group : constructors[def.TYPE] ?? Media;
+        scope.set(def.NAME, new Constructor(engine, parent, def));
+    }
+    for (let index = 1; index <= 10; index++) {
+        const name = `ANNKURZ_${index}`;
+        scope.set(name, new Media(engine, parent, { TYPE: 'ANIMO', NAME: name }));
+    }
+    const get = (name) => engine.getObject(name);
+    const world = get('WORLD');
+    await world.init();
+    try {
+        await get('VARENERGIA').SET(200);
+        await get('BEHINITWORLD').RUN();
+        assert.deepEqual(get('ARRAYID').value, [199, 207, 200, 201, 202, 203, 204, 205, 206]);
+        assert.equal(world.GETPOSITIONX(199), 380);
+        assert.equal(world.GETPOSITIONY(199), 300);
+        await get('VARREXANGLE').SET(0);
+        for (let tick = 0; tick < 120; tick++) {
+            world.tick(16);
+            await get('BEHMOVEWORLD').RUN();
+        }
+        assert.ok(world.GETPOSITIONY(199) < 0, 'Original upward thrust must move the physical body');
+        assert.equal(get('ANNREX').y, 300, 'Original scrolling must keep the hero at screen Y=300');
+        assert.ok(world.GETPOSITIONY(207) < 200, 'The joined companion must follow the hero');
+        assert.equal(get('VARENERGIA').value, 200, 'Empty masks must not cause false collision damage');
+        assert.ok(get('VARELAPSED').value > 0);
+        for (const id of get('ARRAYID').value) {
+            assert.ok(Number.isFinite(world.GETPOSITIONX(id)) && Number.isFinite(world.GETPOSITIONY(id)));
+        }
+        const top = world.GETPOSITIONY(199);
+        await get('VARREXANGLE').SET(16);
+        for (let tick = 0; tick < 240; tick++) {
+            world.tick(16);
+            await get('BEHMOVEWORLD').RUN();
+        }
+        assert.ok(world.GETPOSITIONY(199) > top + 100, 'Changing the original angle must reverse vertical travel');
+        assert.equal(get('ANNREX').y, 300);
+        console.log('BROOM: original initialization, nine joined bodies, thrust reversal and script-owned scrolling passed');
+    } finally {
+        world.destroy();
+    }
 }
 
 async function main() {
@@ -234,6 +305,7 @@ async function main() {
         }
     }
     console.log('PATTERNS: all 12 exact and rotated shapes recognized; all 12 out-of-tolerance shapes rejected');
+    await verifyBroomPhysics();
     assert.deepEqual(errors, [], 'The original scripts must not call unsupported methods');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

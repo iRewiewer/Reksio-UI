@@ -52,6 +52,9 @@ test('Only Nemo decodes RGB555 images as 15-bit while RGB565 and alpha stay unch
 const { OznMatrixSimulation } = loadModule('engine/compat/oznMatrix.ts');
 const { readSekWorld } = loadModule('fileFormats/sek/index.ts');
 const { TimeMachinePhysics } = loadModule('engine/compat/timeMachinePhysics.ts', { 'cannon-es': require('cannon-es') });
+const { createMagicieniiPhysics } = loadModule('engine/compat/magicieniiPhysics.ts', {
+    './timeMachinePhysics': { TimeMachinePhysics },
+});
 const { TimeMachineVehiclePhysics } = loadModule('engine/compat/timeMachineVehiclePhysics.ts', {
     '@dimforge/rapier3d-compat': require('@dimforge/rapier3d-compat'), 'cannon-es': require('cannon-es'),
 });
@@ -1398,6 +1401,7 @@ const { World } = loadModule('engine/types/world.ts', {
     '../../fileFormats/sek': { readSekWorld },
     '../compat/sekaiNavigation': { SekaiNavigation },
     '../compat/timeMachinePhysics': { TimeMachinePhysics },
+    '../compat/magicieniiPhysics': { createMagicieniiPhysics },
     '../compat/timeMachineVehiclePhysics': { TimeMachineVehiclePhysics },
 });
 
@@ -1583,6 +1587,109 @@ test('Only Time Machine NUREK loads physics automatically and links in camera co
         world.REMOVEOBJECT(501); world.STOP();
         assert.equal(await world.MOVEOBJECTS(), 0);
     }
+});
+
+test('Only Magicienii broom and dragon scenes initialize their WORLD.SEK physics', async () => {
+    const emptyWorld = Buffer.concat([Buffer.from('SEKAI81080701915004'), Buffer.alloc(4)]);
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        for (const scene of ['DRAGON', 'MIOTLY', 'ARCADE', 'BARANDALF']) {
+            const files = [];
+            const world = new World({ compat: createEngineCompat(profile),
+                currentScene: { name: scene, getRelativePath: async file => file },
+                filesystem: { getFile: async file => { files.push(file); return arrayBuffer(emptyWorld); } },
+                diagnostics: { worldState() {} } });
+            world.definition = { FILENAME: 'WORLD.SEK' };
+            await world.init();
+            const enabled = profile === 'magicienii' && ['DRAGON', 'MIOTLY'].includes(scene);
+            assert.deepEqual(files, enabled ? ['WORLD.SEK'] : []);
+            assert.equal(world.physics !== null, enabled);
+            world.destroy();
+        }
+    }
+});
+
+test('Magicienii physics preserves separate static walls sharing a body ID', () => {
+    const plane = (y, flip) => {
+        const a = { x: -100, y, z: -100 }, b = { x: -100, y, z: 100 };
+        const c = { x: 100, y, z: -100 }, d = { x: 100, y, z: 100 };
+        return { id: 0, position: { x: 0, y: 0, z: 0 }, geometry: { flags: 0,
+            triangles: flip ? [[a, c, b], [b, c, d]] : [[a, b, c], [b, d, c]] } };
+    };
+    const source = { paths: [], bodies: [plane(-10, false), plane(10, true)] };
+    const physics = createMagicieniiPhysics(source);
+    try {
+        physics.addSphere(100, 1, 0, 0, 100, true, 1);
+        physics.setPosition(100, 400, 300, 0);
+        physics.setGravity(0, -100, 0);
+        for (let tick = 0; tick < 180; tick++) physics.step(1000 / 60);
+        assert.ok(Math.abs(physics.position(100).y - 309) < 0.3);
+        physics.setGravity(0, 100, 0);
+        physics.setVelocity(100, 0, 0, 0);
+        for (let tick = 0; tick < 180; tick++) physics.step(1000 / 60);
+        assert.ok(Math.abs(physics.position(100).y - 291) < 0.3);
+        assert.equal(source.bodies[0].geometry.triangles.length, 2);
+        assert.equal(source.bodies[1].geometry.triangles.length, 2);
+    } finally { physics.destroy(); }
+});
+
+test('Magicienii MOVEOBJECTS integrates forces but leaves actor movement to the original script', async () => {
+    const emptyWorld = Buffer.concat([Buffer.from('SEKAI81080701915004'), Buffer.alloc(4)]);
+    const positions = [];
+    const world = new World({ compat: createEngineCompat('magicienii'),
+        currentScene: { name: 'DRAGON', getRelativePath: async file => file },
+        filesystem: { getFile: async () => arrayBuffer(emptyWorld) },
+        getObject: () => ({ SETPOSITION: (...args) => positions.push(args) }), diagnostics: { worldState() {} } });
+    world.definition = { FILENAME: 'WORLD.SEK' };
+    await world.init();
+    try {
+        world.ADDBODY(100, 1, 0, 200, 0, 0, 600, 1, 2, 16, 16, 16);
+        await world.SETPOSITION(100, 380, 200, 0);
+        await world.LINK(100, 'WINGS', 2);
+        world.SETVELOCITY(100, -100, 0, 0);
+        world.SETGRAVITY(0, -15, 0);
+        world.START(); world.tick(16);
+        assert.equal(await world.MOVEOBJECTS(), .016);
+        assert.ok(world.GETPOSITIONX(100) < 380);
+        assert.ok(world.GETPOSITIONY(100) > 200);
+        assert.deepEqual(positions, []);
+        world.ADDFORCE(100, 0, 1000, 0);
+        world.tick(16); await world.MOVEOBJECTS();
+        assert.ok(world.GETPOSITIONY(100) < 200);
+        const stopped = world.GETPOSITIONX(100);
+        world.STOP(); world.tick(1000);
+        assert.equal(await world.MOVEOBJECTS(), 0);
+        assert.equal(world.GETPOSITIONX(100), stopped);
+    } finally { world.destroy(); }
+});
+
+test('Magicienii broom point joints keep the nine-body chain connected under thrust', () => {
+    const physics = createMagicieniiPhysics({ bodies: [], paths: [] });
+    try {
+        const ids = [199, 200, 201, 202, 203, 204, 205, 206, 207];
+        const xs = [380, 420, 440, 460, 480, 500, 520, 540, 562];
+        ids.forEach((id, index) => {
+            physics.addSphere(id, index === 0 ? 40 : index === 8 ? 1 : .1, 0, 0,
+                index === 0 || index === 8 ? 300 : 100000, true, 16);
+            physics.setPosition(id, xs[index], 300, 0);
+            physics.setLimit(id, 50, -9999999, 0, 750, 9999999, 0);
+        });
+        physics.setActive(199, false); physics.setActive(207, false);
+        for (let index = 0; index < ids.length - 1; index++) {
+            physics.join(ids[index], ids[index + 1], 400 + 20 * index, 300, 0);
+        }
+        for (let tick = 0; tick < 120; tick++) {
+            physics.addForce(199, 0, 20000, 0);
+            physics.step(1000 / 60);
+        }
+        assert.ok(physics.position(199).y < 0);
+        assert.ok(physics.position(207).y < 200);
+        for (let index = 0; index < ids.length - 1; index++) {
+            const a = physics.position(ids[index]), b = physics.position(ids[index + 1]);
+            const distance = Math.hypot(a.x - b.x, a.y - b.y);
+            assert.ok(Number.isFinite(distance) && distance < xs[index + 1] - xs[index] + 4);
+            assert.equal(a.z, 0);
+        }
+    } finally { physics.destroy(); }
 });
 
 test('Terrain physics is enabled only for the three Time Machine vehicle scenes', async () => {

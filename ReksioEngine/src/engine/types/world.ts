@@ -5,6 +5,7 @@ import { NotImplementedError } from '../../common/errors'
 import { readSekWorld, SekPoint } from '../../fileFormats/sek'
 import { SekaiNavigation } from '../compat/sekaiNavigation'
 import { TimeMachinePhysics } from '../compat/timeMachinePhysics'
+import { createMagicieniiPhysics } from '../compat/magicieniiPhysics'
 import type { TimeMachineVehiclePhysics } from '../compat/timeMachineVehiclePhysics'
 
 type WorldBody = {
@@ -45,7 +46,14 @@ export class World extends Type<WorldDefinition> {
 
     private usesPhysics(filename: string) {
         return (this.engine.compat.underwaterPhysics && /(?:^|[\\/])NUREK\.SEK$/i.test(filename ?? '')) ||
-            this.usesFlightPhysics(filename) || this.usesVehiclePhysics(filename)
+            this.usesFlightPhysics(filename) || this.usesVehiclePhysics(filename) ||
+            this.usesMagicieniiPhysics(filename)
+    }
+
+    private usesMagicieniiPhysics(filename: string) {
+        return this.engine.compat.magicieniiArcadePhysics &&
+            ['DRAGON', 'MIOTLY'].includes(this.engine.currentScene?.name ?? '') &&
+            /(?:^|[\\/])WORLD\.SEK$/i.test(filename ?? '')
     }
 
     private usesFlightPhysics(filename: string) {
@@ -113,7 +121,9 @@ export class World extends Type<WorldDefinition> {
         const world = readSekWorld(await this.engine.filesystem.getFile(path), physical)
         this.physics?.destroy()
         this.physics = null
-        if (this.usesVehiclePhysics(filename)) {
+        if (this.usesMagicieniiPhysics(filename)) {
+            this.physics = createMagicieniiPhysics(world)
+        } else if (this.usesVehiclePhysics(filename)) {
             const { TimeMachineVehiclePhysics } = await import('../compat/timeMachineVehiclePhysics')
             this.physics = await TimeMachineVehiclePhysics.create(world)
         } else if (physical) {
@@ -481,7 +491,8 @@ export class World extends Type<WorldDefinition> {
         for (const [id, body] of this.bodies) {
             if (!body.linkedAnimoName || !body.positionInitialized) continue
             Object.assign(body, this.physics.position(id))
-            await this.syncLinkedAnimo(body)
+            // These minigames apply their own deltas and camera offsets after MOVEOBJECTS.
+            if (!this.usesMagicieniiPhysics(this.loadedFilename)) await this.syncLinkedAnimo(body)
         }
         for (const [a, b] of collisions) {
             for (const [id, other] of [[a, b], [b, a]]) {
