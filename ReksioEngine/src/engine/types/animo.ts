@@ -707,13 +707,22 @@ export class Animo extends DisplayType<AnimoDefinition> {
     @method()
     GETCENTERX(): number {
         assert(this.sprite !== null)
+        if (this.engine.compat.animationTransforms) return Math.round(this.getTransformedCenter().x)
         return Math.round(this.sprite.getGlobalPosition().x + this.sprite.width / 2)
     }
 
     @method()
     GETCENTERY(): number {
         assert(this.sprite !== null)
+        if (this.engine.compat.animationTransforms) return Math.round(this.getTransformedCenter().y)
         return Math.round(this.sprite.getGlobalPosition().y + this.sprite.height / 2)
+    }
+
+    private getTransformedCenter() {
+        assert(this.sprite !== null)
+        const { anchor, texture } = this.sprite
+        return this.sprite.toGlobal(new PIXI.Point((0.5 - anchor.x) * texture.orig.width,
+            (0.5 - anchor.y) * texture.orig.height))
     }
 
     @method()

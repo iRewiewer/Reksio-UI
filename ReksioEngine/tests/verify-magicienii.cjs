@@ -62,6 +62,7 @@ const { Pattern } = load('engine/types/pattern.ts');
 const { CanvasObserver } = load('engine/types/canvasObserver.ts');
 const { Image } = load('engine/types/image.ts');
 const { Button } = load('engine/types/button.ts');
+const { StaticFilter } = load('engine/types/staticfilter.ts');
 const { loadImage } = load('fileFormats/img/index.ts');
 const { loadSprite } = load('filesystem/assetsLoader.ts');
 const { Container, Rectangle, Texture, BaseTexture } = require('pixi.js');
@@ -151,9 +152,10 @@ async function createFixture() {
     return { get, value, set, wand, audio };
 }
 
-async function createArcadeFixture(scene, folder, filename) {
+async function createArcadeFixture(scene, folder, filename, overlay) {
     const directory = path.join(assets, 'Dane/Game/Przygoda', folder);
     const defs = parseCNV(decryptCNV(bytes(path.join(directory, filename))));
+    if (overlay) Object.assign(defs, parseCNV(decryptCNV(bytes(path.join(directory, overlay)))));
     const scopeManager = new ScopeManager();
     const scope = scopeManager.newScope('scene');
     const engine = {
@@ -194,6 +196,74 @@ async function createArcadeFixture(scene, folder, filename) {
     const world = get('WORLD');
     await world.init();
     return { engine, parent, scope, directory, defs, world, get, addMedia };
+}
+
+async function verifyBarandalf() {
+    for (const level of [0, 2]) {
+        const { engine, parent, scope, directory, defs, world, get } =
+            await createArcadeFixture('BARANDALF', 'Barandalf', 'Barandalf.cnv', `cnvLevel${level}.cnv`);
+        // Background/audio are boundaries; the original initialization, actors, filter and movement are real.
+        get('CANVASOBSERVER').SETBACKGROUND = () => {};
+        get('CANVASOBSERVER').GETGRAPHICSAT = () => null;
+        const mouse = new Mouse(engine, parent, { TYPE: 'MOUSE', NAME: 'MOUSE' });
+        scope.set('MOUSE', mouse);
+        scope.set('FLTRROTATE', new StaticFilter(engine, parent, defs.FLTRROTATE));
+        for (const name of ['IMGEXIT', 'IMGNAKLADKA', 'IMGMASK']) get(name).LOAD = () => {};
+        for (const name of ['ANNDRUZYNA', 'ANNWODA', 'ANNLISCIE', 'ANNLISCIESLOTY']) {
+            const actor = new Animo(engine, parent, defs[name]);
+            actor.LOAD = async filename => {
+                actor.annFile = loadAnn(bytes(path.join(directory, filename)));
+                await actor.initSprite();
+            };
+            await actor.LOAD(defs[name].FILENAME);
+            scope.set(name, actor);
+        }
+        try {
+            await get('VARLEVEL').SET(level);
+            await get('BEHINITLEVEL').RUN();
+            assert.ok(world.physics, `Barandalf ${level} must enable its physical world`);
+            const actor = get('ANNDRUZYNA'), filter = get('FLTRROTATE'), sprite = actor.getRenderObject();
+            // The authored spawn overlaps the outer wall by ten pixels; let contacts settle first.
+            for (let tick = 0; tick < 10; tick++) { world.tick(16); await world.MOVEOBJECTS(); }
+            const startX = world.GETPOSITIONX(100);
+            mouse.mousePosition.set(Math.round(startX), 450);
+            for (let tick = 0; tick < 80; tick++) {
+                world.tick(16); await get('BEHMOVEWORLD').RUN();
+                assert.ok(Math.abs(actor.GETCENTERX() - world.GETPOSITIONX(100)) <= 1,
+                    `Barandalf ${level} rotation must not shift the reported X center`);
+                assert.ok(Math.abs(actor.GETCENTERY() - world.GETPOSITIONY(100)) <= 1,
+                    `Barandalf ${level} rotation must not shift the reported Y center`);
+            }
+            assert.ok(world.GETPOSITIONY(100) < 510, `Barandalf ${level} must follow the mouse upward`);
+            assert.ok(Math.abs(world.GETPOSITIONX(100) - startX) < 1,
+                `Vertical travel must not drift horizontally: ${world.GETPOSITIONX(100)},${world.GETPOSITIONY(100)}`);
+            mouse.mousePosition.set(actor.GETCENTERX(), actor.GETCENTERY());
+            await get('BEHMOVEPLAYER').RUN();
+            assert.equal(world.GETSPEED(100), 0, 'The original near-pointer branch must stop movement');
+            filter.UNLINK(actor.name);
+            assert.deepEqual([sprite.anchor.x, sprite.anchor.y, sprite.angle], [0, 0, 0],
+                'Unlinking repeated rotations must restore the original anchor and angle');
+            await world.SETPOSITION(100, 700, 480, 0);
+            world.SETVELOCITY(100, 100, 0, 0);
+            world.tick(16); await world.MOVEOBJECTS();
+            const x = world.GETPOSITIONX(100);
+            assert.ok(x > 700 && x < 702);
+            world.STOP(); world.tick(1000); await world.MOVEOBJECTS();
+            assert.equal(world.GETPOSITIONX(100), x, 'Stopping the scene must freeze the physical body');
+            await world.SETPOSITION(100, level === 0 ? 160 : 330, level === 0 ? 480 : 440, 0);
+            world.START();
+            for (let tick = 0; tick < 120; tick++) {
+                world.SETVELOCITY(100, level === 0 ? 100 : -100, 0, 0);
+                world.tick(16); await world.MOVEOBJECTS();
+            }
+            assert.ok(level === 0 ? Math.abs(world.GETPOSITIONX(100) - 180) < 1
+                : Math.abs(world.GETPOSITIONX(100) - 300) < 1, 'The shipped obstacle mesh must block the actor');
+            assert.equal(get('ANNLISCIE').clones.length, get('ANNLISCIESLOTY').GETNOE());
+        } finally {
+            assert.deepEqual(engine.scopeManager.destroy(), [], `Barandalf ${level} scene cleanup`);
+        }
+    }
+    console.log('BARANDALF: both original map initializers, mouse-follow movement, stable rotation centers and stop branches passed');
 }
 
 async function verifyBroomPhysics() {
@@ -615,6 +685,7 @@ async function main() {
     }
     console.log('PATTERNS: all 12 exact and rotated shapes recognized; all 12 out-of-tolerance shapes rejected');
     await verifyBroomPhysics();
+    await verifyBarandalf();
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();

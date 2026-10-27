@@ -32,7 +32,8 @@ export class StaticFilter extends Type<StaticFilterDefinition> {
         const savedProperties = new Map()
         if (this.definition.ACTION === 'ROTATE') {
             savedProperties.set('angle', renderObject.angle)
-            savedProperties.set('anchor', renderObject.anchor)
+            savedProperties.set('anchor', this.engine.compat.animationTransforms
+                ? { x: renderObject.anchor.x, y: renderObject.anchor.y } : renderObject.anchor)
 
             // Todo: Handle CANUNDO, CURRENTFRAME, CANUNDO parameters
             const angle = this.properties.get('ANGLE')
@@ -70,7 +71,8 @@ export class StaticFilter extends Type<StaticFilterDefinition> {
             renderObject.angle = properties.get('angle')
         }
         if (properties.has('anchor')) {
-            renderObject.anchor = properties.get('anchor')
+            if (this.engine.compat.animationTransforms) renderObject.anchor.copyFrom(properties.get('anchor'))
+            else renderObject.anchor = properties.get('anchor')
             object.syncPosition()
         }
     }

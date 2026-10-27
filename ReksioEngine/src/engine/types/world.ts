@@ -51,9 +51,10 @@ export class World extends Type<WorldDefinition> {
     }
 
     private usesMagicieniiPhysics(filename: string) {
-        return this.engine.compat.magicieniiArcadePhysics &&
-            ['DRAGON', 'MIOTLY'].includes(this.engine.currentScene?.name ?? '') &&
-            /(?:^|[\\/])WORLD\.SEK$/i.test(filename ?? '')
+        if (!this.engine.compat.magicieniiArcadePhysics) return false
+        const scene = this.engine.currentScene?.name
+        return (['DRAGON', 'MIOTLY'].includes(scene ?? '') && /(?:^|[\\/])WORLD\.SEK$/i.test(filename ?? '')) ||
+            (scene === 'BARANDALF' && /(?:^|[\\/])LEVEL[02]\.SEK$/i.test(filename ?? ''))
     }
 
     private usesFlightPhysics(filename: string) {
@@ -491,8 +492,10 @@ export class World extends Type<WorldDefinition> {
         for (const [id, body] of this.bodies) {
             if (!body.linkedAnimoName || !body.positionInitialized) continue
             Object.assign(body, this.physics.position(id))
-            // These minigames apply their own deltas and camera offsets after MOVEOBJECTS.
-            if (!this.usesMagicieniiPhysics(this.loadedFilename)) await this.syncLinkedAnimo(body)
+            // Broom and dragon scripts apply their own deltas and camera offsets; Barandalf uses linked actors.
+            const scriptedPosition = this.usesMagicieniiPhysics(this.loadedFilename) &&
+                ['DRAGON', 'MIOTLY'].includes(this.engine.currentScene?.name ?? '')
+            if (!scriptedPosition) await this.syncLinkedAnimo(body)
         }
         for (const [a, b] of collisions) {
             for (const [id, other] of [[a, b], [b, a]]) {

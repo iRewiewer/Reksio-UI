@@ -1272,6 +1272,64 @@ test('Magicienii frame selection uses native event indexes and event-zero fallba
     }
 });
 
+function transformFixture(profile) {
+    const pixi = require('pixi.js');
+    const { Animo } = loadModule('engine/types/animo.ts', {
+        './index': { DisplayType: FakeType }, '../../common/errors': { assert: assert.ok }, 'pixi.js': pixi,
+        '../components/button': {}, '../../filesystem/assetsLoader': {}, '../../filesystem/fileLoader': {},
+        '../rendering': {}, '../../common/types': decorator, '../components/collisions': {}, '../audio': {}, '../logging': {},
+    });
+    const { StaticFilter } = loadModule('engine/types/staticfilter.ts', {
+        './index': { Type: FakeType }, './animo': { Animo }, '../../common/errors': { assert: assert.ok },
+        '../../common/types': decorator,
+    });
+    const actor = Object.create(Animo.prototype), engine = { compat: createEngineCompat(profile) };
+    actor.engine = engine;
+    const texture = new pixi.Texture(pixi.BaseTexture.fromBuffer(new Uint8Array(80 * 40 * 4), 80, 40));
+    const sprite = new pixi.Sprite(texture), parent = new pixi.Container();
+    parent.position.set(10, 20); parent.addChild(sprite);
+    Object.assign(actor, { sprite, positionX: 200, positionY: 300, positionOffsetX: 7,
+        positionOffsetY: -3, anchorOffsetX: 47, anchorOffsetY: 17 });
+    actor.syncPosition();
+    const filter = new StaticFilter(engine);
+    filter.definition = { ACTION: 'ROTATE' }; filter.getObject = () => actor;
+    return { actor, sprite, parent, filter };
+}
+
+test('Magicienii animation centers stay fixed through repeated rotation and anchor restoration', () => {
+    const { actor, sprite, parent, filter } = transformFixture('magicienii');
+    const anchor = sprite.anchor;
+    assert.equal(actor.GETCENTERX(), 210);
+    assert.equal(actor.GETCENTERY(), 320);
+    for (const angle of [90, 180, 270, 17, -35, 0]) {
+        filter.SETPROPERTY('ANGLE', angle); filter.LINK('ACTOR');
+        assert.deepEqual([actor.GETCENTERX(), actor.GETCENTERY()], [210, 320]);
+        filter.UNLINK('ACTOR');
+        assert.equal(sprite.anchor, anchor, 'Restore coordinates without replacing PIXI\'s observable anchor');
+        assert.deepEqual([sprite.anchor.x, sprite.anchor.y, sprite.angle], [0, 0, 0]);
+        assert.deepEqual([actor.GETCENTERX(), actor.GETCENTERY()], [210, 320]);
+    }
+    sprite.anchor.set(.25, .75); sprite.scale.set(2, .5); actor.syncPosition();
+    parent.scale.set(2, 3); parent.angle = 30;
+    const center = sprite.toGlobal(new (require('pixi.js').Point)(20, -10));
+    assert.deepEqual([actor.GETCENTERX(), actor.GETCENTERY()], [Math.round(center.x), Math.round(center.y)]);
+    parent.destroy({ children: true, texture: true, baseTexture: true });
+});
+
+test('Other profiles retain their existing animation center and rotation-filter behavior', () => {
+    for (const profile of ['default', 'ozn', 'nemo', 'timpului']) {
+        const { actor, sprite, parent, filter } = transformFixture(profile);
+        assert.equal(actor.engine.compat.animationTransforms, false);
+        const anchor = sprite.anchor;
+        filter.SETPROPERTY('ANGLE', 90); filter.LINK('ACTOR');
+        assert.deepEqual([actor.GETCENTERX(), actor.GETCENTERY()], [250, 340]);
+        filter.UNLINK('ACTOR');
+        assert.equal(sprite.anchor, anchor);
+        assert.deepEqual([sprite.anchor.x, sprite.anchor.y, sprite.angle], [.5, .5, 0]);
+        parent.destroy({ children: true, texture: true, baseTexture: true });
+    }
+});
+
 function playbackFixture(profile = 'magicienii', scene = 'DRAGON') {
     const { Animo } = loadModule('engine/types/animo.ts', {
         './index': { DisplayType: FakeType }, '../../common/errors': { assert: assert.ok }, 'pixi.js': {},
@@ -1852,23 +1910,57 @@ test('Only Time Machine NUREK loads physics automatically and links in camera co
     }
 });
 
-test('Only Magicienii broom and dragon scenes initialize their WORLD.SEK physics', async () => {
+test('Only Magicienii broom, dragon and Barandalf worlds initialize their scene-specific physics', async () => {
     const emptyWorld = Buffer.concat([Buffer.from('SEKAI81080701915004'), Buffer.alloc(4)]);
     for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
         for (const scene of ['DRAGON', 'MIOTLY', 'ARCADE', 'BARANDALF']) {
-            const files = [];
-            const world = new World({ compat: createEngineCompat(profile),
-                currentScene: { name: scene, getRelativePath: async file => file },
-                filesystem: { getFile: async file => { files.push(file); return arrayBuffer(emptyWorld); } },
-                diagnostics: { worldState() {} } });
-            world.definition = { FILENAME: 'WORLD.SEK' };
-            await world.init();
-            const enabled = profile === 'magicienii' && ['DRAGON', 'MIOTLY'].includes(scene);
-            assert.deepEqual(files, enabled ? ['WORLD.SEK'] : []);
-            assert.equal(world.physics !== null, enabled);
-            world.destroy();
+            for (const filename of ['WORLD.SEK', 'LEVEL0.SEK', 'LEVEL1.SEK', 'LEVEL2.SEK', 'LEVEL3.SEK']) {
+                const files = [];
+                const world = new World({ compat: createEngineCompat(profile),
+                    currentScene: { name: scene, getRelativePath: async file => file },
+                    filesystem: { getFile: async file => { files.push(file); return arrayBuffer(emptyWorld); } },
+                    diagnostics: { worldState() {} } });
+                world.definition = { FILENAME: filename };
+                await world.init();
+                const enabled = profile === 'magicienii' && ((['DRAGON', 'MIOTLY'].includes(scene) && filename === 'WORLD.SEK') ||
+                    (scene === 'BARANDALF' && ['LEVEL0.SEK', 'LEVEL2.SEK'].includes(filename)));
+                assert.deepEqual(files, enabled ? [filename] : []);
+                assert.equal(world.physics !== null, enabled);
+                world.destroy();
+            }
         }
     }
+});
+
+test('Magicienii Barandalf synchronizes linked actors but keeps collision signals and pause semantics', async () => {
+    const emptyWorld = Buffer.concat([Buffer.from('SEKAI81080701915004'), Buffer.alloc(4)]);
+    const positions = [], signals = [];
+    const actor = { SETPOSITION: (...args) => positions.push(args), SIGNAL: id => signals.push(id) };
+    const world = new World({ compat: createEngineCompat('magicienii'),
+        currentScene: { name: 'BARANDALF', getRelativePath: async file => file },
+        filesystem: { getFile: async () => arrayBuffer(emptyWorld) },
+        getObject: () => actor, diagnostics: { worldState() {} } });
+    world.definition = { FILENAME: 'LEVEL0.SEK' };
+    await world.init();
+    try {
+        world.ADDBODY(100, 1, 0, 100, 0, 0, 0, 1, 2, 20, 20, 20);
+        world.SETMAXSPEED(100, 50); world.LINK(100, 'ACTOR');
+        await world.SETPOSITION(100, 400, 300, 0);
+        world.SETVELOCITY(100, 100, 0, 0);
+        world.START(); world.tick(16); await world.MOVEOBJECTS();
+        assert.equal(positions.length, 1);
+        assert.deepEqual(positions[0], [world.GETPOSITIONX(100), world.GETPOSITIONY(100)]);
+        assert.ok(positions[0][0] > 400 && positions[0][0] <= 400.81);
+        world.STOP(); world.tick(1000); await world.MOVEOBJECTS();
+        assert.equal(positions.length, 1);
+        world.START(); world.UNLINK(100); world.tick(16); await world.MOVEOBJECTS();
+        assert.equal(positions.length, 1);
+        world.LINK(100, 'ACTOR');
+        world.ADDBODY(101, 1, 0, 100, 0, 0, 0, 0, 2, 20, 20, 20);
+        await world.SETPOSITION(101, 420, 300, 0);
+        world.tick(16); await world.MOVEOBJECTS();
+        assert.ok(signals.includes('101'));
+    } finally { world.destroy(); }
 });
 
 test('Magicienii physics preserves separate static walls sharing a body ID', () => {
