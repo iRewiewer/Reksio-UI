@@ -166,7 +166,7 @@ async function createArcadeFixture(scene, folder, filename, overlay) {
     const definitions = name => parseCNV(patchMagicieniiSource(`dane/game/przygoda/${folder}/${name}`.toLowerCase(),
         decryptCNV(bytes(path.join(directory, name)))));
     const defs = definitions(filename);
-    if (overlay) Object.assign(defs, definitions(overlay));
+    if (overlay) for (const name of [overlay].flat()) Object.assign(defs, definitions(name));
     const scopeManager = new ScopeManager();
     const scope = scopeManager.newScope('scene');
     const engine = {
@@ -1106,6 +1106,255 @@ async function verifyCupsPuzzle() {
     }
 }
 
+async function createShooterFixture(level) {
+    const fixture = await createArcadeFixture('SHOOTER', 'Shooter', 'Shooter.cnv', ['cnvSpell.cnv', 'cnvBkg0.cnv']);
+    const { engine, parent, scope, defs, get } = fixture, stage = engine.app.stage;
+    const scenePath = 'dane/game/przygoda/shooter', memory = new Map(), backgrounds = [], voices = [], routes = [], screenshots = [];
+    parent.getRelativePath = name => normalizePath(name.startsWith('$') ? name.slice(1) : `${scenePath}/${name}`);
+    engine.resolvePath = async (name, base = scenePath) => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
+    engine.filesystem = new Filesystem({
+        hasFile: name => fs.existsSync(path.join(assets, name)), registerLogicalFilenames() {},
+        getRawFile: async name => {
+            if (!fs.existsSync(path.join(assets, name))) throw new FileNotFoundError(name);
+            return bytes(path.join(assets, name));
+        },
+    }, { get: async name => memory.get(name) ?? null, has: async name => memory.has(name),
+        save: async (name, value) => { assert.equal(name, 'common/shooter0.arr'); memory.set(name, value.slice(0)); } }, engine.compat);
+    engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
+    engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
+    engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+    engine.rendering.setBackground = texture => backgrounds.push(texture);
+    const assetLoader = load('filesystem/assetsLoader.ts'), previousLoadSound = assetLoader.loadSound;
+    const previousWindow = globalThis.window; globalThis.window = new EventTarget();
+    const voice = onEnd => {
+        const instance = { isPlaying: true, stop() { this.isPlaying = false; }, pause() {}, resume() {} };
+        voices.push(() => { if (instance.isPlaying) { instance.isPlaying = false; onEnd?.(); } }); return instance;
+    };
+    assetLoader.loadSound = async () => ({ play: options => voice(options?.onEnd) });
+    const dispose = () => {
+        const cleanup = engine.scopeManager.destroy(); backgrounds.forEach(texture => texture.destroy(true));
+        assetLoader.loadSound = previousLoadSound;
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+        assert.deepEqual(cleanup, [], 'Shooter cleanup'); assert.equal(stage.children.length, 0);
+    };
+    try {
+        for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
+            const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+            if (actor instanceof Animo) actor.loadSfx = async () => {};
+            scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+        }
+        for (const def of Object.values(defs).filter(def => def.TYPE === 'BUTTON')) {
+            const button = new Button(engine, parent, def);
+            scope.set(button.name, button); button.init(); await button.applyDefaults();
+        }
+        for (const def of Object.values(defs).filter(def => def.TYPE === 'TIMER')) scope.set(def.NAME, new Timer(engine, parent, def));
+        const model = () => {
+            const struct = new Struct(engine, parent, defs.STRUCTLEVEL);
+            for (const [name, type] of struct.structure) struct.content.set(name,
+                new constructors[type](engine, parent, { TYPE: type, NAME: name }));
+            struct.clone = async () => model(); return struct;
+        };
+        scope.set('STRUCTLEVEL', model());
+        const database = new Database(engine, parent, defs.DBASELEVEL); scope.set(database.name, database); database.init();
+        for (const [name, type, value] of [['G_SARCADEOBJECTS', 'STRING', String(level)],
+            ['G_SLASTOBJECTS', 'STRING', 'SHOOTER'], ['SCENENAME', 'STRING', 'SHOOTER'], ['G_ISUCCESS', 'INTEGER', 0],
+            ['G_ARRREXSPELLS', 'ARRAY', Array(12).fill(1)]]) {
+            const object = new constructors[type](engine, parent, { TYPE: type, NAME: name });
+            object.restoreCheckpointValue(value); scope.set(name, object);
+        }
+        const cursor = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_CURSOR' });
+        cursor.SETPOSITIONNOCALL = () => {}; scope.set(cursor.name, cursor);
+        const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+        episode.GOTO = scene => routes.push(scene); episode.GETCURRENTSCENE = () => 'SHOOTER'; scope.set(episode.name, episode);
+        const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+        screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+        const { Rand } = load('engine/types/rand.ts');
+        const random = new Rand(engine, parent, { TYPE: 'RAND', NAME: 'RANDOM' }); let randomIndex = 0;
+        random.GET = (min, count) => count === undefined ? randomIndex++ % min : min + randomIndex++ % count;
+        scope.set(random.name, random);
+        const mouse = new Mouse(engine, parent, defs.MOUSE); scope.set(mouse.name, mouse);
+        mouse.onMouseMove({ screen: { x: 400, y: 300 } });
+        const keyboard = new Keyboard(engine, parent, { TYPE: 'KEYBOARD', NAME: 'KEYBOARD' }); scope.set(keyboard.name, keyboard);
+        for (const object of scope.objects.filter(object => object.definition.TYPE === 'SOUND')) {
+            object.playForSequence = onEnd => voice(onEnd);
+        }
+        const pixel = new Animo(engine, parent, { TYPE: 'ANIMO', NAME: '__SHOOTER_PIXEL__',
+            FILENAME: '$\\COMMON\\PIXEL.ANN', TOCANVAS: true, VISIBLE: true });
+        pixel.loadSfx = async () => {}; scope.set(pixel.name, pixel);
+        await pixel.init(); await pixel.applyDefaults(); await pixel.ready();
+        for (const name of ['SEQSHOOTER', 'SEQDROB']) {
+            const sequence = new Sequence(engine, parent, defs[name]);
+            sequence.getAnimo = async filename => { assert.equal(filename, '$\\COMMON\\PIXEL.ANN'); return pixel; };
+            scope.set(sequence.name, sequence); await sequence.init();
+        }
+        const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
+        const start = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'VARMOUSEPOSX');
+        assert.ok(start > 0);
+        const initialization = ast.slice(start).filter(entry => !['CNVLOADER', 'G_MENU'].includes(entry.target?.ref?.name));
+        await new Interpreter(new RuntimeContext(engine, null, code)).execute(initialization);
+        const step = async (count = 1, timers = true) => {
+            for (let tick = 0; tick < count && !parent.paused && !routes.length; tick++) {
+                if (voices.length) voices.shift()();
+                for (const object of scope.objects) if (timers || !(object instanceof Timer)) await object.tick(1000 / 60);
+            }
+        };
+        const finishSequence = async () => {
+            for (let tick = 0; tick < 600 && get('SEQSHOOTER').ISPLAYING() && !routes.length; tick++) await step(1, false);
+            assert.equal(get('SEQSHOOTER').ISPLAYING(), false);
+        };
+        await finishSequence();
+        assert.equal(get('VARLEVEL').value, level); assert.equal(database.GETROWSNO(), 15);
+        return { ...fixture, memory, backgrounds, voices, routes, screenshots, step, finishSequence, dispose };
+    } catch (error) { dispose(); throw error; }
+}
+
+async function verifyShooterRecovery() {
+    for (const outcome of ['FAILED', 'RESTART', 'SUKCES0', 'SUKCES1', 'SUKCES2']) {
+        const level = outcome.startsWith('SUKCES') ? Number(outcome.at(-1)) : 0;
+        const { engine, parent, get, routes, screenshots, step, finishSequence, dispose } = await createShooterFixture(level);
+        try {
+            await get('BEHADDPIECHUR').RUN();
+            assert.equal(get('ANNPIECHUR_1').ISPLAYING(), true);
+            if (outcome === 'FAILED') {
+                for (let tick = 0; tick < 3600 && !get('SEQSHOOTER').ISPLAYING(); tick++) await step(1, false);
+            } else if (outcome === 'RESTART') {
+                const button = get('BTNRESTART'), sprite = get(button.definition.GFXSTANDARD.objectName).getRenderObject();
+                for (const event of ['pointerover', 'pointerdown', 'pointerup']) sprite.emit(event);
+                await button.tick();
+            } else {
+                // The score threshold is a boundary here; the original victory callback/sequence are real.
+                await get('VARSCORE').SET(get('VARSUKCES').value);
+            }
+            assert.equal(get('SEQSHOOTER').ISPLAYING(), true, outcome);
+            assert.equal(parent.paused, false, 'End-of-round dialogue must retain its tick queue');
+            assert.equal(get('ANNPIECHUR_1').ISPLAYING(), false);
+            for (const name of ['TIMERPIECHUR', 'TIMERGOOSE', 'TIMERKURA']) assert.equal(get(name).enabled, false);
+            assert.equal(get('KEYBOARD').ISENABLED(), false); assert.equal(get('MOUSE').signalsDisabled, true);
+            assert.equal(get('BTNRESTART').logic.enabled, false); assert.equal(get('SEQDROB').ISPLAYING(), false);
+            await finishSequence();
+            assert.deepEqual(routes, [outcome === 'FAILED' ? 'LIMBO' : outcome === 'RESTART' ? 'SHOOTER' : 'ARCADE']);
+            assert.equal(screenshots.length, 1);
+            assert.equal(get('G_SARCADEOBJECTS').value, outcome === 'FAILED' ? 'SHOOTER' : outcome === 'RESTART' ? '0' : 'UNIVBACK');
+            if (outcome.startsWith('SUKCES')) {
+                assert.equal(get('G_SLASTOBJECTS').value, `SHOOTER${level}`); assert.equal(get('G_ISUCCESS').value, 1);
+            }
+        } finally { dispose(); }
+    }
+    console.log('SHOOTER RECOVERY: real startup/overlays, missed-enemy failure, restart and all three victory sequences/routing decisions passed');
+}
+
+async function verifyShooterControls() {
+    const { get, step, dispose } = await createShooterFixture(0);
+    try {
+        const mouse = get('MOUSE');
+        const pointer = (x, y) => ({ screen: { x, y }, button: 0 });
+        for (const spell of [...Array(12).keys(), 0]) {
+            let x = 400, y = 300;
+            mouse.onMouseMove(pointer(x, y)); mouse.SETPOSITION(x, y); await mouse.tick(16);
+            await get('VARMOUSEPOSX').SET(x); await get('VARMOUSEPOSY').SET(y);
+            mouse.handleClickEvent(pointer(x, y), 'click'); await mouse.tick(16);
+            for (const angle of get(`ARRPATTERN${spell}`).value) {
+                x += Math.round(60 * Math.cos(angle * Math.PI / 180));
+                y += Math.round(60 * Math.sin(angle * Math.PI / 180));
+                mouse.onMouseMove(pointer(x, y)); await mouse.tick(16);
+            }
+            mouse.handleClickEvent(pointer(x, y), 'release'); await mouse.tick(16);
+            assert.equal(get('ARRSPELLTYPE').value[0], spell, `Shooter spell ${spell}`);
+            if (spell < 6) assert.equal(get('VARAMMO').value, 5, 'Offensive shapes must refill five shots');
+            else assert.deepEqual(get('ARRAYIMMUNE').value, [get('ARRAYSPELL').value[spell - 6]]);
+            await step(10, false);
+        }
+        assert.equal(get('VARSCORE').value, 0, 'Drawing over scenery must not award enemy points');
+        await get('BEHADDPIECHUR').RUN(); await get('BEHADDGOOSE').RUN(); await get('BEHADDKURA').RUN();
+        const observer = get('CANVASOBSERVER');
+        let score = 0;
+        for (const name of ['ANNPIECHUR_1', 'ANNGOOSE_1', 'ANNKURA_1']) {
+            const actor = get(name); let target;
+            for (let tick = 0; tick < 600 && !target; tick++) {
+                const sprite = actor.getRenderObject(), bounds = sprite.getBounds();
+                for (let y = Math.max(1, Math.ceil(bounds.y)); y < Math.min(600, bounds.bottom) && !target; y += 4) {
+                    for (let x = Math.max(1, Math.ceil(bounds.x)); x < Math.min(800, bounds.right); x += 4) {
+                        if (sprite.getAlphaAt({ x, y }) > 0 && observer.GETGRAPHICSAT(x, y, true, -20, 20, false) === name) {
+                            target = { x, y }; break;
+                        }
+                    }
+                }
+                if (!target) await step(1, false);
+            }
+            assert.ok(target, `${name} must become hittable through the original foreground layers`);
+            const ammo = get('VARAMMO').value;
+            mouse.onMouseMove(pointer(target.x, target.y)); await mouse.tick(16);
+            mouse.handleClickEvent(pointer(target.x, target.y), 'click'); await mouse.tick(16);
+            assert.equal(get('VARHIT').value, 1, `${name} must be hit through the original click handler`);
+            assert.equal(get('VARAMMO').value, ammo - 1); score += 5;
+            assert.equal(get('VARSCORE').value, score);
+            assert.match(actor.GETEVENTNAME(), /^C_/);
+            mouse.handleClickEvent(pointer(target.x, target.y), 'release'); await mouse.tick(16);
+        }
+        console.log('SHOOTER CONTROLS: all 12 drawn spell shapes, five-shot reloads, shields and real foreground-aware hits on all three enemy types passed');
+    } finally { dispose(); }
+}
+
+async function verifyShooterWaves() {
+    for (const level of [0, 1, 2]) {
+        const { scope, get, step, routes, dispose } = await createShooterFixture(level);
+        const mouse = get('MOUSE'), observer = get('CANVASOBSERVER'), victims = new Set();
+        const pointer = (x, y) => ({ screen: { x, y }, button: 0 });
+        let ticks = 0, casts = 0;
+        const tick = async () => { await step(); ticks++; };
+        const recharge = async () => {
+            let x = 400, y = 300;
+            mouse.onMouseMove(pointer(x, y)); await tick();
+            mouse.handleClickEvent(pointer(x, y), 'click'); await tick();
+            for (const angle of get('ARRPATTERN0').value) {
+                x += Math.round(60 * Math.cos(angle * Math.PI / 180));
+                y += Math.round(60 * Math.sin(angle * Math.PI / 180));
+                mouse.onMouseMove(pointer(x, y)); await tick();
+            }
+            mouse.handleClickEvent(pointer(x, y), 'release'); await tick(); casts++;
+            assert.equal(get('VARAMMO').value, 5, 'Only an actual recognized shape may recharge the wand');
+        };
+        const findTarget = () => {
+            for (const actor of scope.objects.filter(object => /^ANN(PIECHUR|GOOSE|KURA)_\d+$/.test(object.name) &&
+                object.ISPLAYING() && /^[PA]/.test(object.GETEVENTNAME()))) {
+                const sprite = actor.getRenderObject(), bounds = sprite.getBounds();
+                for (let y = Math.max(1, Math.ceil(bounds.y)); y < Math.min(600, bounds.bottom); y += 6) {
+                    for (let x = Math.max(1, Math.ceil(bounds.x)); x < Math.min(800, bounds.right); x += 6) {
+                        if (sprite.getAlphaAt({ x, y }) && observer.GETGRAPHICSAT(x, y, true, -20, 20, false) === actor.name) {
+                            return { x, y };
+                        }
+                    }
+                }
+            }
+            return null;
+        };
+        try {
+            // Automatic aim chooses visible hit pixels, but timers, actors, ammo, scores and drawing remain script-owned.
+            while (ticks < 30000 && !routes.length) {
+                if (mouse.signalsDisabled) { await tick(); continue; }
+                if (get('VARAMMO').value === 0) await recharge();
+                const target = findTarget();
+                if (!target) { await tick(); continue; }
+                const score = get('VARSCORE').value;
+                mouse.onMouseMove(pointer(target.x, target.y)); await tick();
+                mouse.handleClickEvent(pointer(target.x, target.y), 'click'); await tick();
+                if (get('VARSCORE').value > score) {
+                    const actual = get('VARSTRING0').value;
+                    assert.equal(victims.has(actual), false, `${actual} must not award points twice`);
+                    victims.add(actual);
+                    assert.match(get(actual).GETEVENTNAME(), /^C_/, 'A credited hit must transform its target');
+                }
+                mouse.handleClickEvent(pointer(target.x, target.y), 'release'); await tick();
+            }
+            assert.deepEqual(routes, ['ARCADE'], `Shooter wave ${level} must finish normally`);
+            assert.ok(get('VARSCORE').value >= get('VARSUKCES').value); assert.ok(casts > 0 && victims.size > 0);
+            assert.equal(get('G_SARCADEOBJECTS').value, 'UNIVBACK');
+            assert.equal(get('G_SLASTOBJECTS').value, `SHOOTER${level}`); assert.equal(get('G_ISUCCESS').value, 1);
+            console.log(`SHOOTER WAVE ${level}: ${victims.size} unique targets, ${casts} drawn reloads, score ${get('VARSCORE').value}, original victory/story-return passed`);
+        } finally { dispose(); }
+    }
+}
+
 async function verifyBroomPhysics() {
     const { world, get, addMedia } = await createArcadeFixture('MIOTLY', 'miotly', 'Miotly.cnv');
     for (let index = 1; index <= 10; index++) addMedia(`ANNKURZ_${index}`);
@@ -1822,6 +2071,9 @@ async function main() {
     await verifyFredRoute();
     await verifyFredRecovery();
     await verifyCupsPuzzle();
+    await verifyShooterRecovery();
+    await verifyShooterControls();
+    await verifyShooterWaves();
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();

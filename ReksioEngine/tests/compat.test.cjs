@@ -596,6 +596,26 @@ test('Magicienii maze failure and restart freeze animations without pausing thei
     }
 });
 
+test('Magicienii Shooter freezes rounds without blocking failure, restart or victory sequences', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/shooter/shooter.cnv';
+    const source = 'A={SHOOTER^PAUSE();SEQSHOOTER^PLAY("FAILED");}\n' +
+        'B={SHOOTER^PAUSE();SEQSHOOTER^PLAY("RESTART");}\n' +
+        'C={SHOOTER^PAUSE();SEQSHOOTER^PLAY(["SUKCES"+VARLEVEL]);}';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.equal(repaired.includes('SHOOTER^PAUSE();'), false);
+    assert.equal(repaired.split('__WEB_SHOOTERPAUSE__^RUN();').length - 1, 3);
+    assert.match(repaired, /SEQDROB\^STOP\(\);SHOOTER\^GETPLAYINGANIMO\("__WEB_SHOOTERPLAYING__"\)/);
+    for (const name of ['TIMERPIECHUR', 'TIMERGOOSE', 'TIMERKURA', 'KEYBOARD', 'BTNRESTART']) {
+        assert.ok(repaired.includes(`${name}^DISABLE();`));
+    }
+    assert.ok(repaired.includes('MOUSE^DISABLESIGNAL();'));
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const name of ['shooter/cnvSpell.cnv', 'labirynt/labirynt.cnv', 'arcade/arcade.cnv']) {
+        assert.equal(patchMagicieniiSource(`dane/game/przygoda/${name}`, source), source);
+    }
+});
+
 test('Only Magicienii collects scene-owned playing animations across overlay scopes', () => {
     class Actor { constructor(parent, playing = true) { this.parent = parent; this.isPlaying = playing; } }
     class Collection { objects = []; removeAll() { this.objects = []; } add(object) { this.objects.push(object); } }
@@ -1421,7 +1441,7 @@ test('IMAGE schema keeps alchemy focus and click callbacks', () => {
     }
 });
 
-test('Nemo inventory frame steps stay within the active event and leave Pirates unchanged', async () => {
+test('Nemo and Magicienii manual frame steps stay within the active event and preserve other profiles', async () => {
     const { Animo } = loadModule('engine/types/animo.ts', {
         './index': { DisplayType: FakeType }, '../../common/errors': {}, 'pixi.js': {},
         '../components/button': {}, '../../filesystem/assetsLoader': {},
@@ -1429,25 +1449,29 @@ test('Nemo inventory frame steps stay within the active event and leave Pirates 
         '../components/collisions': {}, '../audio': {}, '../logging': {},
     });
     const animation = Object.create(Animo.prototype);
-    animation.engine = { compat: createEngineCompat('nemo') };
-    animation.currentEvent = { name: 'IDLE', framesCount: 2 };
-    animation.currentFrame = 0;
-    animation.SETFRAME = async (name, frame) => {
-        assert.equal(name, 'IDLE');
-        animation.currentFrame = frame;
-    };
-    await animation.NEXTFRAME();
-    assert.equal(animation.currentFrame, 1);
-    await animation.NEXTFRAME();
-    assert.equal(animation.currentFrame, 1);
-    await animation.PREVFRAME();
-    await animation.PREVFRAME();
-    assert.equal(animation.currentFrame, 0);
-    animation.engine.compat = createEngineCompat();
-    animation.__call = (name) => name;
-    assert.equal(await animation.NEXTFRAME(), 'NEXTFRAME');
-    assert.equal(await animation.PREVFRAME(), 'PREVFRAME');
-    assert.equal(animation.currentFrame, 0);
+    for (const profile of ['nemo', 'magicienii']) {
+        animation.engine = { compat: createEngineCompat(profile) };
+        animation.currentEvent = { name: 'IDLE', framesCount: 2 };
+        animation.currentFrame = 0;
+        animation.SETFRAME = async (name, frame) => {
+            assert.equal(name, 'IDLE');
+            animation.currentFrame = frame;
+        };
+        await animation.NEXTFRAME();
+        assert.equal(animation.currentFrame, 1);
+        await animation.NEXTFRAME();
+        assert.equal(animation.currentFrame, 1);
+        await animation.PREVFRAME();
+        await animation.PREVFRAME();
+        assert.equal(animation.currentFrame, 0);
+    }
+    for (const profile of ['default', 'ozn', 'timpului']) {
+        animation.engine.compat = createEngineCompat(profile);
+        animation.__call = (name) => name;
+        assert.equal(await animation.NEXTFRAME(), 'NEXTFRAME');
+        assert.equal(await animation.PREVFRAME(), 'PREVFRAME');
+        assert.equal(animation.currentFrame, 0);
+    }
 });
 
 test('Magicienii frame selection uses native event indexes and event-zero fallback', async () => {

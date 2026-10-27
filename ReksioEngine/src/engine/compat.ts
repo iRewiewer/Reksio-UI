@@ -95,7 +95,7 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         classConstructorName: name === 'nemo',
         classHotspotOwners: name === 'nemo',
         buttonAreaPriority: name === 'nemo',
-        manualAnimationFrames: name === 'nemo',
+        manualAnimationFrames: name === 'nemo' || name === 'magicienii',
         imageCloneRendering: name === 'ozn' || name === 'magicienii',
         displayOpacity: name === 'magicienii' || name === 'timpului',
         queuedMouseCoordinates: name === 'magicienii' || name === 'timpului',

@@ -31,6 +31,15 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         return source.replaceAll('FRED^PAUSE();SEQNARRATOR^PLAY("FAILED");',
             'KEYBOARD^DISABLE();BTNRESTART^DISABLE();TIMERSEQ^DISABLE();SEQNARRATOR^PLAY("FAILED");')
     }
+    if (filename === 'dane/game/przygoda/shooter/shooter.cnv' && source.includes('SHOOTER^PAUSE();')) {
+        // End-of-round sequences must tick while enemies, spawn timers and input are frozen.
+        return source.replaceAll('SHOOTER^PAUSE();', '__WEB_SHOOTERPAUSE__^RUN();') + '\n' +
+            'OBJECT=__WEB_SHOOTERPLAYING__\n__WEB_SHOOTERPLAYING__:TYPE=GROUP\n' +
+            'OBJECT=__WEB_SHOOTERPAUSE__\n__WEB_SHOOTERPAUSE__:TYPE=BEHAVIOUR\n' +
+            '__WEB_SHOOTERPAUSE__:CODE={SEQDROB^STOP();SHOOTER^GETPLAYINGANIMO("__WEB_SHOOTERPLAYING__");' +
+            '__WEB_SHOOTERPLAYING__^PAUSE();TIMERPIECHUR^DISABLE();TIMERGOOSE^DISABLE();TIMERKURA^DISABLE();' +
+            'KEYBOARD^DISABLE();MOUSE^DISABLESIGNAL();BTNRESTART^DISABLE();}\n'
+    }
     if (filename === 'dane/game/przygoda/labirynt/labirynt.cnv' && source.includes('LABIRYNT^PAUSE();')) {
         // Freeze gameplay, but keep the failure/restart sequence's completion processor running.
         return source.replaceAll('LABIRYNT^PAUSE();', '__WEB_MAZEPAUSE__^RUN();') + '\n' +
