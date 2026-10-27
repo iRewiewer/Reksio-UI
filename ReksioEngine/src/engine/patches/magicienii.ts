@@ -119,6 +119,14 @@ export function patchMagicieniiSource(filename: string, source: string): string 
     if (filename === 'dane/game/przygoda/arcade/alchemy.cnv') {
         return source.replaceAll('^SETPTIORITY(', '^SETPRIORITY(')
     }
+    if (filename === 'dane/game/przygoda/arcade/piklibia.cnv') {
+        // Animation nodes are zero-based, while ARRAY clone names start at one.
+        for (const index of ['_I_', 'ARRKNIGHTFRAME^GET(VARITER)', 'VARITEMP1']) {
+            source = source.replaceAll(`["ARRFIELDS_"+${index}]`, `["ARRFIELDS_"+[${index}+1]]`)
+        }
+        // The card is not attached to a room object; an omitted parent becomes switch zero.
+        return source.replaceAll('BEHADDITEM^RUN("KARTA_BUT");', 'BEHADDITEM^RUN("KARTA_BUT",-1);')
+    }
     if (filename !== 'dane/game/przygoda/magic/magic.cnv') return source
     // The wand's drawing event is CZARUJE (event 1), not the absent PLAY alias.
     return source

@@ -545,6 +545,31 @@ test('Magicienii repairs misspelled alchemy image priorities only in that source
     assert.equal(patchMagicieniiSource('dane/game/przygoda/magic/magic.cnv', source), source);
 });
 
+test('Magicienii Piklibia maps zero-based board nodes to one-based array clones only in that room', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/piklibia.cnv';
+    const indices = ['_I_', 'ARRKNIGHTFRAME^GET(VARITER)', 'VARITEMP1'];
+    const source = indices.map(index => `VARSTEMP0^SET(["ARRFIELDS_"+${index}]);`).join('');
+    const expected = indices.map(index => `VARSTEMP0^SET(["ARRFIELDS_"+[${index}+1]]);`).join('');
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/alchemy.cnv', 'other/piklibia.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
+test('Only the Piklibia card reward uses a detached inventory parent without changing other pickups', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/piklibia.cnv';
+    const source = 'BEHADDITEM^RUN("KARTA_BUT");BEHADDITEM^RUN("LINA_BUT");BEHADDITEM^RUN("KARTA_BUT",4);';
+    const expected = 'BEHADDITEM^RUN("KARTA_BUT",-1);BEHADDITEM^RUN("LINA_BUT");BEHADDITEM^RUN("KARTA_BUT",4);';
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/alchemy.cnv', 'other/piklibia.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
 test('Magicienii Cat converts walking directions to integer event names only in its scene source', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const source = '*VARPLAYERNAME^PLAY([360-VARINT0@45]);OTHER^PLAY([360-VARINT0@45]);';

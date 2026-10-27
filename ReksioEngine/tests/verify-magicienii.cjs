@@ -213,6 +213,11 @@ async function createArcadeFixture(scene, folder, filename, overlay) {
     return { engine, parent, scope, directory, defs, world, get, addMedia };
 }
 
+async function verifyPiklibia() {
+    await require('./verify-magicienii-piklibia.cjs')({ assets, createArcadeFixture, Filesystem, normalizePath,
+        Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray });
+}
+
 async function verifyBarandalf() {
     for (const level of [0, 2]) {
         const { engine, parent, scope, directory, defs, world, get } =
@@ -3232,6 +3237,7 @@ async function main() {
     await verifyMazeFirstRoute();
     await verifyMazeRescueRoute();
     await verifyMazeCardRoute();
+    await verifyPiklibia();
     await verifyMazeSpellControls();
     await verifyMazeEnemySpellHits();
     await verifyMazeRecovery();
