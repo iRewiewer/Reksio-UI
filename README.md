@@ -1,8 +1,10 @@
 # Reksio UI
 
-The initial goal was to use and improve [ReksioEngine](https://github.com/ReksioEngine/ReksioEngine) independently of the upstream project, using AI-first development.
+An AI-first project focused on making all five romanian Reksio games playable.
 
-The project has since evolved into making all five games work by any means necessary, rather than faithfully reimplementing the original engine. Development remains AI-first, with game-specific compatibility patches.
+The project began as an independent effort to build on and improve [ReksioEngine](https://github.com/ReksioEngine/ReksioEngine). Its focus has since shifted towards practical compatibility, prioritising working games over strict fidelity to the original engine. Game-specific fixes and compatibility patches are part of that approach.
+
+## Games
 
 - Reksio si Comoara Piratilor
 - Reksio si OZN-ul
