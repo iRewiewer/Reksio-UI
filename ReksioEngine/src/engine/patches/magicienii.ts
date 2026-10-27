@@ -47,6 +47,20 @@ export function patchMagicieniiSource(filename: string, source: string): string 
             '__WEB_BROOMPAUSE__:CODE={MIOTLY^GETPLAYINGANIMO("__WEB_BROOMPLAYING__");' +
             '__WEB_BROOMPLAYING__^PAUSE();KEYBOARD^DISABLE();BTNRESTART^DISABLE();TIMEREND^DISABLE();SNDWIR^STOP();}\n'
     }
+    if (filename === 'dane/game/przygoda/barandalf/barandalf.cnv' && source.includes('BARANDALF^PAUSE();')) {
+        // Restart dialogue must tick after gameplay stops, including the boat overlay's controls.
+        return source.replaceAll('BARANDALF^PAUSE();', '__WEB_BARANDALFPAUSE__^RUN();') + '\n' +
+            'OBJECT=__WEB_BARANDALFPLAYING__\n__WEB_BARANDALFPLAYING__:TYPE=GROUP\n' +
+            'OBJECT=__WEB_BARANDALFPAUSE__\n__WEB_BARANDALFPAUSE__:TYPE=BEHAVIOUR\n' +
+            '__WEB_BARANDALFPAUSE__:CODE={SEQMANDOLINA^STOP();BARANDALF^GETPLAYINGANIMO("__WEB_BARANDALFPLAYING__");' +
+            '__WEB_BARANDALFPLAYING__^PAUSE();MOUSE^DISABLESIGNAL();BTNRESTART^DISABLE();' +
+            '@IF("VARLEVEL","_","1","__WEB_BARANDALFBOATPAUSE__","__WEB_BARANDALFWALKPAUSE__");}\n' +
+            'OBJECT=__WEB_BARANDALFWALKPAUSE__\n__WEB_BARANDALFWALKPAUSE__:TYPE=BEHAVIOUR\n' +
+            '__WEB_BARANDALFWALKPAUSE__:CODE={TIMERSEQ^DISABLE();}\n' +
+            'OBJECT=__WEB_BARANDALFBOATPAUSE__\n__WEB_BARANDALFBOATPAUSE__:TYPE=BEHAVIOUR\n' +
+            '__WEB_BARANDALFBOATPAUSE__:CODE={BTNKRET^DISABLE();BTNLOVELAS^DISABLE();BTNMIMLI^DISABLE();' +
+            'BTNREX^DISABLE();BTNCHOMIK^DISABLE();BTNLODKA^DISABLE();}\n'
+    }
     if (filename === 'dane/game/przygoda/shooter/shooter.cnv' && source.includes('SHOOTER^PAUSE();')) {
         // End-of-round sequences must tick while enemies, spawn timers and input are frozen.
         return source.replaceAll('SHOOTER^PAUSE();', '__WEB_SHOOTERPAUSE__^RUN();') + '\n' +

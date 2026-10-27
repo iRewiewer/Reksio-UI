@@ -376,6 +376,123 @@ async function verifyBarandalfBoat() {
     }
 }
 
+async function createBarandalfFixture(level) {
+    const fixture = await createArcadeFixture('BARANDALF', 'Barandalf', 'Barandalf.cnv', `cnvLevel${level}.cnv`);
+    const { engine, parent, scope, defs, get } = fixture, base = 'dane/game/przygoda/barandalf', stage = engine.app.stage;
+    const memory = new Map(), routes = [], voices = [], audio = [], backgrounds = [], screenshots = [];
+    engine.resolvePath = async (name, base = '') => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
+    parent.getRelativePath = name => engine.resolvePath(name, base);
+    engine.filesystem = new Filesystem({
+        hasFile: name => fs.existsSync(path.join(assets, name)), registerLogicalFilenames() {},
+        getRawFile: async name => {
+            if (!fs.existsSync(path.join(assets, name))) throw new FileNotFoundError(name);
+            return bytes(path.join(assets, name));
+        },
+    }, { get: async name => memory.get(name) ?? null, has: async name => memory.has(name),
+        save: async (name, value) => { assert.equal(name, 'common/barandalf0.arr'); memory.set(name, value.slice(0)); } }, engine.compat);
+    engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
+    engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
+    engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+    engine.rendering.setBackground = texture => backgrounds.push(texture);
+    const assetLoader = load('filesystem/assetsLoader.ts'), previousLoadSound = assetLoader.loadSound;
+    assetLoader.loadSound = async (filesystem, filename) => {
+        if (!fs.existsSync(path.join(assets, normalizePath(filename)))) throw new FileNotFoundError(filename);
+        const sound = { isPlaying: false, stop() { this.isPlaying = false; }, play(options = {}) {
+            sound.isPlaying = true; audio.push(filename); options.onStart?.();
+            if (!options.loop) voices.push(() => { if (sound.isPlaying) { sound.isPlaying = false; options.onEnd?.(); } });
+            return { stop() { sound.isPlaying = false; }, pause() {}, resume() {} };
+        } };
+        return sound;
+    };
+    const dispose = () => {
+        const cleanup = engine.scopeManager.destroy(); backgrounds.forEach(texture => texture.destroy(true));
+        assetLoader.loadSound = previousLoadSound;
+        assert.deepEqual(cleanup, [], 'Barandalf cleanup'); assert.equal(stage.children.length, 0);
+    };
+    try {
+        for (const def of Object.values(defs)) {
+            if (['ANIMO', 'IMAGE'].includes(def.TYPE)) {
+                const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+                if (actor instanceof Animo) actor.loadSfx = async () => {};
+                scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+            } else if (def.TYPE === 'TIMER') scope.set(def.NAME, new Timer(engine, parent, def));
+            else if (def.TYPE === 'STATICFILTER') scope.set(def.NAME, new StaticFilter(engine, parent, def));
+        }
+        for (const def of Object.values(defs).filter(def => def.TYPE === 'BUTTON')) {
+            const button = new Button(engine, parent, def); scope.set(button.name, button); button.init(); await button.applyDefaults();
+        }
+        scope.set('MOUSE', new Mouse(engine, parent, defs.MOUSE));
+        for (const [name, value] of [['G_SARCADEOBJECTS', String(level)], ['G_SLASTOBJECTS', 'BARANDALF'], ['SCENENAME', 'BARANDALF']]) {
+            const object = new constructors.STRING(engine, parent, { TYPE: 'STRING', NAME: name });
+            object.restoreCheckpointValue(value); scope.set(name, object);
+        }
+        const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+        screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+        const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+        episode.GOTO = name => routes.push(name); scope.set(episode.name, episode);
+        const helpers = new Map();
+        const getAnimo = async name => {
+            if (helpers.has(name)) return helpers.get(name);
+            const actor = new Animo(engine, parent, { TYPE: 'ANIMO', NAME: `__BARANDALF_SEQ_${helpers.size}__`,
+                FILENAME: name, TOCANVAS: true, VISIBLE: true });
+            actor.loadSfx = async () => {}; scope.set(actor.name, actor);
+            await actor.init(); await actor.applyDefaults(); await actor.ready(); helpers.set(name, actor); return actor;
+        };
+        for (const name of ['SEQLEVEL', 'SEQMANDOLINA']) {
+            const sequence = new Sequence(engine, parent, defs[name]); sequence.getAnimo = getAnimo;
+            scope.set(name, sequence); await sequence.init();
+        }
+        const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
+        const start = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'VARSAVENAME');
+        assert.ok(start > 0);
+        // The overlay is preloaded; global menu/cursor/music/ambient setup is outside this fixture.
+        await new Interpreter(new RuntimeContext(engine, null, code)).execute(ast.slice(start).filter(entry =>
+            !['G_CURSOR', 'G_MENU', 'G_AMBIENT', 'CNVLOADER'].includes(entry.target?.ref?.name)));
+        const step = async (count = 1) => {
+            for (let tick = 0; tick < count && !routes.length; tick++) {
+                if (voices.length) voices.shift()();
+                if (!parent.paused) for (const object of scope.objects) await object.tick(1000 / 60);
+            }
+        };
+        const click = async name => {
+            const button = get(name), sprite = get(button.definition.GFXSTANDARD.objectName).getRenderObject();
+            for (const event of ['pointerover', 'pointerdown', 'pointerup']) sprite.emit(event);
+            await button.tick();
+        };
+        assert.equal(get('VARLEVEL').value, level);
+        return { ...fixture, step, click, routes, memory, audio, screenshots, dispose };
+    } catch (error) { dispose(); throw error; }
+}
+
+async function verifyBarandalfRecovery() {
+    for (const level of [0, 1, 2]) {
+        const { get, world, parent, step, click, routes, memory, audio, screenshots, dispose } = await createBarandalfFixture(level);
+        try {
+            await step(120);
+            if (level === 1) {
+                await click('BTNKRET'); await click('BTNREX'); await click('BTNLODKA');
+                assert.equal(get('ANNLODKA').ISPLAYING(), true, 'Start a valid crossing before restarting');
+            }
+            await get('BTNRESTART').callbacks.run('ONRELEASED');
+            assert.equal(parent.paused, false, 'The restart sequence must keep ticking');
+            assert.equal(world.started, false); assert.equal(get('ANNELAPSE').isPlaying, false);
+            if (level !== 1) assert.equal(get('TIMERSEQ').enabled, false);
+            assert.equal(get('BTNRESTART').logic.enabled, false);
+            if (level === 1) for (const name of ['BTNKRET', 'BTNREX', 'BTNLOVELAS', 'BTNMIMLI', 'BTNCHOMIK', 'BTNLODKA']) {
+                assert.equal(get(name).logic.enabled, false, `${name} must not mutate the boat during restart`);
+            }
+            const boatFrame = level === 1 ? get('ANNLODKA').GETCFRAMEINEVENT() : null;
+            await step(600);
+            assert.deepEqual(routes, ['BARANDALF']); assert.equal(screenshots.length, 1);
+            assert.deepEqual(deserializeArray(memory.get('common/barandalf0.arr')), [level, level === 1 ? 1 : 0]);
+            assert.deepEqual(audio.slice(-2).map(name => name.toLowerCase()), ['wavs/nar_b091.wav', 'wavs/nar_b092.wav']);
+            assert.equal(get('SEQLEVEL').ISPLAYING(), false);
+            if (level === 1) assert.equal(get('ANNLODKA').GETCFRAMEINEVENT(), boatFrame, 'A restarted crossing must stay frozen');
+        } finally { dispose(); }
+    }
+    console.log('BARANDALF: three real-asset overlay initializers, restart voices, frozen controls/crossing and original reload requests passed');
+}
+
 async function verifyMazeEnemies() {
     let enemies = 0, accepted = 0, rejected = 0;
     for (const level of [0, 1, 2]) {
@@ -1526,55 +1643,67 @@ async function verifyBroomPhysics() {
     }
 }
 
-async function verifyBroomFlight() {
-    const { get, world, step, key, routes, memory, screenshots, dispose } = await createBroomFixture(0);
+function planBroomRoute(get, direction) {
     const xs = Array.from({ length: 27 }, (_, index) => 75 + index * 25), costs = [], parents = [], plan = [];
-    let held = null, turns = 0;
-    try {
-        // Plan from the initial real mask pixels; only arrow-key events drive the actual flight.
-        for (let progress = 0; progress <= 24500; progress += 100) {
-            const row = [], links = [], previous = costs.at(-1);
-            for (let index = 0; index < xs.length; index++) {
-                let hazard = 0;
-                for (const dx of [-25, 0, 25]) for (const dy of [-35, 0, 35]) {
-                    if (get('PATTERNMASKREX').GETGRAPHICSAT(xs[index] + dx, 300 - progress + dy, true, false, 0, 1) !== 'UNKNOWN') hazard++;
-                }
-                let best = previous ? Infinity : Math.abs(xs[index] - 380) * .1, from = -1;
-                if (previous) for (let candidate = Math.max(0, index - 2); candidate <= Math.min(xs.length - 1, index + 2); candidate++) {
-                    const score = previous[candidate] + Math.abs(xs[index] - xs[candidate]) * .01;
-                    if (score < best) { best = score; from = candidate; }
-                }
-                row.push(best + hazard * 100 + Math.abs(xs[index] - 400) * .0001); links.push(from);
+    // Plan from the initial real mask pixels, in the direction of this outward or return flight.
+    for (let progress = 0; progress <= 24500; progress += 100) {
+        const row = [], links = [], previous = costs.at(-1);
+        for (let index = 0; index < xs.length; index++) {
+            let hazard = 0;
+            for (const dx of [-25, 0, 25]) for (const dy of [-35, 0, 35]) {
+                if (get('PATTERNMASKREX').GETGRAPHICSAT(xs[index] + dx, 300 - direction * progress + dy, true, false, 0, 1) !== 'UNKNOWN') hazard++;
             }
-            costs.push(row); parents.push(links);
-        }
-        let index = costs.at(-1).indexOf(Math.min(...costs.at(-1)));
-        for (let progress = costs.length - 1; progress >= 0; progress--) {
-            plan[progress] = xs[index]; index = parents[progress][index];
-        }
-        const history = [];
-        for (let tick = 0; tick < 14000 && !routes.length; tick++) {
-            const progress = get('VARBKGPOSY').value, x = world.GETPOSITIONX(199);
-            history.push(x); if (history.length > 10) history.shift();
-            const vx = (x - history[0]) * 6;
-            const target = plan[Math.min(plan.length - 1, Math.max(0, Math.round((progress + 400) / 100)))];
-            const ax = Math.max(-400, Math.min(400, (target - x) * 1.5 - vx * 2));
-            const desired = (Math.round((95 - Math.atan2(Math.sqrt(500 * 500 - ax * ax), ax) * 180 / Math.PI) / 11) + 32) % 32;
-            const delta = (desired - get('VARREXANGLE').value + 48) % 32 - 16;
-            const next = delta > 0 ? 'ArrowRight' : delta < 0 ? 'ArrowLeft' : null;
-            if (next !== held) {
-                if (held) key(false, held);
-                if (next) { key(true, next); turns++; }
-                held = next;
+            let best = previous ? Infinity : Math.abs(xs[index] - 380) * .1, from = -1;
+            if (previous) for (let candidate = Math.max(0, index - 2); candidate <= Math.min(xs.length - 1, index + 2); candidate++) {
+                const score = previous[candidate] + Math.abs(xs[index] - xs[candidate]) * .01;
+                if (score < best) { best = score; from = candidate; }
             }
-            await step();
+            row.push(best + hazard * 100 + Math.abs(xs[index] - 400) * .0001); links.push(from);
         }
-        assert.deepEqual(routes, ['ARCADE']); assert.equal(get('G_SARCADEOBJECTS').value, 'PIKMIOT');
-        assert.ok(get('VARBKGPOSY').value > 24000 && get('VARENERGIA').value > 0 && turns > 0);
-        assert.deepEqual(deserializeArray(memory.get('common/miotly0.arr')), [0]);
-        assert.equal(screenshots.length, 1);
-        console.log(`BROOM 0: full 24000-pixel flight, ${turns} steering changes, ${get('VARENERGIA').value} energy and original PIKMIOT return passed`);
-    } finally { if (held) key(false, held); dispose(); }
+        costs.push(row); parents.push(links);
+    }
+    let index = costs.at(-1).indexOf(Math.min(...costs.at(-1)));
+    for (let progress = costs.length - 1; progress >= 0; progress--) {
+        plan[progress] = xs[index]; index = parents[progress][index];
+    }
+    return plan;
+}
+
+async function verifyBroomFlight() {
+    for (const [level, room] of [[0, 'PIKMIOT'], [1, 'MIASTO'], [2, 'MIOTLISKO'], [3, 'MIASTO'],
+        [4, 'BARANMIOT'], [5, 'MIASTO']]) {
+        const { get, world, step, key, routes, memory, screenshots, dispose } = await createBroomFixture(level);
+        const direction = level % 2 ? -1 : 1, history = [];
+        let held = null, turns = 0;
+        try {
+            const plan = planBroomRoute(get, direction);
+            const steeringGain = level === 5 ? 12 : 6;
+            for (let tick = 0; tick < 14000 && !routes.length; tick++) {
+                const x = world.GETPOSITIONX(199);
+                // The hero moves within the viewport as well as scrolling the map.
+                const progress = direction * (get('VARBKGPOSY').value + 300 - get('ANNREX').GETCENTERY());
+                history.push(x); if (history.length > 10) history.shift();
+                const vx = (x - history[0]) * 6;
+                const target = plan[Math.min(plan.length - 1, Math.max(0, Math.round((progress + 100) / 100)))];
+                const ax = Math.max(-400, Math.min(400, (target - x) * steeringGain - vx * 2));
+                const desired = (Math.round((95 - Math.atan2(direction * Math.sqrt(500 * 500 - ax * ax), ax) * 180 / Math.PI) / 11) + 32) % 32;
+                const delta = (desired - get('VARREXANGLE').value + 48) % 32 - 16;
+                const next = delta > 0 ? 'ArrowRight' : delta < 0 ? 'ArrowLeft' : null;
+                if (next !== held) {
+                    if (held) key(false, held);
+                    if (next) { key(true, next); turns++; }
+                    held = next;
+                }
+                await step();
+            }
+            assert.deepEqual(routes, ['ARCADE'], `Broom ${level} full-flight destination`);
+            assert.equal(get('G_SARCADEOBJECTS').value, room);
+            assert.ok(direction * get('VARBKGPOSY').value > 24000 && get('VARENERGIA').value > 0 && turns > 0);
+            assert.deepEqual(deserializeArray(memory.get('common/miotly0.arr')), [level]);
+            assert.equal(screenshots.length, 1);
+            console.log(`BROOM ${level}: full 24000-pixel flight, ${turns} steering changes, ${get('VARENERGIA').value} energy and original ${room} return passed`);
+        } finally { if (held) key(false, held); dispose(); }
+    }
 }
 
 async function createCatFixture(filesystemEntries = []) {
@@ -2613,6 +2742,7 @@ async function main() {
     await verifyCatSavedProgress();
     await verifyBarandalf();
     await verifyBarandalfBoat();
+    await verifyBarandalfRecovery();
     await verifyMazeEnemies();
     await verifyMazePlayers();
     await verifyMazePuzzleInitialization();

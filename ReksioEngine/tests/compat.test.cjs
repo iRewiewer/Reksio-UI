@@ -645,6 +645,22 @@ test('Magicienii broom keeps its static background and failure dialogue independ
     }
 });
 
+test('Magicienii Barandalf restart freezes all overlay controls without pausing the dialogue processor', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/barandalf/barandalf.cnv';
+    const source = 'WORLD^STOP();ANNELAPSE^STOP(FALSE);BARANDALF^PAUSE();SEQLEVEL^PLAY("RESTARTNOR");';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.ok(repaired.startsWith('WORLD^STOP();ANNELAPSE^STOP(FALSE);__WEB_BARANDALFPAUSE__^RUN();SEQLEVEL^PLAY("RESTARTNOR");'));
+    for (const call of ['SEQMANDOLINA^STOP()', 'BARANDALF^GETPLAYINGANIMO("__WEB_BARANDALFPLAYING__")',
+        '__WEB_BARANDALFPLAYING__^PAUSE()', 'TIMERSEQ^DISABLE()', 'MOUSE^DISABLESIGNAL()', 'BTNRESTART^DISABLE()',
+        '@IF("VARLEVEL","_","1","__WEB_BARANDALFBOATPAUSE__","__WEB_BARANDALFWALKPAUSE__")', 'BTNKRET^DISABLE()', 'BTNLOVELAS^DISABLE()',
+        'BTNMIMLI^DISABLE()', 'BTNREX^DISABLE()', 'BTNCHOMIK^DISABLE()', 'BTNLODKA^DISABLE()']) assert.ok(repaired.includes(call));
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const other of ['barandalf/cnvlevel0.cnv', 'barandalf/cnvlevel1.cnv', 'miotly/miotly.cnv']) {
+        assert.equal(patchMagicieniiSource(`dane/game/przygoda/${other}`, source), source);
+    }
+});
+
 test('Only Magicienii collects scene-owned playing animations across overlay scopes', () => {
     class Actor { constructor(parent, playing = true) { this.parent = parent; this.isPlaying = playing; } }
     class Collection { objects = []; removeAll() { this.objects = []; } add(object) { this.objects.push(object); } }
