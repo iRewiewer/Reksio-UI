@@ -2,7 +2,7 @@
 
 This began as an independent, AI-first effort to use and improve [ReksioEngine](https://github.com/ReksioEngine/ReksioEngine), separate from the upstream project.
 
-The goal now is to make all five Romanian Reksio games playable by whatever practical fixes are needed, rather than faithfully recreating the original engine. That includes game-by-game compatibility patches, developed AI-first, with tentative support for the original Polish versions.
+The goal now is simply to make all five Romanian Reksio games work by any means necessary, using AI-first development and game-by-game compatibility patches rather than targeting a faithful engine reimplementation.
 
 ## Games
 
