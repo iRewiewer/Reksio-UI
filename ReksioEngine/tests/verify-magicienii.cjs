@@ -260,7 +260,9 @@ async function verifyBarandalf() {
             world.SETVELOCITY(100, 100, 0, 0);
             world.tick(16); await world.MOVEOBJECTS();
             const x = world.GETPOSITIONX(100);
-            assert.ok(x > 700 && x < 702);
+            const rawX = world.physics.position(100).x;
+            assert.ok(rawX > 700 && rawX < 702);
+            assert.equal(x, Math.trunc(rawX));
             world.STOP(); world.tick(1000); await world.MOVEOBJECTS();
             assert.equal(world.GETPOSITIONX(100), x, 'Stopping the scene must freeze the physical body');
             await world.SETPOSITION(100, level === 0 ? 160 : 330, level === 0 ? 480 : 440, 0);
@@ -269,8 +271,8 @@ async function verifyBarandalf() {
                 world.SETVELOCITY(100, level === 0 ? 100 : -100, 0, 0);
                 world.tick(16); await world.MOVEOBJECTS();
             }
-            assert.ok(level === 0 ? Math.abs(world.GETPOSITIONX(100) - 180) < 1
-                : Math.abs(world.GETPOSITIONX(100) - 300) < 1, 'The shipped obstacle mesh must block the actor');
+            assert.ok(level === 0 ? Math.abs(world.physics.position(100).x - 180) < 1
+                : Math.abs(world.physics.position(100).x - 300) < 1, 'The shipped obstacle mesh must block the actor');
             assert.equal(get('ANNLISCIE').clones.length, get('ANNLISCIESLOTY').GETNOE());
         } finally {
             assert.deepEqual(engine.scopeManager.destroy(), [], `Barandalf ${level} scene cleanup`);
@@ -1355,6 +1357,139 @@ async function verifyShooterWaves() {
     }
 }
 
+async function createBroomFixture(level) {
+    const fixture = await createArcadeFixture('MIOTLY', 'miotly', 'Miotly.cnv', `cnvLevel${level}.cnv`);
+    const { engine, parent, scope, defs, get } = fixture, stage = engine.app.stage;
+    const base = 'dane/game/przygoda/miotly', memory = new Map(), voices = [], routes = [], backgrounds = [], screenshots = [];
+    engine.resolvePath = async (name, base = '') => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
+    parent.getRelativePath = name => engine.resolvePath(name, base);
+    engine.filesystem = new Filesystem({
+        hasFile: name => fs.existsSync(path.join(assets, name)), registerLogicalFilenames() {},
+        getRawFile: async name => {
+            if (!fs.existsSync(path.join(assets, name))) throw new FileNotFoundError(name);
+            return bytes(path.join(assets, name));
+        },
+    }, { get: async name => memory.get(name) ?? null, has: async name => memory.has(name),
+        save: async (name, value) => { assert.equal(name, 'common/miotly0.arr'); memory.set(name, value.slice(0)); } }, engine.compat);
+    engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
+    engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
+    engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+    engine.rendering.setBackground = texture => backgrounds.push(texture);
+    const assetLoader = load('filesystem/assetsLoader.ts'), previousLoadSound = assetLoader.loadSound;
+    const previousWindow = globalThis.window; globalThis.window = new EventTarget();
+    assetLoader.loadSound = async (filesystem, filename) => {
+        if (!fs.existsSync(path.join(assets, normalizePath(filename)))) throw new FileNotFoundError(filename);
+        const sound = { isPlaying: false, stop() { this.isPlaying = false; }, play(options = {}) {
+            this.isPlaying = true; options.onStart?.();
+            const instance = { stop() { sound.isPlaying = false; }, pause() {}, resume() {} };
+            if (!options.loop) voices.push(() => { if (sound.isPlaying) { sound.isPlaying = false; options.onEnd?.(); } });
+            return instance;
+        } };
+        return sound;
+    };
+    const dispose = () => {
+        const cleanup = engine.scopeManager.destroy(); backgrounds.forEach(texture => texture.destroy(true));
+        assetLoader.loadSound = previousLoadSound;
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+        assert.deepEqual(cleanup, [], 'Broom cleanup'); assert.equal(stage.children.length, 0);
+    };
+    try {
+        for (const def of Object.values(defs)) {
+            if (['ANIMO', 'IMAGE'].includes(def.TYPE)) {
+                const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+                if (actor instanceof Animo) actor.loadSfx = async () => {};
+                scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+            } else if (def.TYPE === 'SOUND') {
+                const sound = new (load('engine/types/sound.ts').Sound)(engine, parent, def);
+                scope.set(sound.name, sound); await sound.init();
+            } else if (def.TYPE === 'TIMER') scope.set(def.NAME, new Timer(engine, parent, def));
+        }
+        for (const def of Object.values(defs).filter(def => def.TYPE === 'BUTTON')) {
+            const button = new Button(engine, parent, def); scope.set(button.name, button); button.init(); await button.applyDefaults();
+        }
+        for (const name of ['PATTERNBKG', 'PATTERNFOREST', 'PATTERNMASKREX', 'PATTERNMASKKRET']) await get(name).applyDefaults();
+        for (const [name, value] of [['G_SARCADEOBJECTS', String(level)], ['G_SLASTOBJECTS', 'MIOTLY'], ['SCENENAME', 'MIOTLY']]) {
+            const object = new constructors.STRING(engine, parent, { TYPE: 'STRING', NAME: name });
+            object.restoreCheckpointValue(value); scope.set(name, object);
+        }
+        const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+        episode.GOTO = name => routes.push(name); scope.set(episode.name, episode);
+        const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+        screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+        const { System } = load('engine/types/system.ts');
+        scope.set('SYSTEM', new System(engine, parent, { TYPE: 'SYSTEM', NAME: 'SYSTEM' }));
+        const keyboard = new Keyboard(engine, parent, defs.KEYBOARD); scope.set(keyboard.name, keyboard); await keyboard.ready();
+        scope.set('MOUSE', new Mouse(engine, parent, defs.MOUSE));
+        const pixel = new Animo(engine, parent, { TYPE: 'ANIMO', NAME: '__BROOM_PIXEL__',
+            FILENAME: '$\\COMMON\\PIXEL.ANN', TOCANVAS: true, VISIBLE: true });
+        pixel.loadSfx = async () => {}; scope.set(pixel.name, pixel);
+        await pixel.init(); await pixel.applyDefaults(); await pixel.ready();
+        const sequence = new Sequence(engine, parent, defs.SEQKRET);
+        sequence.getAnimo = async name => { assert.equal(name, '$\\COMMON\\PIXEL.ANN'); return pixel; };
+        scope.set(sequence.name, sequence); await sequence.init();
+        const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
+        const start = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'VARSPEED');
+        assert.ok(start > 0);
+        // The overlay is preloaded; global menu/music/page setup is outside this fixture.
+        await new Interpreter(new RuntimeContext(engine, null, code)).execute(ast.slice(start).filter(entry =>
+            !['CNVLOADER', 'G_MENU'].includes(entry.target?.ref?.name)));
+        const step = async (count = 1) => {
+            for (let tick = 0; tick < count && !parent.paused && !routes.length; tick++) {
+                if (voices.length) voices.shift()();
+                for (const object of scope.objects) await object.tick(1000 / 60);
+            }
+        };
+        const key = (down, code) => {
+            const event = new Event(down ? 'keydown' : 'keyup'); Object.assign(event, { code, key: code }); window.dispatchEvent(event);
+        };
+        assert.equal(get('VARLEVEL').value, level); assert.equal(get('VARSPEED').value, 0);
+        return { ...fixture, step, key, dispose, routes, memory, screenshots };
+    } catch (error) { dispose(); throw error; }
+}
+
+async function verifyBroomRecoveryAndControls() {
+    for (const [level, room] of [[0, 'PIKMIOT'], [1, 'MIASTO'], [2, 'MIOTLISKO'], [3, 'MIASTO'],
+        [4, 'BARANMIOT'], [5, 'MIASTO']]) {
+        const { get, world, step, key, routes, memory, screenshots, dispose } = await createBroomFixture(level);
+        try {
+            const angle = get('VARREXANGLE').value;
+            key(true, 'ArrowRight'); await step(4); key(false, 'ArrowRight'); await step();
+            assert.notEqual(get('VARREXANGLE').value, angle, `Broom ${level} arrow input`);
+            for (let tick = 0; tick < 120; tick++) {
+                await step();
+                for (const [name, id] of [['ANNREX', 199], ['ANNKRET', 207]]) {
+                    const actor = get(name);
+                    assert.equal(actor.positionX, world.GETPOSITIONX(id), `Broom ${level} ${name} horizontal drift`);
+                    assert.equal(actor.GETCENTERX(), Math.round(actor.positionX + actor.positionOffsetX -
+                        actor.anchorOffsetX + actor.sprite.width / 2), 'Visible center retains the authored frame offset');
+                }
+            }
+            assert.equal(Math.sign(get('VARBKGPOSY').value), level % 2 ? -1 : 1);
+            assert.ok(get('VARENERGIA').value > 0);
+            assert.deepEqual(deserializeArray(memory.get('common/miotly0.arr')), [level]);
+            // These six ending checks advance the counter, not the actors through an entire route.
+            await get('VARBKGPOSY').SET(level % 2 ? -24001 : 24001); await step(600);
+            assert.deepEqual(routes, ['ARCADE']); assert.equal(get('G_SARCADEOBJECTS').value, room);
+            assert.equal(screenshots.length, 1);
+        } finally { dispose(); }
+    }
+    const failure = await createBroomFixture(0);
+    try {
+        await failure.step(6000);
+        assert.equal(failure.get('VARENERGIA').value, 0);
+        assert.deepEqual(failure.routes, ['MIOTLY']); assert.equal(failure.parent.paused, false);
+        assert.equal(failure.get('G_SARCADEOBJECTS').value, '0'); assert.equal(failure.screenshots.length, 1);
+        assert.equal(failure.get('TIMEREND').enabled, false);
+    } finally { failure.dispose(); }
+    const restart = await createBroomFixture(5);
+    try {
+        await restart.get('BTNRESTART').callbacks.run('ONRELEASED'); await restart.step(600);
+        assert.deepEqual(restart.routes, ['MIOTLY']); assert.equal(restart.get('G_SARCADEOBJECTS').value, '5');
+        assert.equal(restart.screenshots.length, 1);
+    } finally { restart.dispose(); }
+    console.log('BROOM: six real-map startups, arrow controls, drift checks and boundary-tested story exits; natural damage failure and manual restart passed');
+}
+
 async function verifyBroomPhysics() {
     const { world, get, addMedia } = await createArcadeFixture('MIOTLY', 'miotly', 'Miotly.cnv');
     for (let index = 1; index <= 10; index++) addMedia(`ANNKURZ_${index}`);
@@ -1389,6 +1524,57 @@ async function verifyBroomPhysics() {
     } finally {
         world.destroy();
     }
+}
+
+async function verifyBroomFlight() {
+    const { get, world, step, key, routes, memory, screenshots, dispose } = await createBroomFixture(0);
+    const xs = Array.from({ length: 27 }, (_, index) => 75 + index * 25), costs = [], parents = [], plan = [];
+    let held = null, turns = 0;
+    try {
+        // Plan from the initial real mask pixels; only arrow-key events drive the actual flight.
+        for (let progress = 0; progress <= 24500; progress += 100) {
+            const row = [], links = [], previous = costs.at(-1);
+            for (let index = 0; index < xs.length; index++) {
+                let hazard = 0;
+                for (const dx of [-25, 0, 25]) for (const dy of [-35, 0, 35]) {
+                    if (get('PATTERNMASKREX').GETGRAPHICSAT(xs[index] + dx, 300 - progress + dy, true, false, 0, 1) !== 'UNKNOWN') hazard++;
+                }
+                let best = previous ? Infinity : Math.abs(xs[index] - 380) * .1, from = -1;
+                if (previous) for (let candidate = Math.max(0, index - 2); candidate <= Math.min(xs.length - 1, index + 2); candidate++) {
+                    const score = previous[candidate] + Math.abs(xs[index] - xs[candidate]) * .01;
+                    if (score < best) { best = score; from = candidate; }
+                }
+                row.push(best + hazard * 100 + Math.abs(xs[index] - 400) * .0001); links.push(from);
+            }
+            costs.push(row); parents.push(links);
+        }
+        let index = costs.at(-1).indexOf(Math.min(...costs.at(-1)));
+        for (let progress = costs.length - 1; progress >= 0; progress--) {
+            plan[progress] = xs[index]; index = parents[progress][index];
+        }
+        const history = [];
+        for (let tick = 0; tick < 14000 && !routes.length; tick++) {
+            const progress = get('VARBKGPOSY').value, x = world.GETPOSITIONX(199);
+            history.push(x); if (history.length > 10) history.shift();
+            const vx = (x - history[0]) * 6;
+            const target = plan[Math.min(plan.length - 1, Math.max(0, Math.round((progress + 400) / 100)))];
+            const ax = Math.max(-400, Math.min(400, (target - x) * 1.5 - vx * 2));
+            const desired = (Math.round((95 - Math.atan2(Math.sqrt(500 * 500 - ax * ax), ax) * 180 / Math.PI) / 11) + 32) % 32;
+            const delta = (desired - get('VARREXANGLE').value + 48) % 32 - 16;
+            const next = delta > 0 ? 'ArrowRight' : delta < 0 ? 'ArrowLeft' : null;
+            if (next !== held) {
+                if (held) key(false, held);
+                if (next) { key(true, next); turns++; }
+                held = next;
+            }
+            await step();
+        }
+        assert.deepEqual(routes, ['ARCADE']); assert.equal(get('G_SARCADEOBJECTS').value, 'PIKMIOT');
+        assert.ok(get('VARBKGPOSY').value > 24000 && get('VARENERGIA').value > 0 && turns > 0);
+        assert.deepEqual(deserializeArray(memory.get('common/miotly0.arr')), [0]);
+        assert.equal(screenshots.length, 1);
+        console.log(`BROOM 0: full 24000-pixel flight, ${turns} steering changes, ${get('VARENERGIA').value} energy and original PIKMIOT return passed`);
+    } finally { if (held) key(false, held); dispose(); }
 }
 
 async function createCatFixture(filesystemEntries = []) {
@@ -1827,12 +2013,14 @@ async function verifyLaterDragonFlights() {
         let spraying = false, sprays = 0, strokes = 0, extinguishedInAir = 0;
         try {
             const plan = planDragonRoute(get);
+            const lookahead = level === 2 || level === 4 ? 240 : 160;
+            const forecast = level === 2 || level === 4 ? 6 : 4;
             for (let tick = 0; tick < 7000 && !routes.length; tick++) {
                 const wings = get('ANNSKRZYDLA'), fire = get('ANNDRAGONFIRE'), y = get('VARPOSY').value;
                 const wasBurning = fire.ISPLAYING('PLAY'), wasAirborne = get('VARSTARTOWANIE').value === 0;
-                const target = plan[Math.min(plan.length - 1, Math.max(0, Math.round((get('VARPOSX').value + 160) / 80)))];
+                const target = plan[Math.min(plan.length - 1, Math.max(0, Math.round((get('VARPOSX').value + lookahead) / 80)))];
                 heights.push(y); if (heights.length > 10) heights.shift();
-                const predictedY = y + (y - heights[0]) * 4;
+                const predictedY = y + (y - heights[0]) * forecast;
                 if (wasBurning && wasAirborne) {
                     const position = pointer(fire.GETCENTERX(), fire.GETCENTERY()); mouse.onMouseMove(position);
                     if (!spraying) { mouse.handleClickEvent(position, 'click'); spraying = true; sprays++; }
@@ -2417,6 +2605,8 @@ async function main() {
     }
     console.log('PATTERNS: all 12 exact and rotated shapes recognized; all 12 out-of-tolerance shapes rejected');
     await verifyBroomPhysics();
+    await verifyBroomRecoveryAndControls();
+    await verifyBroomFlight();
     await verifyStartupCursor();
     await verifyCat();
     await verifyCatHerding();

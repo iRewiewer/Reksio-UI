@@ -35,6 +35,18 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         // Select the high-detail parallax path without pretending to measure browser CPU frequency.
         return source.replaceAll('VARCPUSPEED^SET(SYSTEM^GETMHZ());', 'VARCPUSPEED^SET(1000);')
     }
+    if (filename === 'dane/game/przygoda/miotly/miotly.cnv') {
+        // Keep the original static-background path; CPU-frequency probing is not a browser API.
+        const repaired = source.replaceAll('VARSPEED^SET(SYSTEM^GETMHZ());', 'VARSPEED^SET(0);')
+        const failure = 'MIOTLY^PAUSE();SEQKRET^PLAY("FAILED");'
+        if (!repaired.includes(failure)) return repaired
+        // Gameplay is already stopped by this callback, but its dialogue must continue ticking.
+        return repaired.replaceAll(failure, '__WEB_BROOMPAUSE__^RUN();SEQKRET^PLAY("FAILED");') + '\n' +
+            'OBJECT=__WEB_BROOMPLAYING__\n__WEB_BROOMPLAYING__:TYPE=GROUP\n' +
+            'OBJECT=__WEB_BROOMPAUSE__\n__WEB_BROOMPAUSE__:TYPE=BEHAVIOUR\n' +
+            '__WEB_BROOMPAUSE__:CODE={MIOTLY^GETPLAYINGANIMO("__WEB_BROOMPLAYING__");' +
+            '__WEB_BROOMPLAYING__^PAUSE();KEYBOARD^DISABLE();BTNRESTART^DISABLE();TIMEREND^DISABLE();SNDWIR^STOP();}\n'
+    }
     if (filename === 'dane/game/przygoda/shooter/shooter.cnv' && source.includes('SHOOTER^PAUSE();')) {
         // End-of-round sequences must tick while enemies, spawn timers and input are frozen.
         return source.replaceAll('SHOOTER^PAUSE();', '__WEB_SHOOTERPAUSE__^RUN();') + '\n' +

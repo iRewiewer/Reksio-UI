@@ -628,6 +628,23 @@ test('Magicienii Dragon selects its detail path without a legacy hardware-freque
     }
 });
 
+test('Magicienii broom keeps its static background and failure dialogue independent of scene pause', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/miotly/miotly.cnv';
+    const source = 'VARSPEED^SET(SYSTEM^GETMHZ());WORLD^STOP();ANNELAPSE^STOP(FALSE);' +
+        'ANNREXELAPSE^STOP(FALSE);MIOTLY^PAUSE();SEQKRET^PLAY("FAILED");';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.ok(repaired.startsWith('VARSPEED^SET(0);WORLD^STOP();ANNELAPSE^STOP(FALSE);ANNREXELAPSE^STOP(FALSE);'));
+    assert.ok(repaired.includes('__WEB_BROOMPAUSE__^RUN();SEQKRET^PLAY("FAILED");'));
+    for (const call of ['MIOTLY^GETPLAYINGANIMO("__WEB_BROOMPLAYING__")', '__WEB_BROOMPLAYING__^PAUSE()',
+        'KEYBOARD^DISABLE()', 'BTNRESTART^DISABLE()', 'TIMEREND^DISABLE()', 'SNDWIR^STOP()']) assert.ok(repaired.includes(call));
+    assert.ok(!repaired.includes('MIOTLY^PAUSE()'));
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const other of ['dragon/dragon.cnv', 'miotly/cnvlevel0.cnv', 'shooter/shooter.cnv']) {
+        assert.equal(patchMagicieniiSource(`dane/game/przygoda/${other}`, source), source);
+    }
+});
+
 test('Only Magicienii collects scene-owned playing animations across overlay scopes', () => {
     class Actor { constructor(parent, playing = true) { this.parent = parent; this.isPlaying = playing; } }
     class Collection { objects = []; removeAll() { this.objects = []; } add(object) { this.objects.push(object); } }
@@ -2113,6 +2130,42 @@ const { World } = loadModule('engine/types/world.ts', {
     '../compat/timeMachineVehiclePhysics': { TimeMachineVehiclePhysics },
 });
 
+test('Only Magicienii truncates script WORLD X/Y positions without changing solver precision', () => {
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const compat = createEngineCompat(profile);
+        assert.equal(compat.integerWorldPositions, profile === 'magicienii');
+        // Enable the getter fixture independently of which games implement pathing.
+        const world = new World({ compat: { ...compat, simpleWorldPathing: true } });
+        for (const x of [-12.9, -.9, 0, .9, 12.9]) {
+            const body = { x, y: -x };
+            world.bodies.set(1, body);
+            for (const physics of [null, { position: () => body }]) {
+                world.physics = physics;
+                const integer = value => Math.trunc(value) + 0;
+                assert.equal(world.GETPOSITIONX(1), profile === 'magicienii' ? integer(x) : x);
+                assert.equal(world.GETPOSITIONY(1), profile === 'magicienii' ? integer(-x) : -x);
+                assert.deepEqual(body, { x, y: -x });
+            }
+        }
+    }
+});
+
+test('Magicienii integer WORLD deltas do not accumulate fractional drift in script-moved actors', () => {
+    const world = new World({ compat: createEngineCompat('magicienii') });
+    const body = { x: 380, y: 300 };
+    world.physics = { position: () => body };
+    let screenX = 380, screenY = 300;
+    for (let tick = 0; tick < 2000; tick++) {
+        const x = world.GETPOSITIONX(1), y = world.GETPOSITIONY(1);
+        body.x -= .13; body.y += .07;
+        screenX += Math.floor(world.GETPOSITIONX(1) - x);
+        screenY += Math.floor(world.GETPOSITIONY(1) - y);
+        assert.equal(screenX, world.GETPOSITIONX(1));
+        assert.equal(screenY, world.GETPOSITIONY(1));
+    }
+    assert.ok(Math.abs(body.x - 120) < 1e-8);
+});
+
 function sekFixture() {
     const parts = [];
     const uint = (value) => { const b = Buffer.alloc(4); b.writeUInt32LE(value); parts.push(b); };
@@ -2334,7 +2387,9 @@ test('Magicienii Cat supports height, gravity and ground limits without projecti
         let highest = 0;
         for (let tick = 0; tick < 120; tick++) {
             world.tick(1000 / 60); await world.MOVEOBJECTS(); highest = Math.max(highest, world.GETPOSITIONZ(102));
-            assert.deepEqual(positions.at(-1), [world.GETPOSITIONX(102), world.GETPOSITIONY(102)]);
+            const raw = world.physics.position(102);
+            assert.deepEqual(positions.at(-1), [raw.x, raw.y]);
+            assert.deepEqual(positions.at(-1).map(Math.trunc), [world.GETPOSITIONX(102), world.GETPOSITIONY(102)]);
             assert.equal(Number.isInteger(world.GETPOSITIONZ(102)), true);
         }
         assert.ok(highest > 100); assert.equal(world.GETPOSITIONZ(102), 0);
@@ -2359,7 +2414,7 @@ test('Only Cat opts into the original body friction force while other Magicienii
             if (scene === 'CAT') {
                 assert.equal(world.GETSPEED(100), 0); assert.ok(world.GETPOSITIONX(100) < 410);
             } else {
-                assert.equal(world.GETSPEED(100), 100); assert.ok(world.GETPOSITIONX(100) > 499);
+                assert.equal(world.GETSPEED(100), 100); assert.ok(world.physics.position(100).x > 499);
             }
         } finally { world.destroy(); }
     }
@@ -2382,7 +2437,7 @@ test('Magicienii Barandalf synchronizes linked actors but keeps collision signal
         world.SETVELOCITY(100, 100, 0, 0);
         world.START(); world.tick(16); await world.MOVEOBJECTS();
         assert.equal(positions.length, 1);
-        assert.deepEqual(positions[0], [world.GETPOSITIONX(100), world.GETPOSITIONY(100)]);
+        assert.deepEqual(positions[0].map(Math.trunc), [world.GETPOSITIONX(100), world.GETPOSITIONY(100)]);
         assert.ok(positions[0][0] > 400 && positions[0][0] <= 400.81);
         world.STOP(); world.tick(1000); await world.MOVEOBJECTS();
         assert.equal(positions.length, 1);
@@ -2438,7 +2493,8 @@ test('Magicienii MOVEOBJECTS integrates forces but leaves actor movement to the 
         world.START(); world.tick(16);
         assert.equal(await world.MOVEOBJECTS(), .016);
         assert.ok(world.GETPOSITIONX(100) < 380);
-        assert.ok(world.GETPOSITIONY(100) > 200);
+        assert.ok(world.physics.position(100).y > 200);
+        assert.equal(world.GETPOSITIONY(100), 200);
         assert.deepEqual(positions, []);
         world.ADDFORCE(100, 0, 1000, 0);
         world.tick(16); await world.MOVEOBJECTS();
@@ -2719,8 +2775,8 @@ test('Time Machine links actors at their saved body positions without changing M
                 assert.equal(world.GETPOSITIONY(100), point?.[1] ?? 300);
             } else {
                 assert.deepEqual(positions, []);
-                assert.equal(world.GETPOSITIONX(100), point?.[0] || 400);
-                assert.equal(world.GETPOSITIONY(100), point?.[1] || 300);
+                assert.equal(world.GETPOSITIONX(100), Math.trunc(point?.[0] || 400));
+                assert.equal(world.GETPOSITIONY(100), Math.trunc(point?.[1] || 300));
             }
             assert.deepEqual(signals, []);
         }

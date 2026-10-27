@@ -410,13 +410,15 @@ export class World extends Type<WorldDefinition> {
     @method()
     GETPOSITIONX(id: number) {
         this.ensurePathingEnabled()
-        return this.physics?.position(id).x ?? this.getBody(id).x
+        const position = this.physics?.position(id).x ?? this.getBody(id).x
+        return this.engine.compat.integerWorldPositions ? Math.trunc(position) + 0 : position
     }
 
     @method()
     GETPOSITIONY(id: number) {
         this.ensurePathingEnabled()
-        return this.physics?.position(id).y ?? this.getBody(id).y
+        const position = this.physics?.position(id).y ?? this.getBody(id).y
+        return this.engine.compat.integerWorldPositions ? Math.trunc(position) + 0 : position
     }
 
     @method()
