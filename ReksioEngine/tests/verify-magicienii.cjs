@@ -66,6 +66,7 @@ const { CanvasObserver } = load('engine/types/canvasObserver.ts');
 const { Image } = load('engine/types/image.ts');
 const { Button } = load('engine/types/button.ts');
 const { StaticFilter } = load('engine/types/staticfilter.ts');
+const { Database } = load('engine/types/database.ts');
 const { loadImage } = load('fileFormats/img/index.ts');
 const { loadSprite } = load('filesystem/assetsLoader.ts');
 const { default: Filesystem, normalizePath } = load('filesystem/index.ts');
@@ -878,6 +879,144 @@ async function verifyBroomPhysics() {
     }
 }
 
+async function verifyCat() {
+    const { engine, parent, scope, directory, defs, world, get } = await createArcadeFixture('CAT', 'Cat', 'Cat.cnv');
+    const stage = engine.app.stage, saves = [];
+    engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
+    engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
+    engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+    engine.filesystem.getANNFile = async filename => loadAnn(bytes(filename));
+    engine.filesystem.getIMGFile = async filename => loadImage(bytes(filename));
+    engine.filesystem.saveFile = async (filename, data) => {
+        assert.equal(filename, path.join(directory, 'cat-fixture.arr')); saves.push(deserializeArray(data));
+    };
+    try {
+        for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
+            const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+            if (actor instanceof Animo) actor.loadSfx = async () => {};
+            scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+        }
+        const mouse = new Mouse(engine, parent, defs.MOUSE); scope.set(mouse.name, mouse);
+        get('ARRAYSAVE').restoreCheckpointValue([0, 0]); await get('VARSAVENAME').SET('cat-fixture.arr');
+        const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
+        const first = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'BEHINITLEVEL');
+        assert.ok(first >= 0);
+        const initialization = ast.slice(first).filter(entry => entry.target?.ref?.name !== 'G_AMBIENT');
+        await new Interpreter(new RuntimeContext(engine, null, code)).execute(initialization);
+        assert.ok(world.physics, 'Cat must initialize its shipped three-dimensional collision world');
+        const step = async () => {
+            world.tick(1000 / 60); await get('BEHMOVEWORLD').RUN();
+            for (const actor of [get('ANNREX'), get('ANNKRET'), get('ANNKOT')]) await actor.tick(1000 / 60);
+        };
+        const click = async (x, y) => {
+            const pointer = { button: 0, screen: { x, y } };
+            mouse.handleClickEvent(pointer, 'click'); mouse.handleClickEvent(pointer, 'release'); await mouse.tick(16);
+        };
+        for (let tick = 0; tick < 10; tick++) await step();
+        assert.equal(get('VARPLAYERNAME').value, 'ANNREX');
+        assert.ok(Math.hypot(get('ANNREX').GETCENTERX() - 150, get('ANNREX').GETCENTERY() - 400) < 25,
+            'The short initial idle animation must not send the hero sliding across the room');
+        for (const [dx, dy, event] of [[100, 0, '0'], [100, -100, '1'], [0, -100, '2'], [-100, -100, '3'],
+            [-100, 0, '4'], [-100, 100, '5'], [0, 100, '6'], [100, 100, '7']]) {
+            await click(get('ANNREX').GETCENTERX() + dx, get('ANNREX').GETCENTERY() + dy);
+            assert.equal(get('ANNREX').GETEVENTNAME(), event, `Walking direction ${dx},${dy}`);
+        }
+        await click(250, 400);
+        assert.match(get('ANNREX').GETEVENTNAME(), /^[0-7]$/, 'A fractional angle must select a real walking event');
+        for (let tick = 0; tick < 120; tick++) await step();
+        assert.ok(Math.abs(get('ANNREX').GETCENTERX() - 250) < 10,
+            `Original click-to-move scripts must approach the target: ${JSON.stringify({
+                x: get('ANNREX').GETCENTERX(), y: get('ANNREX').GETCENTERY(), event: get('ANNREX').GETEVENTNAME(),
+                playing: get('ANNREX').ISPLAYING(), target: [get('VARDESTX').value, get('VARDESTY').value],
+                speed: world.GETSPEED(100), selected: get('VARPLAYERNAME').value
+            })}`);
+        assert.equal(world.GETSPEED(100), 0, 'The original arrival branch must stop the selected body');
+        await click(get('ANNKRET').GETCENTERX(), get('ANNKRET').GETCENTERY());
+        assert.equal(get('VARPLAYERNAME').value, 'ANNKRET', 'Clicking the second hero must select its physical body');
+        await click(300, 500);
+        for (let tick = 0; tick < 120; tick++) await step();
+        assert.ok(Math.hypot(get('ANNKRET').GETCENTERX() - 300, get('ANNKRET').GETCENTERY() - 500) < 10,
+            `The second hero must reach an unobstructed target: ${get('ANNKRET').GETCENTERX()},${get('ANNKRET').GETCENTERY()}`);
+        assert.equal(world.GETSPEED(101), 0);
+        // Puzzle approach positions are a boundary; the cat's launch, landing and height guards are real.
+        await world.SETPOSITION(100, 640, 450, 0); await world.SETPOSITION(101, 650, 550, 0);
+        await get('VARPLAYERNAME').SET('ANNREX'); await get('VARPLAYERID').SET(100);
+        await get('ANNREX').PLAY('IDLE_0'); await get('VARDESTX').SET(640); await get('VARDESTY').SET(450);
+        await world.SETPOSITION(102, 550, 450, 0); world.SETVELOCITY(102, 0, 0, 0); await get('ANNKOT').PLAY('IDLE');
+        await step();
+        assert.equal(get('ANNKOT').GETEVENTNAME(), 'PLAY', 'A nearby hero must provoke the original cat jump');
+        let peak = 0;
+        for (let tick = 0; tick < 150; tick++) { await step(); peak = Math.max(peak, world.GETPOSITIONZ(102)); }
+        assert.ok(peak > 150, 'Cat jumps must cross the beehive height threshold');
+        assert.equal(world.GETPOSITIONZ(102), 0, 'Cat must land at its original ground limit');
+        assert.deepEqual(saves, [], 'Movement checks must not invent puzzle completion');
+        const mask = get('IMGULMASK').getRenderObject(), point = mask.getBounds();
+        const opaque = mask.hitmap.findIndex(alpha => alpha > 0);
+        assert.ok(opaque >= 0, 'The beehive mask must contain an actual opaque pixel');
+        const target = { x: Math.floor(point.x + opaque % mask.texture.orig.width),
+            y: Math.floor(point.y + Math.floor(opaque / mask.texture.orig.width)) };
+        await get('ANNREX').PAUSE(); await get('ANNKRET').PAUSE();
+        // Positioning at the shipped mask is a boundary, not a solution to the herding puzzle.
+        const atMask = async height => {
+            await get('ANNKOT').PLAY('IDLE');
+            await world.SETPOSITION(102, target.x, target.y - 30 - height, height);
+            await world.MOVEOBJECTS();
+            get('ANNCIENKOTA').SETPOSITION(get('ANNKOT').GETCENTERX(), get('ANNKOT').GETCENTERY() + 30 + height);
+            const dx = target.x - get('ANNCIENKOTA').GETCENTERX(), dy = target.y - get('ANNCIENKOTA').GETCENTERY();
+            await world.SETPOSITION(102, world.GETPOSITIONX(102) + dx, world.GETPOSITIONY(102) + dy, height);
+            await get('BEHMOVEWORLD').RUN();
+            assert.equal(get('VARULMASK').value, 'IMGULMASK', `Real mask query at Z=${height}`);
+        };
+        await atMask(149); assert.deepEqual(saves, []);
+        await atMask(151); assert.deepEqual(saves, [[1, 0]]);
+        for (let tick = 0; tick < 50; tick++) await get('ANNUL').tick(1000 / 60);
+        assert.equal(get('ANNUL').GETEVENTNAME(), 'MIOD', 'The beehive animation must finish before the boots guard');
+        await atMask(6); assert.deepEqual(saves, [[1, 0]]);
+        await atMask(4); assert.deepEqual(saves, [[1, 0], [1, 1]]);
+        assert.equal(get('ANNKOT').GETEVENTNAME(), 'BEZ_BUTOW'); assert.equal(get('ANNBUTY').ISVISIBLE(), true);
+        get('ARRAYSAVE').restoreCheckpointValue(saves.at(-1)); await get('BEHINITLEVEL').RUN();
+        assert.equal(get('ANNUL').GETEVENTNAME(), 'MIOD'); assert.equal(get('ANNKOT').ISVISIBLE(), false);
+        assert.equal(get('ANNCIENKOTA').ISVISIBLE(), false); assert.equal(get('ANNBUTY').ISVISIBLE(), true);
+        const makeItem = () => {
+            const item = new Struct(engine, parent, defs.SITEM);
+            for (const [name, type] of item.structure) {
+                item.content.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name }));
+            }
+            item.clone = async () => makeItem();
+            return item;
+        };
+        const model = makeItem(), inventoryPath = path.join(directory, 'cat-fixture-items.dta'), itemSaves = [];
+        scope.set('SITEM', model);
+        scope.set('G_IGAMESLOT', new constructors.INTEGER(engine, parent, { TYPE: 'INTEGER', NAME: 'G_IGAMESLOT' }));
+        const database = new Database(engine, parent, defs.DBITEMS); scope.set(database.name, database); database.init();
+        const relativePath = parent.getRelativePath;
+        parent.getRelativePath = async name => name === '$COMMON\\ITEMS0.DTA' ? inventoryPath : relativePath(name);
+        engine.resolvePath = parent.getRelativePath;
+        const read = engine.filesystem.getFile, write = engine.filesystem.saveFile;
+        let inventory = Buffer.from(Array.from({ length: 10 }, (_, index) => `${index}|NULL|-1|NULL|0\r\n`).join(''));
+        engine.filesystem.getFile = async name => name === inventoryPath ? inventory : read(name);
+        engine.filesystem.saveFile = async (name, data) => {
+            if (name !== inventoryPath) return write(name, data);
+            inventory = Buffer.from(data); itemSaves.push(inventory.toString());
+        };
+        const boots = get('ANNBUTY').getRenderObject(), bounds = boots.getBounds();
+        const pixel = boots.hitmap.findIndex(alpha => alpha > 0);
+        assert.ok(pixel >= 0);
+        const pickup = { x: Math.floor(bounds.x + pixel % boots.texture.orig.width),
+            y: Math.floor(bounds.y + Math.floor(pixel / boots.texture.orig.width)) };
+        await click(pickup.x, pickup.y);
+        for (let tick = 0; tick < 360 && !itemSaves.length; tick++) await step();
+        assert.equal(itemSaves.length, 1, 'The original arrival callback must persist the boots reward');
+        assert.equal(get('ANNBUTY').ISVISIBLE(), false);
+        assert.match(itemSaves[0], /^0\|BUTY_BUT\|-1\|CAT\|1\r\n/);
+        await get('BEHBOOTS').RUN();
+        assert.equal(itemSaves.length, 1, 'An existing boots item must not be awarded twice');
+        console.log('CAT: original initialization, eight-way walking, actor selection, stops, jump/landing, mask height guards, puzzle re-entry and boots inventory persistence passed');
+    } finally {
+        assert.deepEqual(engine.scopeManager.destroy(), [], 'Cat cleanup'); assert.equal(stage.children.length, 0);
+    }
+}
+
 async function verifyDragonControls() {
     const { engine, parent, scope, directory, defs, world, get, addMedia } =
         await createArcadeFixture('DRAGON', 'Dragon', 'Dragon.cnv');
@@ -1261,6 +1400,7 @@ async function main() {
     }
     console.log('PATTERNS: all 12 exact and rotated shapes recognized; all 12 out-of-tolerance shapes rejected');
     await verifyBroomPhysics();
+    await verifyCat();
     await verifyBarandalf();
     await verifyBarandalfBoat();
     await verifyMazeEnemies();

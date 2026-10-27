@@ -106,8 +106,10 @@ export class Integer extends ValueType<IntegerDefinition, number> {
 
     @method()
     async LENGTH(x: number, y: number) {
-        if (!this.engine.compat.flightPhysics) return this.__call('LENGTH', [x, y])
-        return this.setValue(Math.hypot(x, y))
+        if (!this.engine.compat.integerLength) return this.__call('LENGTH', [x, y])
+        const length = Math.hypot(x, y)
+        const stored = await this.setValue(length)
+        return this.engine.compat.magicieniiAssets ? length : stored
     }
 
     @method()

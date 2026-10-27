@@ -545,6 +545,18 @@ test('Magicienii repairs misspelled alchemy image priorities only in that source
     assert.equal(patchMagicieniiSource('dane/game/przygoda/magic/magic.cnv', source), source);
 });
 
+test('Magicienii Cat converts walking directions to integer event names only in its scene source', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const source = '*VARPLAYERNAME^PLAY([360-VARINT0@45]);OTHER^PLAY([360-VARINT0@45]);';
+    const file = 'dane/game/przygoda/cat/cat.cnv';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.equal(repaired, 'VARINT0^SET([360-VARINT0@45]);VARINT0^MOD(8);*VARPLAYERNAME^PLAY(VARINT0);OTHER^PLAY([360-VARINT0@45]);');
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const name of ['cat/other.cnv', 'magic/magic.cnv', 'arcade/arcade.cnv']) {
+        assert.equal(patchMagicieniiSource(`dane/game/przygoda/${name}`, source), source);
+    }
+});
+
 test('Magicienii maze failure and restart freeze animations without pausing their dialogue processor', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const file = 'dane/game/przygoda/labirynt/labirynt.cnv';
@@ -2128,10 +2140,10 @@ test('Only Time Machine NUREK loads physics automatically and links in camera co
     }
 });
 
-test('Only Magicienii broom, dragon and Barandalf worlds initialize their scene-specific physics', async () => {
+test('Only Magicienii broom, dragon, cat and Barandalf worlds initialize their scene-specific physics', async () => {
     const emptyWorld = Buffer.concat([Buffer.from('SEKAI81080701915004'), Buffer.alloc(4)]);
     for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
-        for (const scene of ['DRAGON', 'MIOTLY', 'ARCADE', 'BARANDALF']) {
+        for (const scene of ['DRAGON', 'MIOTLY', 'CAT', 'ARCADE', 'BARANDALF']) {
             for (const filename of ['WORLD.SEK', 'LEVEL0.SEK', 'LEVEL1.SEK', 'LEVEL2.SEK', 'LEVEL3.SEK']) {
                 const files = [];
                 const world = new World({ compat: createEngineCompat(profile),
@@ -2140,13 +2152,59 @@ test('Only Magicienii broom, dragon and Barandalf worlds initialize their scene-
                     diagnostics: { worldState() {} } });
                 world.definition = { FILENAME: filename };
                 await world.init();
-                const enabled = profile === 'magicienii' && ((['DRAGON', 'MIOTLY'].includes(scene) && filename === 'WORLD.SEK') ||
+                const enabled = profile === 'magicienii' && ((['DRAGON', 'MIOTLY', 'CAT'].includes(scene) && filename === 'WORLD.SEK') ||
                     (scene === 'BARANDALF' && ['LEVEL0.SEK', 'LEVEL2.SEK'].includes(filename)));
                 assert.deepEqual(files, enabled ? [filename] : []);
                 assert.equal(world.physics !== null, enabled);
                 world.destroy();
             }
         }
+    }
+});
+
+test('Magicienii Cat supports height, gravity and ground limits without projecting height into linked sprites', async () => {
+    const emptyWorld = Buffer.concat([Buffer.from('SEKAI81080701915004'), Buffer.alloc(4)]), positions = [];
+    const world = new World({ compat: createEngineCompat('magicienii'),
+        currentScene: { name: 'CAT', getRelativePath: async file => file },
+        filesystem: { getFile: async () => arrayBuffer(emptyWorld) },
+        getObject: () => ({ SETPOSITION: (...args) => positions.push(args) }), diagnostics: { worldState() {} } });
+    world.definition = { FILENAME: 'WORLD.SEK' }; await world.init();
+    try {
+        world.ADDBODY(102, 10, 0, 0, 0, 0, 1000, 1, 2, 30, 16, 16);
+        await world.SETPOSITION(102, 400, 400, 0); world.LINK(102, 'CAT');
+        world.SETLIMIT(102, 0, 0, 0, 800, 600, 999999); world.SETGRAVITY(0, 0, -1000);
+        world.SETVELOCITY(102, 100, 0, 500); world.START();
+        let highest = 0;
+        for (let tick = 0; tick < 120; tick++) {
+            world.tick(1000 / 60); await world.MOVEOBJECTS(); highest = Math.max(highest, world.GETPOSITIONZ(102));
+            assert.deepEqual(positions.at(-1), [world.GETPOSITIONX(102), world.GETPOSITIONY(102)]);
+            assert.equal(Number.isInteger(world.GETPOSITIONZ(102)), true);
+        }
+        assert.ok(highest > 100); assert.equal(world.GETPOSITIONZ(102), 0);
+        assert.ok(world.GETPOSITIONX(102) > 590); assert.equal(world.GETPOSITIONY(102), 400);
+        world.engine.currentScene.name = 'DRAGON';
+        world.__call = (method, args) => ({ method, args });
+        assert.deepEqual(world.GETPOSITIONZ(102), { method: 'GETPOSITIONZ', args: [102] });
+    } finally { world.destroy(); }
+});
+
+test('Only Cat opts into the original body friction force while other Magicienii worlds retain free motion', async () => {
+    const emptyWorld = Buffer.concat([Buffer.from('SEKAI81080701915004'), Buffer.alloc(4)]);
+    for (const scene of ['CAT', 'DRAGON', 'MIOTLY']) {
+        const world = new World({ compat: createEngineCompat('magicienii'),
+            currentScene: { name: scene, getRelativePath: async file => file },
+            filesystem: { getFile: async () => arrayBuffer(emptyWorld) }, diagnostics: { worldState() {} } });
+        world.definition = { FILENAME: 'WORLD.SEK' }; await world.init();
+        try {
+            world.ADDBODY(100, 10, 0, 10000, 0, 0, 200, 1, 2, 30, 16, 16);
+            await world.SETPOSITION(100, 400, 400, 0); world.SETVELOCITY(100, 100, 0, 0); world.START();
+            for (let tick = 0; tick < 60; tick++) { world.tick(1000 / 60); await world.MOVEOBJECTS(); }
+            if (scene === 'CAT') {
+                assert.equal(world.GETSPEED(100), 0); assert.ok(world.GETPOSITIONX(100) < 410);
+            } else {
+                assert.equal(world.GETSPEED(100), 100); assert.ok(world.GETPOSITIONX(100) > 499);
+            }
+        } finally { world.destroy(); }
     }
 });
 
@@ -2986,7 +3044,7 @@ test('modern INTEGER RANDOM assigns its result while the baseline only returns i
     assert.equal(Number.isNaN(await integer.RANDOM(1)), true);
 });
 
-test('Time Machine integer vector lengths assign floored distances without enabling other profiles', async () => {
+test('Time Machine and Magicienii integer vector lengths assign floored distances without enabling other profiles', async () => {
     class Value extends FakeType {
         value = 0;
         setValue(value) { this.value = value; return value; }
@@ -3000,7 +3058,11 @@ test('Time Machine integer vector lengths assign floored distances without enabl
     assert.equal(await integer.LENGTH(1, 1), 1);
     assert.equal(integer.value, 1);
     assert.equal(await integer.LENGTH(0, 0), 0);
-    for (const profile of ['default', 'magicienii', 'ozn', 'nemo']) {
+    integer.engine.compat = createEngineCompat('magicienii');
+    assert.equal(await integer.LENGTH(1, 1), Math.SQRT2);
+    assert.equal(integer.value, 1);
+    assert.equal(await integer.LENGTH(0, 0), 0);
+    for (const profile of ['default', 'ozn', 'nemo']) {
         integer.engine.compat = createEngineCompat(profile);
         integer.__call = (method, args) => ({ method, args });
         assert.deepEqual(await integer.LENGTH(3, 4), { method: 'LENGTH', args: [3, 4] });

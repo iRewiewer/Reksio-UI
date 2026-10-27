@@ -9,6 +9,7 @@ type PhysicsBody = {
     excludedCenters: Set<number>
     force: Vec3
     angle: number
+    frictionForce: number
     limit?: { min: Vec3; max: Vec3 }
 }
 
@@ -46,7 +47,8 @@ export class TimeMachinePhysics {
         if (this.bodies.has(id)) this.remove(id)
         this.world.addBody(body)
         this.ids.set(body, id)
-        this.bodies.set(id, { body, maxSpeed, magnetic: false, g: 0, excludedCenters: new Set(), force: new Vec3(), angle: 0 })
+        this.bodies.set(id, { body, maxSpeed, magnetic: false, g: 0, excludedCenters: new Set(), force: new Vec3(), angle: 0,
+            frictionForce: 0 })
     }
 
     addSphere(id: number, mass: number, friction: number, bounce: number, maxSpeed: number,
@@ -79,6 +81,10 @@ export class TimeMachinePhysics {
     setMaxSpeed(id: number, speed: number) {
         const entry = this.bodies.get(id)
         if (entry) entry.maxSpeed = speed
+    }
+    setFrictionForce(id: number, force: number) {
+        const entry = this.bodies.get(id)
+        if (entry) entry.frictionForce = Math.max(0, force)
     }
     speed(id: number) { return this.bodies.get(id)?.body.velocity.length() ?? 0 }
     angle(id: number) { return this.bodies.get(id)?.angle ?? 0 }
@@ -164,6 +170,10 @@ export class TimeMachinePhysics {
             }
             this.world.step(dt)
             for (const entry of this.bodies.values()) {
+                if (entry.body.mass && entry.frictionForce > 0) {
+                    const speed = entry.body.velocity.length(), reduction = entry.frictionForce * dt / entry.body.mass
+                    if (speed > 0) entry.body.velocity.scale(Math.max(0, speed - reduction) / speed, entry.body.velocity)
+                }
                 this.limitVelocity(entry)
                 const { x, y } = entry.body.velocity
                 if (Math.hypot(x, y) > 1e-6) entry.angle = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360

@@ -53,7 +53,7 @@ export class World extends Type<WorldDefinition> {
     private usesMagicieniiPhysics(filename: string) {
         if (!this.engine.compat.magicieniiArcadePhysics) return false
         const scene = this.engine.currentScene?.name
-        return (['DRAGON', 'MIOTLY'].includes(scene ?? '') && /(?:^|[\\/])WORLD\.SEK$/i.test(filename ?? '')) ||
+        return (['DRAGON', 'MIOTLY', 'CAT'].includes(scene ?? '') && /(?:^|[\\/])WORLD\.SEK$/i.test(filename ?? '')) ||
             (scene === 'BARANDALF' && /(?:^|[\\/])LEVEL[02]\.SEK$/i.test(filename ?? ''))
     }
 
@@ -123,7 +123,7 @@ export class World extends Type<WorldDefinition> {
         this.physics?.destroy()
         this.physics = null
         if (this.usesMagicieniiPhysics(filename)) {
-            this.physics = createMagicieniiPhysics(world)
+            this.physics = createMagicieniiPhysics(world, this.engine.currentScene?.name !== 'CAT')
         } else if (this.usesVehiclePhysics(filename)) {
             const { TimeMachineVehiclePhysics } = await import('../compat/timeMachineVehiclePhysics')
             this.physics = await TimeMachineVehiclePhysics.create(world)
@@ -180,6 +180,8 @@ export class World extends Type<WorldDefinition> {
             } else if (geomType === 2) {
                 this.physics.addSphere(id, density, mu, bounce, maxVel, bodyType !== 0, radiusX)
             } else throw new Error(`Unsupported Time Machine geometry type ${geomType}`)
+            if (this.engine.compat.magicieniiArcadePhysics && this.engine.currentScene?.name === 'CAT' &&
+                'setFrictionForce' in this.physics) this.physics.setFrictionForce(id, friction)
         }
     }
 
@@ -419,8 +421,10 @@ export class World extends Type<WorldDefinition> {
 
     @method()
     GETPOSITIONZ(id: number) {
-        if (!this.engine.compat.vehiclePhysics || !this.physics) return this.__call('GETPOSITIONZ', [id])
-        return this.physics.position(id).z
+        const cat = this.engine.compat.magicieniiArcadePhysics && this.engine.currentScene?.name === 'CAT'
+        if ((!this.engine.compat.vehiclePhysics && !cat) || !this.physics) return this.__call('GETPOSITIONZ', [id])
+        const height = this.physics.position(id).z
+        return cat ? Math.trunc(height) : height
     }
 
     @method()

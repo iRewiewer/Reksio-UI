@@ -1,7 +1,7 @@
 import type { SekWorld } from '../../fileFormats/sek'
 import { TimeMachinePhysics } from './timeMachinePhysics'
 
-export function createMagicieniiPhysics(source: SekWorld) {
+export function createMagicieniiPhysics(source: SekWorld, planar = true) {
     const bodies = new Map<number, SekWorld['bodies'][number]>()
     for (const body of source.bodies) {
         const previous = bodies.get(body.id)
@@ -14,5 +14,5 @@ export function createMagicieniiPhysics(source: SekWorld) {
         }
     }
     // The shipped worlds split their static walls into several meshes with the same ID.
-    return new TimeMachinePhysics({ bodies: [...bodies.values()], paths: source.paths })
+    return new TimeMachinePhysics({ bodies: [...bodies.values()], paths: source.paths }, planar)
 }
