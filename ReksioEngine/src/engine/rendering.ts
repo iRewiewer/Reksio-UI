@@ -144,6 +144,50 @@ export class RenderingManager {
 export class AdvancedSprite extends Sprite {
     public hitmap?: Uint8Array
     public checkPixelPerfect = false
+    private clippingRect: Rectangle | null = null
+    private clippingMask: Graphics | null = null
+    private clippingGeometry: Rectangle | null = null
+
+    getClippingRect() { return this.clippingRect }
+
+    setClippingRect(rect: Rectangle | null) {
+        // Native zero-width or zero-height rectangles disable clipping.
+        if (!rect || rect.width === 0 || rect.height === 0) {
+            this.clippingRect = null
+            this.clippingGeometry = null
+            if (this.clippingMask) {
+                this.mask = null
+                this.removeChild(this.clippingMask)
+                this.clippingMask.destroy()
+                this.clippingMask = null
+            }
+            return
+        }
+        const geometry = new Rectangle(rect.x - this.texture.orig.width * this.anchor.x,
+            rect.y - this.texture.orig.height * this.anchor.y, rect.width, rect.height)
+        const previousRect = this.clippingRect
+        if (!previousRect || previousRect.x !== rect.x || previousRect.y !== rect.y ||
+            previousRect.width !== rect.width || previousRect.height !== rect.height) this.clippingRect = rect.clone()
+        const previous = this.clippingGeometry
+        if (previous && previous.x === geometry.x && previous.y === geometry.y &&
+            previous.width === geometry.width && previous.height === geometry.height) return
+        this.clippingGeometry = geometry
+        if (!this.clippingMask) {
+            this.clippingMask = new Graphics()
+            this.clippingMask.eventMode = 'none'
+            this.addChild(this.clippingMask)
+            this.mask = this.clippingMask
+        }
+        this.clippingMask.clear()
+        this.clippingMask.beginFill(0xffffff)
+        this.clippingMask.drawRect(geometry.x, geometry.y, Math.max(0, geometry.width), Math.max(0, geometry.height))
+        this.clippingMask.endFill()
+    }
+
+    destroy(options?: Parameters<Sprite['destroy']>[0]) {
+        this.setClippingRect(null)
+        super.destroy(options)
+    }
 
     getAlphaAt(point: IPointData) {
         assert(this.hitmap !== undefined)
@@ -153,6 +197,8 @@ export class AdvancedSprite extends Sprite {
 
         const width = this._texture.orig.width
         const height = this._texture.orig.height
+        if (this.clippingRect && !this.clippingRect.contains(tempPoint.x + width * this.anchor.x,
+            tempPoint.y + height * this.anchor.y)) return 0
         const x = Math.floor(tempPoint.x + width * this.anchor.x)
         const y = Math.floor(tempPoint.y + height * this.anchor.y)
 
@@ -169,6 +215,11 @@ export class AdvancedSprite extends Sprite {
     }
 
     containsPoint(point: IPointData, checkAlpha = false) {
+        if (this.clippingRect) {
+            const local = this.worldTransform.applyInverse(point)
+            if (!this.clippingRect.contains(local.x + this.texture.orig.width * this.anchor.x,
+                local.y + this.texture.orig.height * this.anchor.y)) return false
+        }
         if (checkAlpha || (this.checkPixelPerfect && this.hitmap)) {
             return this.containsPointWithAlpha(point)
         }

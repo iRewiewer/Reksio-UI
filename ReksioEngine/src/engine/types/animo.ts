@@ -82,6 +82,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
 
     destroy() {
         if (this.sprite !== null) {
+            this.sprite.setClippingRect(null)
             this.engine.rendering.removeFromStage(this.sprite)
         }
         if (this.buttonInteractArea !== null) {
@@ -318,6 +319,12 @@ export class Animo extends DisplayType<AnimoDefinition> {
             this.positionY + this.positionOffsetY - this.anchorOffsetY + this.sprite.height * this.sprite.anchor.y
     }
 
+    getPatternPositionOffset() {
+        assert(this.sprite !== null)
+        return { x: this.positionOffsetX - this.anchorOffsetX + this.sprite.width * this.sprite.anchor.x,
+            y: this.positionOffsetY - this.anchorOffsetY + this.sprite.height * this.sprite.anchor.y }
+    }
+
     private async changeFrame(event: Event, frameIdx: number, signal = true) {
         assert(this.annFile !== null)
         assert(this.sprite !== null)
@@ -342,6 +349,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
         this.positionOffsetY = annImage.positionY + eventFrame.positionY
         this.sprite.width = annImage.width
         this.sprite.height = annImage.height
+        this.sprite.setClippingRect(this.sprite.getClippingRect())
         this.syncPosition()
 
         if (this.buttonInteractArea !== null) {
@@ -372,6 +380,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
         this.positionOffsetY = annImage.positionY
         this.sprite.width = annImage.width
         this.sprite.height = annImage.height
+        this.sprite.setClippingRect(this.sprite.getClippingRect())
         this.syncPosition()
 
         if (this.buttonInteractArea !== null) {
@@ -584,6 +593,13 @@ export class Animo extends DisplayType<AnimoDefinition> {
     @method()
     SETFPS(fps: number) {
         this.fps = fps
+    }
+
+    @method()
+    SETCLIPPING(x1: number, y1: number, x2: number, y2: number) {
+        if (!this.engine.compat.animationClipping) return this.__call('SETCLIPPING', [x1, y1, x2, y2])
+        assert(this.sprite !== null)
+        this.sprite.setClippingRect(new Rectangle(x1, y1, x2 - x1, y2 - y1))
     }
 
     @method()
@@ -914,6 +930,7 @@ export class Animo extends DisplayType<AnimoDefinition> {
 
         await clone.initSprite()
         clone.sprite!.visible = this.sprite!.visible
+        clone.sprite!.setClippingRect(this.sprite!.getClippingRect())
         return clone
     }
 

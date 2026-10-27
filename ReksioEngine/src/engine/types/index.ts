@@ -175,6 +175,8 @@ export class DisplayType<DefinitionType extends DisplayTypeDefinition> extends T
         throw new NotImplementedError()
     }
 
+    getPatternPositionOffset() { return { x: 0, y: 0 } }
+
     __getXRayInfo(): XRayInfo | null {
         const renderObject = this.getRenderObject()
         if (renderObject === null) {

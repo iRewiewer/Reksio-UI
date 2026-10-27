@@ -69,7 +69,9 @@ export class Pattern extends DisplayType<PatternDefinition> {
         target.tint = source.tint
         target.blendMode = source.blendMode
         target.visible = source.visible
-        target.position.set(entry.column * this.gridX, entry.row * this.gridY)
+        const offset = entry.object.getPatternPositionOffset()
+        target.position.set(entry.column * this.gridX + offset.x, entry.row * this.gridY + offset.y)
+        target.setClippingRect(source.getClippingRect())
         return source
     }
 

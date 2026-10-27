@@ -1207,6 +1207,32 @@ test('Other games and Magicienii scenes retain their previous forward animation 
     }
 });
 
+test('Only Magicienii accepts animation clipping and pattern offsets omit the template translation', () => {
+    const { Animo } = loadModule('engine/types/animo.ts', {
+        './index': { DisplayType: FakeType }, '../../common/errors': { assert: assert.ok },
+        'pixi.js': { Rectangle: class { constructor(x, y, width, height) { Object.assign(this, { x, y, width, height }); } } },
+        '../components/button': {}, '../../filesystem/assetsLoader': {}, '../../filesystem/fileLoader': {},
+        '../rendering': {}, '../../common/types': decorator, '../components/collisions': {}, '../audio': {}, '../logging': {},
+    });
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const animation = Object.create(Animo.prototype), clips = [], calls = [];
+        animation.engine = { compat: createEngineCompat(profile) };
+        animation.sprite = { setClippingRect: rect => clips.push(rect), width: 40, height: 20, anchor: { x: .5, y: 0 } };
+        animation.__call = (...args) => calls.push(args);
+        animation.SETCLIPPING(10, 20, 800, 500);
+        if (profile === 'magicienii') {
+            assert.deepEqual({ ...clips[0] }, { x: 10, y: 20, width: 790, height: 480 });
+            assert.deepEqual(calls, []);
+        } else {
+            assert.deepEqual(clips, []);
+            assert.deepEqual(calls, [['SETCLIPPING', [10, 20, 800, 500]]]);
+        }
+        Object.assign(animation, { positionX: -800, positionY: -1200, positionOffsetX: 39,
+            positionOffsetY: -69, anchorOffsetX: 5, anchorOffsetY: 10 });
+        assert.deepEqual(animation.getPatternPositionOffset(), { x: 54, y: -79 });
+    }
+});
+
 function arrayBuffer(bytes) {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }

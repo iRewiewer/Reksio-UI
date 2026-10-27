@@ -6,6 +6,7 @@ const root = path.resolve(__dirname, '../src');
 const cache = new Map();
 const overrides = new Map();
 const errors = [];
+let scriptTransformer;
 const quiet = { debug() {}, warn() {}, info() {}, error(message, context, error) {
     errors.push(message?.text ?? message);
     console.error(message?.text ?? message, error?.stack ?? error ?? '');
@@ -28,6 +29,7 @@ function load(name, bypass = false) {
     cache.set(name, module);
     const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
         compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+        transformers: scriptTransformer ? { before: [scriptTransformer] } : undefined,
     }).outputText;
     new Function('require', 'module', 'exports', code)((request) => {
         if (!request.startsWith('.')) return require(require.resolve(request, { paths: [path.dirname(root)] }));
@@ -38,6 +40,7 @@ function load(name, bypass = false) {
     return module.exports;
 }
 
+scriptTransformer = load('../transformers.ts').typeGuard({});
 const { Type } = load('engine/types/index.ts');
 const logging = load('engine/logging.ts');
 Object.assign(logging.logger, quiet);
@@ -55,7 +58,9 @@ const { Mouse } = load('engine/types/mouse.ts');
 const { Group } = load('engine/types/group.ts');
 const { Struct } = load('engine/types/struct.ts');
 const { World } = load('engine/types/world.ts');
-const { Container, Rectangle } = require('pixi.js');
+const { Pattern } = load('engine/types/pattern.ts');
+const { CanvasObserver } = load('engine/types/canvasObserver.ts');
+const { Container, Rectangle, Texture, BaseTexture } = require('pixi.js');
 const constructors = Object.fromEntries([
     ['INTEGER', 'integer', 'Integer'], ['DOUBLE', 'double', 'Double'], ['STRING', 'string', 'String'],
     ['BOOL', 'bool', 'Bool'], ['ARRAY', 'array', 'ArrayObject'], ['BEHAVIOUR', 'behaviour', 'Behaviour'],
@@ -171,9 +176,11 @@ async function createArcadeFixture(scene, folder, filename) {
         GETGRAPHICSAT() { return 'UNKNOWN'; }
         ISKEYDOWN() { return false; }
         SETANCHOR() {} SETFRAME() {}
+        SHOW() {} HIDE() {}
     }
     for (const def of Object.values(defs)) {
-        const Constructor = def.TYPE === 'WORLD' ? World : def.TYPE === 'GROUP' ? Group : constructors[def.TYPE] ?? Media;
+        const Constructor = def.TYPE === 'WORLD' ? World : def.TYPE === 'GROUP' ? Group :
+            def.TYPE === 'PATTERN' ? Pattern : def.TYPE === 'CANVAS_OBSERVER' ? CanvasObserver : constructors[def.TYPE] ?? Media;
         scope.set(def.NAME, new Constructor(engine, parent, def));
     }
     const addMedia = (name) => {
@@ -261,6 +268,102 @@ async function verifyDragonControls() {
     } finally {
         world.destroy(); wings.destroy();
     }
+}
+
+async function verifyDragonPattern() {
+    const { engine, parent, scope, directory, defs, world, get } =
+        await createArcadeFixture('DRAGON', 'Dragon', 'Dragon.cnv');
+    // PIXI mask geometry is real; its white texture is buffer-backed because no browser renderer runs here.
+    Texture._WHITE = new Texture(BaseTexture.fromBuffer(new Uint8Array([255, 255, 255, 255]), 1, 1));
+    const fire = new Animo(engine, parent, defs.ANNFIRE);
+    fire.annFile = loadAnn(bytes(path.join(directory, defs.ANNFIRE.FILENAME)));
+    await fire.initSprite();
+    scope.set(fire.name, fire);
+    const pattern = get('PATTERNFIRE');
+    await pattern.applyDefaults();
+    try {
+        await fire.PLAY('A7'); await fire.MOVE(0, -1200);
+        fire.SETCLIPPING(0, 0, 800, 500);
+        pattern.ADD('fire', 2, 2, fire.name, 0);
+        const tile = pattern.getRenderObject().children[0], source = fire.getRenderObject();
+        const event = fire.annFile.events.find(event => event.name === 'A7');
+        for (let frame = 0; frame < event.framesCount; frame++) {
+            await fire.SETFRAME('A7', frame);
+            pattern.tick();
+            const image = fire.annFile.annImages[event.framesImageMapping[frame]];
+            assert.equal(tile.x, 200 + image.positionX + event.frames[frame].positionX);
+            assert.equal(tile.y, 200 + image.positionY + event.frames[frame].positionY);
+            assert.ok(source.y < -1000, 'Placing a map copy must not move its offscreen source');
+            const pixel = source.hitmap.findIndex(alpha => alpha > 0);
+            assert.ok(pixel >= 0);
+            assert.equal(pattern.GETGRAPHICSAT(tile.x + pixel % image.width + 0.5,
+                tile.y + Math.floor(pixel / image.width) + 0.5, false, false, 0), fire.name);
+        }
+        fire.SETCLIPPING(5, 5, 10, 10); pattern.tick();
+        assert.equal(pattern.GETGRAPHICSAT(tile.x + 6, tile.y + 6, false, true, 0), fire.name);
+        assert.equal(pattern.GETGRAPHICSAT(tile.x + 1, tile.y + 1, false, true, 0), 'UNKNOWN');
+        const clone = await fire.clone();
+        assert.notEqual(clone.getRenderObject().mask, source.mask);
+        assert.deepEqual(clone.getRenderObject().getClippingRect(), source.getClippingRect());
+        clone.destroy();
+        assert.equal(source.mask.destroyed, false);
+        fire.SETCLIPPING(0, 0, 0, 0); pattern.tick();
+        assert.equal(tile.mask, null);
+        assert.equal(pattern.GETGRAPHICSAT(tile.x + 1, tile.y + 1, false, true, 0), fire.name);
+        console.log('FIRE: six shipped animation frames retain offsets, opaque-pixel hits and independent clone/map clipping');
+    } finally {
+        pattern.destroy(); fire.destroy(); world.destroy();
+    }
+}
+
+async function verifyDragonLevelInitialization() {
+    let placements = 0;
+    for (let level = 0; level < 5; level++) {
+        const { engine, parent, scope, directory, defs, get } =
+            await createArcadeFixture('DRAGON', 'Dragon', 'Dragon.cnv');
+        try {
+            for (const name of ['ANNLEVEL', 'ANNLEVELFIRE', 'ANNELEMENT', 'ANNFIRE', 'ANNSKRZYDLA']) {
+                const filename = name === 'ANNLEVEL' ? `level${level}.ann` :
+                    name === 'ANNLEVELFIRE' ? `levelfire${level}.ann` : defs[name].FILENAME;
+                const actor = new Animo(engine, parent, defs[name]);
+                actor.annFile = loadAnn(bytes(path.join(directory, filename)));
+                await actor.initSprite();
+                scope.set(name, actor);
+            }
+            await get('BEHINITLEVEL').RUN();
+            for (const [name, layout] of [['PATTERNBKG', 'ANNLEVEL'], ['PATTERNFIRE', 'ANNLEVELFIRE']]) {
+                const pattern = get(name), tiles = pattern.getRenderObject().children;
+                const animation = get(layout).annFile, event = animation.events[0];
+                const cells = new Set(event.frames.map((frame, index) => {
+                    const image = animation.annImages[event.framesImageMapping[index]];
+                    return [Math.floor(Math.round(image.positionX + frame.positionX + image.width / 2) / 10),
+                        Math.floor(Math.round(image.positionY + frame.positionY + image.height / 2) / 10)].join(',');
+                }));
+                assert.equal(tiles.length, cells.size, `Dragon ${level} ${name} occupied cells`);
+                const template = get(name === 'PATTERNBKG' ? 'ANNELEMENT' : 'ANNFIRE');
+                assert.equal(template.clones.length, event.framesCount, `Dragon ${level} ${name} source clones`);
+                placements += event.framesCount;
+                let sampled = false;
+                for (const tile of tiles) {
+                    if (name === 'PATTERNFIRE') assert.ok(tile.mask, 'Every original fire clone must retain its clip');
+                    const index = tile.hitmap.findIndex(alpha => alpha > 0);
+                    if (index < 0 || sampled) continue;
+                    const x = tile.x + index % tile.texture.orig.width + 0.5;
+                    const y = tile.y + Math.floor(index / tile.texture.orig.width) + 0.5;
+                    if (!tile.getClippingRect() || tile.getClippingRect().contains(x - tile.x, y - tile.y)) {
+                        assert.notEqual(pattern.GETGRAPHICSAT(x, y, false, false, 0), 'UNKNOWN');
+                        sampled = true;
+                    }
+                }
+                assert.ok(sampled, `Dragon ${level} ${name} must have a queryable opaque tile`);
+            }
+            assert.equal(get('ARRAYAMMODX').GETSIZE(), 100);
+            assert.equal(get('ARRAYWODADX').GETSIZE(), 100);
+        } finally {
+            assert.deepEqual(engine.scopeManager.destroy(), [], `Dragon ${level} cleanup must release scene objects`);
+        }
+    }
+    console.log(`DRAGON MAPS: all five original level initialization routines passed; ${placements} tile/fire placements`);
 }
 
 async function main() {
@@ -358,6 +461,8 @@ async function main() {
     console.log('PATTERNS: all 12 exact and rotated shapes recognized; all 12 out-of-tolerance shapes rejected');
     await verifyBroomPhysics();
     await verifyDragonControls();
+    await verifyDragonPattern();
+    await verifyDragonLevelInitialization();
     assert.deepEqual(errors, [], 'The original scripts must not call unsupported methods');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

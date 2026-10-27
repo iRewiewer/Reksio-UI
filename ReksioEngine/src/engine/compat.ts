@@ -46,6 +46,7 @@ export type EngineCompat = {
     dragonAnimationPlayback: boolean
     arraySubtraction: boolean
     systemTime: boolean
+    animationClipping: boolean
 }
 
 export const normalizeCompatProfile = (profile?: string): CompatProfile => {
@@ -109,5 +110,6 @@ export const createEngineCompat = (profile?: string): EngineCompat => {
         dragonAnimationPlayback: name === 'magicienii',
         arraySubtraction: name === 'magicienii',
         systemTime: name === 'magicienii',
+        animationClipping: name === 'magicienii',
     }
 }
