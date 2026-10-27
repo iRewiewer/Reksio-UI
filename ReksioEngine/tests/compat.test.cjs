@@ -560,6 +560,18 @@ test('Only Magicienii Przepasc skips its absent first-visit dialogue and retains
     }
 });
 
+test('Only Magicienii Domspiel suppresses its absent character arrival cue while preserving dialogue entry', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/domspiel.cnv';
+    const source = 'BEHCLICK_SPIELMAUSTER:CODE={G_SDIALOGCHARACTER^SET("SPIELMAUSTER");__SCREENSHOT__^RUN();PRZYGODA^GOTO("DIALOGS");}';
+    const expected = source.replace('CODE={G_SDIALOGCHARACTER', 'CODE={VARSLASTFOCUS^SET("NULL");G_SDIALOGCHARACTER');
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/piklibia.cnv', 'other/domspiel.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
 test('Magicienii repairs misspelled alchemy image priorities only in that source file', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const source = 'IMG_EXIT_STD^SETPTIORITY(610);IMG_EXIT_GLOW^SETPTIORITY(610);IMG_EXIT_CLICK^SETPTIORITY(610);';
@@ -602,6 +614,21 @@ test('Only Piklibia house entry suppresses its absent generic arrival cue while 
     const source = 'BEHCLICK_DOMEK:CODE={BEHSELECTTEMPOBJS^RUN("SPIELMAUSTER");}\n' +
         'BFITMP424:CODE={BEHLOADSEQARREX^RUN("DOMEK_A",FALSE);}';
     const expected = source.replace('CODE={BEHSELECTTEMPOBJS', 'CODE={VARSLASTFOCUS^SET("NULL");BEHSELECTTEMPOBJS');
+    assert.equal(patchMagicieniiSource(file, source), expected);
+    assert.equal(patchMagicieniiSource(file, expected), expected);
+    for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/domspiel.cnv', 'other/piklibia.cnv']) {
+        assert.equal(patchMagicieniiSource(other, source), source);
+    }
+});
+
+test('Only Piklibia door actions suppress absent generic cues and mark a successful key use as handled', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/arcade/piklibia.cnv';
+    const source = 'BEHCLICK_DRZWI:CODE={BEHSELECTOBJS^RUN("DO_PODZIEMI");}\n' +
+        'BEHCLICK_DO_PODZIEMI:CODE={BEHSELECTOBJS^RUN("DO_PODZIEMI");}\n' +
+        'BFITMP389:CODE={BEHREMOVEITEM^RUN(VARSITEMTO);ANNOBJECT33^PLAY("OPEN");}';
+    const expected = source.replaceAll('CODE={BEHSELECTOBJS', 'CODE={VARSLASTFOCUS^SET("NULL");BEHSELECTOBJS')
+        .replace('CODE={BEHREMOVEITEM', 'CODE={VARIWASUSED^SET(1);BEHREMOVEITEM');
     assert.equal(patchMagicieniiSource(file, source), expected);
     assert.equal(patchMagicieniiSource(file, expected), expected);
     for (const other of ['dane/game/przygoda/arcade/arcade.cnv', 'dane/game/przygoda/arcade/domspiel.cnv', 'other/piklibia.cnv']) {

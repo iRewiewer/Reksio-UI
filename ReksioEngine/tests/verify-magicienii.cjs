@@ -223,7 +223,8 @@ async function verifyPiklibiaLive() {
         Database, Struct, Animo, Type, constructors, serializeArray, deserializeArray, load,
         CanvasObserver, Mouse, StaticFilter, Sequence };
     const checkpoint = await require('./verify-magicienii-piklibia-live.cjs')(runtime);
-    await require('./verify-magicienii-domspiel.cjs')(runtime, checkpoint);
+    const rescued = await require('./verify-magicienii-domspiel.cjs')(runtime, checkpoint);
+    await require('./verify-magicienii-spielmauster.cjs')(runtime, rescued);
 }
 
 async function verifyBarandalf() {

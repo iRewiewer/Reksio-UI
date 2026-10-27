@@ -129,6 +129,11 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         return source + '\nOBJECT=BFITMP1023\nBFITMP1023:TYPE=BEHAVIOUR\n' +
             'BFITMP1023:CODE={SOBJECT|IPARAM0^SET(1);BEHUPDATEOBJECTS^RUN();}\n'
     }
+    if (filename === 'dane/game/przygoda/arcade/domspiel.cnv') {
+        // Dialogue owns this interaction; there is no separate in-room SPIELMAUSTER.ARR cue.
+        return source.replaceAll('BEHCLICK_SPIELMAUSTER:CODE={G_SDIALOGCHARACTER',
+            'BEHCLICK_SPIELMAUSTER:CODE={VARSLASTFOCUS^SET("NULL");G_SDIALOGCHARACTER')
+    }
     if (filename === 'dane/game/przygoda/arcade/piklibia.cnv') {
         // Animation nodes are zero-based, while ARRAY clone names start at one.
         for (const index of ['_I_', 'ARRKNIGHTFRAME^GET(VARITER)', 'VARITEMP1']) {
@@ -140,6 +145,14 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         // This handler owns its arrival dialogue; the generic DOMEK.ARR cue is absent.
         source = source.replaceAll('BEHCLICK_DOMEK:CODE={BEHSELECTTEMPOBJS',
             'BEHCLICK_DOMEK:CODE={VARSLASTFOCUS^SET("NULL");BEHSELECTTEMPOBJS')
+        // Door handlers own their dialogue/transition; generic arrival cues do not exist.
+        for (const name of ['DRZWI', 'DO_PODZIEMI']) {
+            source = source.replaceAll(`BEHCLICK_${name}:CODE={BEHSELECTOBJS`,
+                `BEHCLICK_${name}:CODE={VARSLASTFOCUS^SET("NULL");BEHSELECTOBJS`)
+        }
+        // A successful key use must not fall through and RUN the door animation as a behaviour.
+        source = source.replaceAll('BFITMP389:CODE={BEHREMOVEITEM^RUN(VARSITEMTO);',
+            'BFITMP389:CODE={VARIWASUSED^SET(1);BEHREMOVEITEM^RUN(VARSITEMTO);')
         // The card is not attached to a room object; an omitted parent becomes switch zero.
         return source.replaceAll('BEHADDITEM^RUN("KARTA_BUT");', 'BEHADDITEM^RUN("KARTA_BUT",-1);')
     }

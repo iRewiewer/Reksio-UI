@@ -4,26 +4,41 @@ const assert = require('node:assert/strict');
 
 function getAdventureFactory(runtime) {
     const { assets, createArcadeFixture, Filesystem, normalizePath, Database, Struct, Animo,
-        Type, constructors, serializeArray } = runtime;
+        Type, constructors } = runtime;
     const bytes = filename => {
         const buffer = fs.readFileSync(path.join(assets, filename));
         return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     };
     const create = async (options = {}) => {
         const room = options.room ?? 'Piklibia', roomKey = room.toUpperCase();
-        const fixture = await createArcadeFixture('ARCADE', 'Arcade', 'Arcade.cnv', `${room}.cnv`);
+        const dialogs = roomKey === 'DIALOGS', folder = dialogs ? 'dialogs' : 'arcade';
+        const fixture = dialogs ? await createArcadeFixture('DIALOGS', 'Dialogs', 'Dialogs.cnv') :
+            await createArcadeFixture('ARCADE', 'Arcade', 'Arcade.cnv', `${room}.cnv`);
         const { engine, parent, scope, defs, get } = fixture;
         const memory = new Map(options.files?.map(([name, data]) => [name, data.slice(0)]));
         const saves = [], calls = [], missing = new Set(), stage = engine.app.stage;
-        const resolve = name => normalizePath(name.startsWith('$') ? name.slice(1) : `dane/game/przygoda/arcade/${name}`);
+        const resolve = name => normalizePath(name.startsWith('$') ? name.slice(1) : `dane/game/przygoda/${folder}/${name}`);
+        // Match Engine.getObject's local-scope lookup and native clone-zero alias.
+        engine.getObject = (name, parentScope = null) => {
+            if (typeof name !== 'string') return name ? engine.getObject(name.objectName, parentScope) : null;
+            return parentScope?.get(name) ?? engine.scopeManager.findByName(name, parentScope) ??
+                (engine.compat.modernScripts && name.endsWith('_0') ? engine.getObject(name.slice(0, -2), parentScope) : null);
+        };
         const common = fs.readdirSync(assets).find(name => name.toLowerCase() === 'common');
-        for (const template of fs.readdirSync(path.join(assets, common)).filter(name => /_def\.dta$/i.test(name))) {
+        const commonFiles = fs.readdirSync(path.join(assets, common));
+        for (const template of commonFiles.filter(name => /_def\.dta$/i.test(name))) {
             const filename = `common/${template.toLowerCase().replace(/_def\.dta$/, '0.dta')}`;
             if (!memory.has(filename)) memory.set(filename, bytes(`${common}/${template}`));
         }
+        // NEWGAME copies QUESTIONS_DEF into every history, replacing the CD's authored demo saves.
+        const emptyQuestions = bytes(`${common}/${commonFiles.find(name => /^questions_def\.arr$/i.test(name))}`);
+        for (const template of commonFiles.filter(name => /_hist0\.arr$/i.test(name))) {
+            const filename = `common/${template.toLowerCase()}`;
+            if (!memory.has(filename)) memory.set(filename, emptyQuestions.slice(0));
+        }
         for (const name of ['questions', 'questions_asked']) {
             const filename = `common/${name}0.arr`;
-            if (!memory.has(filename)) memory.set(filename, serializeArray([]));
+            if (!memory.has(filename)) memory.set(filename, emptyQuestions.slice(0));
         }
         engine.resolvePath = parent.getRelativePath = async name => resolve(name);
         engine.filesystem = new Filesystem({
@@ -72,18 +87,21 @@ function getAdventureFactory(runtime) {
             for (const [name, type, value] of [
                 ['G_SARCADEOBJECTS', 'STRING', roomKey], ['G_SLASTOBJECTS', 'STRING', options.previous ?? 'PIKMIOT'],
                 ['G_ISUCCESS', 'INTEGER', options.success ?? 0], ['G_IGAMESLOT', 'INTEGER', 0],
+                ['G_SDIALOGCHARACTER', 'STRING', options.character ?? 'BUREKTOR'], ['G_SDIALOGRETURN', 'STRING', 'BUREKTOR'],
             ]) scope.set(name, new constructors[type](engine, parent, { TYPE: type, NAME: name, VALUE: value }));
             const menu = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_MENU' });
             menu.ADDEXP = value => calls.push(['ADDEXP', value]); scope.set(menu.name, menu);
             const card = new Type(engine, parent, { TYPE: 'CLASS_INSTANCE', NAME: 'G_CARD' });
             card.LOAD = () => calls.push(['CARD_LOAD']); scope.set(card.name, card);
-            await get('VARSCURRARCADE').SET(`$COMMON\\${roomKey}0.DTA`);
-            await get('VARSCURRITEMS').SET('$COMMON\\ITEMS0.DTA');
-            await get('DBOBJECTS').LOAD(`$COMMON\\${roomKey}0.DTA`);
-            await get('DBITEMS').LOAD('$COMMON\\ITEMS0.DTA');
+            if (!dialogs) {
+                await get('VARSCURRARCADE').SET(`$COMMON\\${roomKey}0.DTA`);
+                await get('VARSCURRITEMS').SET('$COMMON\\ITEMS0.DTA');
+                await get('DBOBJECTS').LOAD(`$COMMON\\${roomKey}0.DTA`);
+                await get('DBITEMS').LOAD('$COMMON\\ITEMS0.DTA');
+            }
             // Optional seed data represents persisted state on entry, never post-initialization success.
             await options.seed?.({ ...fixture, memory }); saves.length = 0; calls.length = 0;
-            if (options.initialize !== false) {
+            if (options.initialize !== false && !dialogs) {
                 await get('VARINO').SET(0);
                 for (let index = 0; index < get('DBOBJECTS').GETROWSNO(); index++) {
                     await get('BEHSELECTOBJ').RUN(index);
