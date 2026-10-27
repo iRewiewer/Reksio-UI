@@ -616,6 +616,18 @@ test('Magicienii Shooter freezes rounds without blocking failure, restart or vic
     }
 });
 
+test('Magicienii Dragon selects its detail path without a legacy hardware-frequency query', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/dragon/dragon.cnv';
+    const source = 'VARCPUSPEED^SET(SYSTEM^GETMHZ());OTHER^SET(SYSTEM^GETMHZ());';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.equal(repaired, 'VARCPUSPEED^SET(1000);OTHER^SET(SYSTEM^GETMHZ());');
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const name of ['dragon/cnvLevel0.cnv', 'shooter/shooter.cnv', 'arcade/arcade.cnv']) {
+        assert.equal(patchMagicieniiSource(`dane/game/przygoda/${name}`, source), source);
+    }
+});
+
 test('Only Magicienii collects scene-owned playing animations across overlay scopes', () => {
     class Actor { constructor(parent, playing = true) { this.parent = parent; this.isPlaying = playing; } }
     class Collection { objects = []; removeAll() { this.objects = []; } add(object) { this.objects.push(object); } }
@@ -1929,6 +1941,26 @@ test('Magicienii dialogue sequence repair removes only its unused missing placeh
     assert.equal(patchMagicieniiSequence('dane/game/przygoda/arcade/blank.seq', entries), entries);
     const valid = [root, speaking, { ...placeholder, FILENAME: 'PRESENT.ANN' }];
     assert.equal(patchMagicieniiSequence('dane/game/przygoda/dialogs/blank.seq', valid), valid);
+});
+
+test('Magicienii Lebiodka repair removes only copied courtyard dialogue and reindexes its real branches', () => {
+    const { patchMagicieniiSequence } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/lebiodka/gadaja.seq';
+    const copied = [['SEQ1', 'CB_BOBROMIR'], ['SEQ2', 'CB_BULBO'], ['SEQ3', 'CB_LOVELAS'],
+        ['SEQ4B', 'CB_BARANDALF']].map(([NAME, ANIMOFN]) => ({ TYPE: 'SPEAKING', NAME, ANIMOFN, ADD: 'GADAJA' }));
+    const real = ['LEB1', 'LEB2', 'LEB3'].map(NAME => ({ TYPE: 'SPEAKING', NAME,
+        ANIMOFN: NAME === 'LEB2' ? 'CPL_REX' : 'CPL_SMOK', ADD: 'GADAJA' }));
+    const root = { NAME: 'GADAJA', TYPE: 'SEQUENCE', MODE: 'PARAMETER',
+        SEQEVENT: new Map([...copied, ...real].map((entry, index) => [entry.NAME, String(index + 1)])) };
+    const entries = [root, ...copied, ...real], repaired = patchMagicieniiSequence(file, entries);
+    assert.deepEqual(repaired, [{ ...root, SEQEVENT: new Map([['LEB1', '1'], ['LEB2', '2'], ['LEB3', '3']]) }, ...real]);
+    assert.equal(root.SEQEVENT.size, 7);
+    assert.equal(entries.length, 8);
+    assert.equal(patchMagicieniiSequence(file, repaired), repaired);
+    assert.equal(patchMagicieniiSequence('dane/game/przygoda/arcade/gadaja.seq', entries), entries);
+    const replacement = entries.map(entry => entry === copied[0]
+        ? { ...entry, ANIMOFN: 'A_REPLACEMENT_ACTOR' } : entry);
+    assert.equal(patchMagicieniiSequence(file, replacement), replacement);
 });
 
 test('Magicienii clears a database cursor before loading a smaller scene table', async () => {

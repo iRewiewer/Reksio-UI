@@ -73,7 +73,7 @@ const { loadImage } = load('fileFormats/img/index.ts');
 const { loadSprite } = load('filesystem/assetsLoader.ts');
 const { default: Filesystem, normalizePath } = load('filesystem/index.ts');
 const { FileNotFoundError } = load('filesystem/fileLoader.ts');
-const { deserializeArray } = load('fileFormats/archive/array.ts');
+const { deserializeArray, serializeArray } = load('fileFormats/archive/array.ts');
 const { Container, Rectangle, Texture, BaseTexture } = require('pixi.js');
 const constructors = Object.fromEntries([
     ['INTEGER', 'integer', 'Integer'], ['DOUBLE', 'double', 'Double'], ['STRING', 'string', 'String'],
@@ -1675,6 +1675,204 @@ async function verifyCatSavedProgress() {
     }
 }
 
+async function createDragonFixture(level) {
+    const fixture = await createArcadeFixture('DRAGON', 'Dragon', 'Dragon.cnv', `cnvLevel${level}.cnv`);
+    const { engine, parent, scope, defs, get } = fixture, stage = engine.app.stage;
+    const scenePath = 'dane/game/przygoda/dragon', memory = new Map([['common/dragon0.arr', serializeArray([level, 0])]]);
+    const backgrounds = [], voices = [], routes = [], screenshots = [];
+    Texture._WHITE ??= new Texture(BaseTexture.fromBuffer(new Uint8Array([255, 255, 255, 255]), 1, 1));
+    parent.getRelativePath = name => normalizePath(name.startsWith('$') ? name.slice(1) : `${scenePath}/${name}`);
+    engine.resolvePath = async (name, base = scenePath) => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
+    engine.filesystem = new Filesystem({
+        hasFile: name => fs.existsSync(path.join(assets, name)), registerLogicalFilenames() {},
+        getRawFile: async name => {
+            if (!fs.existsSync(path.join(assets, name))) throw new FileNotFoundError(name);
+            return bytes(path.join(assets, name));
+        },
+    }, { get: async name => memory.get(name) ?? null, has: async name => memory.has(name),
+        save: async (name, value) => { assert.equal(name, 'common/dragon0.arr'); memory.set(name, value.slice(0)); } }, engine.compat);
+    engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
+    engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
+    engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+    engine.rendering.setBackground = texture => backgrounds.push(texture);
+    const assetLoader = load('filesystem/assetsLoader.ts'), previousLoadSound = assetLoader.loadSound;
+    const previousWindow = globalThis.window; globalThis.window = new EventTarget();
+    const voice = onEnd => {
+        const instance = { isPlaying: true, stop() { this.isPlaying = false; }, pause() {}, resume() {} };
+        voices.push(() => { if (instance.isPlaying) { instance.isPlaying = false; onEnd?.(); } }); return instance;
+    };
+    assetLoader.loadSound = async () => ({ play: options => voice(options?.onEnd) });
+    const dispose = () => {
+        const cleanup = engine.scopeManager.destroy(); backgrounds.forEach(texture => texture.destroy(true));
+        assetLoader.loadSound = previousLoadSound;
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+        assert.deepEqual(cleanup, [], 'Dragon cleanup'); assert.equal(stage.children.length, 0);
+    };
+    try {
+        for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
+            const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+            if (actor instanceof Animo) actor.loadSfx = async () => {};
+            scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+        }
+        for (const def of Object.values(defs).filter(def => def.TYPE === 'BUTTON')) {
+            const button = new Button(engine, parent, def);
+            scope.set(button.name, button); button.init(); await button.applyDefaults();
+        }
+        for (const def of Object.values(defs).filter(def => def.TYPE === 'TIMER')) scope.set(def.NAME, new Timer(engine, parent, def));
+        for (const name of ['PATTERNBKG', 'PATTERNFIRE']) await get(name).applyDefaults();
+        for (const [name, type, value] of [['G_SARCADEOBJECTS', 'STRING', String(level)],
+            ['G_SLASTOBJECTS', 'STRING', 'DRAGON'], ['SCENENAME', 'STRING', 'DRAGON']]) {
+            const object = new constructors[type](engine, parent, { TYPE: type, NAME: name });
+            object.restoreCheckpointValue(value); scope.set(name, object);
+        }
+        const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+        episode.GOTO = scene => routes.push(scene); scope.set(episode.name, episode);
+        const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+        screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+        const { System } = load('engine/types/system.ts'), { Rand } = load('engine/types/rand.ts');
+        scope.set('SYSTEM', new System(engine, parent, { TYPE: 'SYSTEM', NAME: 'SYSTEM' }));
+        const random = new Rand(engine, parent, { TYPE: 'RAND', NAME: 'RANDOM' }); let randomIndex = 0;
+        random.GET = (min, count) => count === undefined ? randomIndex++ % min : min + randomIndex++ % count;
+        scope.set(random.name, random);
+        const mouse = new Mouse(engine, parent, defs.MOUSE); scope.set(mouse.name, mouse);
+        const keyboard = new Keyboard(engine, parent, defs.KEYBOARD); scope.set(keyboard.name, keyboard);
+        await keyboard.ready(); keyboard.SETAUTOREPEAT(false);
+        for (const object of scope.objects.filter(object => object.definition.TYPE === 'SOUND')) object.playForSequence = onEnd => voice(onEnd);
+        const pixel = new Animo(engine, parent, { TYPE: 'ANIMO', NAME: '__DRAGON_PIXEL__',
+            FILENAME: '$\\COMMON\\PIXEL.ANN', TOCANVAS: true, VISIBLE: true });
+        pixel.loadSfx = async () => {}; scope.set(pixel.name, pixel);
+        await pixel.init(); await pixel.applyDefaults(); await pixel.ready();
+        const sequence = new Sequence(engine, parent, defs.SEQHELP);
+        sequence.getAnimo = async filename => { assert.equal(filename, '$\\COMMON\\PIXEL.ANN'); return pixel; };
+        scope.set(sequence.name, sequence); await sequence.init();
+        const code = defs.__INIT__.CODE.code, ast = load('interpreter/parser.ts').parseCode(code);
+        const start = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'VARCPUSPEED');
+        assert.ok(start > 0);
+        const initialization = ast.slice(start).filter(entry => !['CNVLOADER', 'G_MENU'].includes(entry.target?.ref?.name));
+        await new Interpreter(new RuntimeContext(engine, null, code)).execute(initialization);
+        const step = async (count = 1) => {
+            for (let tick = 0; tick < count && !parent.paused && !routes.length; tick++) {
+                if (voices.length) voices.shift()();
+                for (const object of scope.objects) await object.tick(1000 / 60);
+            }
+        };
+        const key = async (down, code = 'Space') => {
+            const event = new Event(down ? 'keydown' : 'keyup'); Object.assign(event, { code, key: code === 'Space' ? ' ' : code });
+            window.dispatchEvent(event);
+        };
+        assert.equal(get('VARLEVEL').value, level); assert.equal(get('VARCPUSPEED').value, 1);
+        return { ...fixture, memory, backgrounds, voices, routes, screenshots, step, key, dispose };
+    } catch (error) { dispose(); throw error; }
+}
+
+async function verifyDragonFlight() {
+    const { get, memory, routes, screenshots, key, step, dispose } = await createDragonFixture(0);
+    let strokes = 0, landed = false, tookOff = false, burning = false, extinguished = false;
+    try {
+        for (let tick = 0; tick < 7000 && !routes.length; tick++) {
+            const wings = get('ANNSKRZYDLA');
+            burning ||= get('ANNDRAGONFIRE').ISPLAYING('PLAY');
+            landed ||= get('VARSTARTOWANIE').value === 1;
+            tookOff ||= landed && get('VARSTARTOWANIE').value === 0;
+            extinguished ||= burning && landed && !get('ANNDRAGONFIRE').ISPLAYING('PLAY');
+            // Let complete strokes lift the dragon; descend into water when it catches fire.
+            if (!get('ANNDRAGONFIRE').ISPLAYING('PLAY') && get('VARPOSY').value > 210 &&
+                ((get('VARDIR').value === 'B' && wings.GETCFRAMEINEVENT() <= 1) ||
+                    ['PLYNIE', 'SZYB'].includes(wings.GETEVENTNAME()))) {
+                await key(true); await step(); await key(false); strokes++;
+            } else await step();
+        }
+        assert.deepEqual(routes, ['DRAGON']);
+        assert.equal(get('G_SARCADEOBJECTS').value, '1');
+        assert.ok(get('VARPOSX').value > 15000 && get('VARENERGY').value > 0);
+        assert.ok(strokes > 0 && landed && tookOff && burning && extinguished);
+        assert.deepEqual(deserializeArray(memory.get('common/dragon0.arr')), [0, 0]);
+        assert.equal(screenshots.length, 1);
+        console.log(`DRAGON: full first flight, ${strokes} timed strokes, fire, water landing, takeoff and next-level request passed`);
+    } finally { dispose(); }
+}
+
+async function verifyDragonRecoveryAndExits() {
+    const failure = await createDragonFixture(1);
+    try {
+        await failure.step(6000);
+        assert.ok(failure.get('VARENERGY').value <= 0);
+        assert.deepEqual(failure.routes, ['DRAGON']);
+        assert.deepEqual(deserializeArray(failure.memory.get('common/dragon0.arr')), [1, 1]);
+        assert.equal(failure.get('KEYBOARD').ISENABLED(), true);
+    } finally { failure.dispose(); }
+    const restart = await createDragonFixture(4);
+    try {
+        await restart.get('BTNRESTART').callbacks.run('ONRELEASED');
+        await restart.step(240);
+        assert.deepEqual(restart.routes, ['DRAGON']);
+        assert.deepEqual(deserializeArray(restart.memory.get('common/dragon0.arr')), [4, 1]);
+        assert.equal(restart.get('G_SARCADEOBJECTS').value, '4');
+    } finally { restart.dispose(); }
+    for (const [level, destination, room] of [[1, 'LEBIODKA', 'DRAGON'], [2, 'ARCADE', 'PRZYSTAN'],
+        [3, 'ARCADE', 'WMWEJSCIE'], [4, 'ARCADE', 'PRZYSTAN']]) {
+        const fixture = await createDragonFixture(level);
+        try {
+            // Boundary test of each authored ending, not a claim that these four flights were solved.
+            await fixture.get('VARPOSX').SET(15001);
+            await fixture.step(360);
+            assert.deepEqual(fixture.routes, [destination]);
+            assert.equal(fixture.get('G_SARCADEOBJECTS').value, room);
+            assert.equal(fixture.screenshots.length, 1);
+            assert.equal(fixture.get('KEYBOARD').ISENABLED(), true);
+            if (level === 2) assert.equal(fixture.get('G_SLASTOBJECTS').value, 'DRAGON2');
+        } finally { fixture.dispose(); }
+    }
+    console.log('DRAGON: natural collision failure, manual restart and four boundary-tested story endings passed');
+}
+
+async function verifyLebiodkaCutscene() {
+    const { engine, parent, scope, defs, get } = await createArcadeFixture('LEBIODKA', 'Lebiodka', 'Lebiodka.cnv');
+    const scenePath = 'dane/game/przygoda/lebiodka', stage = engine.app.stage;
+    parent.getRelativePath = name => normalizePath(name.startsWith('$') ? name.slice(1) : `${scenePath}/${name}`);
+    engine.filesystem = new Filesystem({
+        hasFile: name => fs.existsSync(path.join(assets, name)), registerLogicalFilenames() {},
+        getRawFile: async name => bytes(path.join(assets, name)),
+    }, { get: async () => null, has: async () => false }, engine.compat);
+    engine.rendering.addToStage = sprite => stage.addChild(sprite);
+    engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+    const voices = [], audio = [], routes = [], assetLoader = load('filesystem/assetsLoader.ts');
+    const previousLoadSound = assetLoader.loadSound;
+    assetLoader.loadSound = async (filesystem, filename) => ({ play: options => {
+        audio.push(filename);
+        const instance = { isPlaying: true, stop() { this.isPlaying = false; }, pause() {}, resume() {} };
+        voices.push(() => { if (instance.isPlaying) { instance.isPlaying = false; options?.onEnd?.(); } });
+        return instance;
+    } });
+    try {
+        for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
+            const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+            if (actor instanceof Animo) actor.loadSfx = async () => {};
+            scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+        }
+        scope.set('G_SARCADEOBJECTS', new constructors.STRING(engine, parent, { TYPE: 'STRING', NAME: 'G_SARCADEOBJECTS' }));
+        const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+        episode.GOTO = scene => routes.push(scene); scope.set(episode.name, episode);
+        const sequence = new Sequence(engine, parent, defs.GADAJA);
+        scope.set(sequence.name, sequence); await sequence.init();
+        // Global menu/cursor/music setup is outside this scene-owned animation/dialogue test.
+        await get('CPL_SMOK').PLAY('WCHODZI');
+        for (let tick = 0; tick < 2400 && !routes.length; tick++) {
+            if (voices.length) voices.shift()();
+            for (const object of scope.objects) await object.tick(1000 / 60);
+        }
+        assert.deepEqual(audio.map(name => name.toLowerCase()),
+            ['wavs/smokret_d038.wav', 'wavs/rex_r039.wav', 'wavs/smokret_d039.wav']);
+        assert.deepEqual(routes, ['DRAGON']);
+        assert.equal(get('G_SARCADEOBJECTS').value, '2');
+        console.log('LEBIODKA: real scene actors, three original dialogue branches and Dragon level-two request passed');
+    } finally {
+        assetLoader.loadSound = previousLoadSound;
+        assert.deepEqual(engine.scopeManager.destroy(), []);
+        assert.equal(stage.children.length, 0);
+    }
+}
+
 async function verifyDragonControls() {
     const { engine, parent, scope, directory, defs, world, get, addMedia } =
         await createArcadeFixture('DRAGON', 'Dragon', 'Dragon.cnv');
@@ -2077,6 +2275,9 @@ async function main() {
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();
+    await verifyDragonFlight();
+    await verifyDragonRecoveryAndExits();
+    await verifyLebiodkaCutscene();
     await verifyAlchemy();
     assert.deepEqual(errors, [], 'The original scripts must not call unsupported methods');
 }

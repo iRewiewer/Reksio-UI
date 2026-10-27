@@ -31,6 +31,10 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         return source.replaceAll('FRED^PAUSE();SEQNARRATOR^PLAY("FAILED");',
             'KEYBOARD^DISABLE();BTNRESTART^DISABLE();TIMERSEQ^DISABLE();SEQNARRATOR^PLAY("FAILED");')
     }
+    if (filename === 'dane/game/przygoda/dragon/dragon.cnv') {
+        // Select the high-detail parallax path without pretending to measure browser CPU frequency.
+        return source.replaceAll('VARCPUSPEED^SET(SYSTEM^GETMHZ());', 'VARCPUSPEED^SET(1000);')
+    }
     if (filename === 'dane/game/przygoda/shooter/shooter.cnv' && source.includes('SHOOTER^PAUSE();')) {
         // End-of-round sequences must tick while enemies, spawn timers and input are frozen.
         return source.replaceAll('SHOOTER^PAUSE();', '__WEB_SHOOTERPAUSE__^RUN();') + '\n' +
@@ -65,6 +69,19 @@ export function patchMagicieniiArray(filename: string, entries: any[]): any[] {
 }
 
 export function patchMagicieniiSequence(filename: string, entries: SequenceFile): SequenceFile {
+    if (filename === 'dane/game/przygoda/lebiodka/gadaja.seq') {
+        const actors = new Map([['SEQ1', 'CB_BOBROMIR'], ['SEQ2', 'CB_BULBO'],
+            ['SEQ3', 'CB_LOVELAS'], ['SEQ4B', 'CB_BARANDALF']])
+        const unused = entries.filter((entry) => entry.TYPE === 'SPEAKING' && entry.ADD === 'GADAJA' && actors.has(entry.NAME) &&
+            actors.get(entry.NAME) === entry.ANIMOFN)
+        const root = entries.find((entry) => entry.NAME === 'GADAJA' && entry.TYPE === 'SEQUENCE' &&
+            entry.MODE === 'PARAMETER' && entry.SEQEVENT?.size === 7)
+        if (unused.length !== 4 || !root || !['LEB1', 'LEB2', 'LEB3'].every((name, index) =>
+            root.SEQEVENT.get(name) === String(index + 5))) return entries
+        // Copied courtyard dialogue is never played here and references absent scene actors.
+        return entries.filter((entry) => !unused.includes(entry)).map((entry) => entry === root
+            ? { ...entry, SEQEVENT: new Map([['LEB1', '1'], ['LEB2', '2'], ['LEB3', '3']]) } : entry)
+    }
     if (filename !== 'dane/game/przygoda/dialogs/blank.seq') return entries
     const placeholder = entries.find((entry) =>
         entry.NAME === 'NOWY' && entry.TYPE === 'SIMPLE' && entry.FILENAME === 'BOLEK.ANN'
