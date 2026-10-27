@@ -45,6 +45,11 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         source = source.replaceAll('*VARSTRING0^SETFPS(12);*VARSTRING0^SETANCHOR("CENTER");',
             '*VARSTRING0^SETFPS(12);*VARSTRING0^SETPRIORITY(300);*VARSTRING0^SETANCHOR("CENTER");')
     }
+    if (filename === 'dane/game/przygoda/labirynt/cnvlevel1.cnv') {
+        // The unused hidden prison overlay must not intercept the plate-60 hit test at layer 201.
+        source = source.replaceAll('ANNWIEZIENIE^LOAD("WIEZIENIE0.ANN");ANNWIEZIENIE^HIDE();',
+            'ANNWIEZIENIE^LOAD("WIEZIENIE0.ANN");ANNWIEZIENIE^SETPRIORITY(0);ANNWIEZIENIE^HIDE();')
+    }
     if (filename === 'dane/game/game.cnv') {
         // The browser cannot warp the OS pointer; keep the global cursor aligned with scene mice.
         return source.replaceAll('MOUSE^SETPOSITION(400,300);MOUSE^HIDE();', 'MOUSE^HIDE();')

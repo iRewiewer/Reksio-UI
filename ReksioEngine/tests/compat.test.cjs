@@ -608,6 +608,19 @@ test('Magicienii labyrinth enemy initialization puts off-canvas-template clones 
     }
 });
 
+test('Only the Magicienii rescue room removes its unused prison overlay from the pressure-plate layer', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/labirynt/cnvlevel1.cnv';
+    const source = 'ANNWIEZIENIE^LOAD("WIEZIENIE0.ANN");ANNWIEZIENIE^HIDE();';
+    const repaired = 'ANNWIEZIENIE^LOAD("WIEZIENIE0.ANN");ANNWIEZIENIE^SETPRIORITY(0);ANNWIEZIENIE^HIDE();';
+    assert.equal(patchMagicieniiSource(file, source), repaired);
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const other of ['cnvlevel0.cnv', 'cnvlevel2.cnv', 'labirynt.cnv']) {
+        assert.equal(patchMagicieniiSource(`dane/game/przygoda/labirynt/${other}`, source), source);
+    }
+    assert.equal(patchMagicieniiSource('dane/game/przygoda/cat/cnvlevel1.cnv', source), source);
+});
+
 test('Magicienii maze failure and restart freeze animations without pausing their dialogue processor', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const file = 'dane/game/przygoda/labirynt/labirynt.cnv';

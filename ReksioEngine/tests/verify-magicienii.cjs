@@ -975,6 +975,10 @@ async function verifyMazePuzzleInitialization() {
                 return hits;
             };
             await park();
+            if (level === 1) {
+                assert.equal(get('CANVASOBSERVER').GETGRAPHICSAT(660, 420, false, 201, 201, false), 'ANNBTN_60',
+                    'The unused hidden prison hotspot must not steal the fourth character\'s pressure-plate hit');
+            }
             for (const area of get('ANNBTN').clones) {
                 const hit = points(area, 201, 201)[0];
                 if (!hit) continue;
@@ -988,6 +992,16 @@ async function verifyMazePuzzleInitialization() {
                 assert.equal(get(`ANNBTNGRAPH_${index}`).GETCFRAMEINEVENT(), 0, 'Releasing a plate must restore its graphic');
                 assert.equal(get(`ANNBTNMASK_${index}`).GETCFRAMEINEVENT(), 0, 'Releasing a plate must restore its wall mask');
                 plates++;
+            }
+            if (level === 1) {
+                // This reachable four-holder arrangement must open the whole eastern rescue corridor.
+                for (const [player, y] of [[0, 340], [2, 380], [3, 420], [4, 460]]) await players[player].SETPOSITION(660, y);
+                await players[1].SETPOSITION(740, 380);
+                await get('VARPLAYERCHANGED').SET(0); await get('BEHONBUTTON').RUN();
+                assert.deepEqual([58, 59, 60, 61].map(index => get(`ANNBTNMASK_${index}`).GETCFRAMEINEVENT()), [1, 1, 1, 1]);
+                assert.equal(get('CANVASOBSERVER').GETGRAPHICSAT(740, 410, false, 110, 130, false), null,
+                    'An occupied plate 60 must remove the wall that blocks the companion\'s next downward move');
+                await park(); await get('BEHONBUTTON').RUN();
             }
             for (const area of get('ANNSWITCH').clones) {
                 const frames = area.getEvent(area.GETEVENTNAME()).frames;
