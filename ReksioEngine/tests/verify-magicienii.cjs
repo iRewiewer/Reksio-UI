@@ -1298,9 +1298,42 @@ async function verifyMazeEnemySpellHits() {
                 assert.deepEqual([helper.positionX, helper.positionY], [-40, -40], 'Darkness must disable guard contact');
             }
             const actors = scope.objects.filter(object => /^ANNENEMY0(?:_2|(?:FIELD|MASK|MMASK|ELAPSE|CURSE)_2)$/.test(object.name));
+            const played = new Set();
+            const step = async count => {
+                for (let tick = 0; tick < count; tick++) {
+                    for (const actor of actors) await actor.tick(1000 / 30);
+                    played.add(enemy.GETEVENTNAME());
+                }
+            };
+            if (spell === 'DARK') {
+                const duration = elapsed.GETNOFINEVENT('PLAY') * 30 / elapsed.fps;
+                await step(Math.ceil(duration / 2));
+                const before = elapsed.GETCFRAMEINEVENT();
+                assert.ok(before > 1 && elapsed.ISPLAYING());
+                await get('ANNSPELL1').CLONE(1);
+                const repeated = get('ANNSPELL1_2');
+                await repeated.SETANCHOR('CENTER'); await repeated.PLAY('DARK_RIGHT_R');
+                await repeated.SETPOSITION(repeated.positionX + enemy.GETCENTERX() - repeated.GETCENTERX(),
+                    repeated.positionY + enemy.GETCENTERY() - repeated.GETCENTERY());
+                repeated.ADDBEHAVIOUR('ONFRAMECHANGED', 'BEHMOVESPELL');
+                await repeated.tick(1000 / 16);
+                assert.equal(repeated.ISPLAYING(), false, 'The second projectile must hit, not merely find an already-dark guard');
+                assert.ok(elapsed.GETCFRAMEINEVENT() < before, 'A confirmed second hit must restart the original curse timer');
+                await step(Math.ceil(duration * 0.65));
+                assert.equal(elapsed.ISPLAYING(), true, 'A refreshed curse must outlive the first hit\'s original expiry');
+                assert.equal(get('ARRAYENEMY0STATE').value[1], 'DARK');
+                for (const suffix of ['FIELD', 'MASK']) {
+                    const helper = get(`ANNENEMY0${suffix}_2`);
+                    assert.deepEqual([helper.positionX, helper.positionY], [-40, -40]);
+                }
+            }
             let tick = 0;
-            for (; tick < 2400 && elapsed.ISPLAYING(); tick++) for (const actor of actors) await actor.tick(1000 / 30);
+            for (; tick < 2400 && elapsed.ISPLAYING(); tick++) await step(1);
             assert.ok(tick < 2400, `${spell} must expire through the guard's native animation timer`);
+            if (spell === 'FROG') {
+                assert.ok([...played].some(name => /^(UP|DOWN|LEFT|RIGHT)_FROG$/.test(name)), 'The missing-idle adapter must enter the real frog patrol animations');
+                assert.doesNotMatch(enemy.GETEVENTNAME(), /FROG/, 'The original expiry callback must restore the normal guard');
+            }
             assert.equal(get('ARRAYENEMY0STATE').value[1], 'NULL');
             assert.equal(enemy.ISPLAYING(), true); assert.equal(enemy.fps, 16);
             for (tick = 0; tick < 60 && get('ANNENEMY0MASK_2').positionX < 0; tick++) {
@@ -1312,7 +1345,7 @@ async function verifyMazeEnemySpellHits() {
             backgrounds.forEach(texture => texture.destroy(true));
         }
     }
-    console.log('MAZE GUARD SPELLS: six original projectile hits, curse effects, native expiry and restored guard collision passed');
+    console.log('MAZE GUARD SPELLS: six original projectile hits, frog patrol, confirmed darkness refresh, native expiry and restored guard collision passed');
 }
 
 async function verifyMazeRecovery() {
