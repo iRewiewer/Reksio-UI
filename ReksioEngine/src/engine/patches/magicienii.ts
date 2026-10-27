@@ -26,6 +26,11 @@ export function patchMagicieniiSource(filename: string, source: string): string 
         return source.replaceAll('*VARPLAYERNAME^PLAY([360-VARINT0@45]);',
             'VARINT0^SET([360-VARINT0@45]);VARINT0^MOD(8);*VARPLAYERNAME^PLAY(VARINT0);')
     }
+    if (filename === 'dane/game/przygoda/fred/fred.cnv') {
+        // The original callback already stops the actors; scene pause also blocks its failure sequence.
+        return source.replaceAll('FRED^PAUSE();SEQNARRATOR^PLAY("FAILED");',
+            'KEYBOARD^DISABLE();BTNRESTART^DISABLE();TIMERSEQ^DISABLE();SEQNARRATOR^PLAY("FAILED");')
+    }
     if (filename === 'dane/game/przygoda/labirynt/labirynt.cnv' && source.includes('LABIRYNT^PAUSE();')) {
         // Freeze gameplay, but keep the failure/restart sequence's completion processor running.
         return source.replaceAll('LABIRYNT^PAUSE();', '__WEB_MAZEPAUSE__^RUN();') + '\n' +

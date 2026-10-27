@@ -56,6 +56,7 @@ const { loadAnn } = load('fileFormats/ann/index.ts');
 const { Animo } = load('engine/types/animo.ts');
 const { Mouse } = load('engine/types/mouse.ts');
 const { Keyboard } = load('engine/types/keyboard.ts');
+const { Timer } = load('engine/types/timer.ts');
 const { Scene } = load('engine/types/scene.ts');
 const { Sequence } = load('engine/types/sequence.ts');
 const { Group } = load('engine/types/group.ts');
@@ -844,6 +845,162 @@ async function verifyMazeRecovery() {
     console.log('MAZE RECOVERY: original failure and restart callbacks, frozen actors/input, real sequences and fresh-maze requests passed');
 }
 
+async function createFredFixture() {
+    const fixture = await createArcadeFixture('FRED', 'Fred', 'Fred.cnv');
+    const { engine, parent, scope, defs, get } = fixture, stage = engine.app.stage;
+    const scenePath = 'dane/game/przygoda/fred';
+    parent.getRelativePath = name => normalizePath(name.startsWith('$') ? name.slice(1) : `${scenePath}/${name}`);
+    engine.resolvePath = async (name, base = scenePath) => normalizePath(name.startsWith('$') ? name.slice(1) : `${base}/${name}`);
+    engine.filesystem = new Filesystem({
+        hasFile: name => fs.existsSync(path.join(assets, name)), registerLogicalFilenames() {},
+        getRawFile: async name => bytes(path.join(assets, name)),
+    }, { get: async () => null, has: async () => false }, engine.compat);
+    engine.rendering.sortObjects = () => stage.children.sort((a, b) => a.zIndex - b.zIndex);
+    engine.rendering.addToStage = sprite => { stage.addChild(sprite); engine.rendering.sortObjects(); };
+    engine.rendering.removeFromStage = sprite => stage.removeChild(sprite);
+    for (const def of Object.values(defs).filter(def => ['ANIMO', 'IMAGE'].includes(def.TYPE))) {
+        const actor = new (def.TYPE === 'ANIMO' ? Animo : Image)(engine, parent, def);
+        if (actor instanceof Animo) actor.loadSfx = async () => {};
+        scope.set(actor.name, actor); await actor.init(); await actor.applyDefaults(); await actor.ready();
+    }
+    await get('PATBOARD').applyDefaults();
+    for (const def of Object.values(defs).filter(def => def.TYPE === 'BUTTON')) {
+        const button = new Button(engine, parent, def);
+        scope.set(button.name, button); button.init(); await button.applyDefaults();
+    }
+    const keyboard = new Keyboard(engine, parent, defs.KEYBOARD);
+    scope.set(keyboard.name, keyboard); await keyboard.ready(); keyboard.SETAUTOREPEAT(false);
+    scope.set('TIMERSEQ', new Timer(engine, parent, defs.TIMERSEQ));
+    const ast = load('interpreter/parser.ts').parseCode(defs.__INIT__.CODE.code);
+    const start = ast.findIndex(entry => entry.type === 'FunctionCall' && entry.target?.ref?.name === 'VARENERGIA');
+    assert.ok(start > 0, 'Only global menu/audio setup may be omitted from the Fred fixture');
+    await new Interpreter(new RuntimeContext(engine, null, defs.__INIT__.CODE.code)).execute(ast.slice(start));
+    const step = async count => {
+        for (let tick = 0; tick < count && !parent.paused; tick++) {
+            // Ambient chatter scheduling is outside the deterministic movement/recovery fixture.
+            for (const object of scope.objects.filter(object => !(object instanceof Timer))) await object.tick(1000 / 60);
+        }
+    };
+    const press = async (direction, down) => {
+        const event = new Event(down ? 'keydown' : 'keyup'); Object.assign(event, { code: `Arrow${direction}`, key: direction });
+        window.dispatchEvent(event); await keyboard.tick();
+    };
+    const key = async (direction, ticks) => {
+        await press(direction, true); await step(ticks); await press(direction, false); await step(3);
+    };
+    return { ...fixture, stage, step, key, press };
+}
+
+async function verifyFredRoute() {
+    const previousWindow = globalThis.window;
+    globalThis.window = new EventTarget();
+    const { engine, parent, scope, get, stage, step, press, key } = await createFredFixture();
+    const routes = [], screenshots = [];
+    const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+    episode.GOTO = scene => routes.push(scene); scope.set(episode.name, episode);
+    const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+    screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+    scope.set('G_SARCADEOBJECTS', new constructors.STRING(engine, parent,
+        { TYPE: 'STRING', NAME: 'G_SARCADEOBJECTS', VALUE: 'FRED' }));
+    try {
+        // Turns from the shipped alpha map; only real keyboard events and animation ticks move the player.
+        const turns = [[11,69],[11,56],[15,56],[15,52],[11,52],[11,48],[9,48],[9,40],
+            [11,40],[11,34],[7,34],[7,32],[3,32],[3,30],[1,30],[1,26],[3,26],[3,18],
+            [5,18],[5,16],[7,16],[7,14],[9,14],[9,8],[11,8],[11,4],[9,4],[9,2],[5,2],[5,0],[1,0]];
+        assert.equal(get('PATBOARD').getRenderObject().children.length, 72);
+        const start = [get('VARPLAYERX').value, get('VARPLAYERY').value];
+        await key('Down', 60);
+        assert.deepEqual([get('VARPLAYERX').value, get('VARPLAYERY').value], start,
+            'The real map must reject descending below the starting platform');
+        for (const [x, y] of turns) {
+            const current = [get('VARPLAYERX').value, get('VARPLAYERY').value];
+            const axis = Math.floor(current[0] / 50) === x ? 1 : 0;
+            const target = axis ? y * 50 + 5 : x * 50 + (y === 0 ? 5 : 25);
+            const sign = Math.sign(target - current[axis]);
+            const direction = axis ? (sign < 0 ? 'Up' : 'Down') : (sign < 0 ? 'Left' : 'Right');
+            await press(direction, true);
+            let ticks = 0;
+            while (sign * (target - get(axis ? 'VARPLAYERY' : 'VARPLAYERX').value) > 0 && !routes.length && ticks++ < 1500) {
+                await step(1);
+            }
+            await press(direction, false); await step(3);
+            assert.ok(ticks < 1500, `Fred route stalled before ${x},${y}`);
+            assert.equal(parent.paused, false); assert.ok(get('VARENERGIA').value > 0);
+        }
+        assert.deepEqual(routes, ['ARCADE'], 'Reaching the actual exit must return to the story');
+        assert.equal(get('G_SARCADEOBJECTS').value, 'KROLOWA');
+        assert.equal(screenshots.length, 1);
+        assert.ok(get('VARSCROLL').value >= 2990, 'The route must scroll the entire 3600-pixel map');
+        assert.ok(get('VARENERGIA').value < 200, 'Real moving-enemy collisions must remain active');
+    } finally {
+        assert.deepEqual(engine.scopeManager.destroy(), [], 'Fred route cleanup');
+        assert.equal(stage.children.length, 0);
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+    }
+    console.log('FRED ROUTE: 72 real tiles, keyboard-only full-map traversal, scrolling, enemy damage and KROLOWA story return passed');
+}
+
+async function verifyFredRecovery() {
+    const previousWindow = globalThis.window, assetLoader = load('filesystem/assetsLoader.ts');
+    const loadSound = assetLoader.loadSound;
+    globalThis.window = new EventTarget();
+    try {
+        for (const recovery of ['FAILED', 'RESTARTBTN']) {
+            const { engine, parent, scope, defs, get, stage, step } = await createFredFixture();
+            const voices = [], routes = [], screenshots = [];
+            assetLoader.loadSound = async () => ({ play: options => {
+                const instance = { isPlaying: true, stop() { this.isPlaying = false; }, pause() {}, resume() {} };
+                voices.push(() => { instance.isPlaying = false; options?.onEnd?.(); }); return instance;
+            } });
+            const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+            episode.GOTO = scene => routes.push(scene); scope.set(episode.name, episode);
+            const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+            screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+            const pixel = new Animo(engine, parent, { TYPE: 'ANIMO', NAME: '__RECOVERY_PIXEL__',
+                FILENAME: '$\\COMMON\\PIXEL.ANN', TOCANVAS: true, VISIBLE: true });
+            pixel.loadSfx = async () => {}; scope.set(pixel.name, pixel);
+            const sequence = new Sequence(engine, parent, defs.SEQNARRATOR);
+            sequence.getAnimo = async filename => {
+                assert.equal(filename, '$\\COMMON\\PIXEL.ANN'); return pixel;
+            };
+            scope.set(sequence.name, sequence);
+            try {
+                await pixel.init(); await pixel.applyDefaults(); await pixel.ready(); await sequence.init();
+                if (recovery === 'FAILED') {
+                    await get('VARENERGIA').SET(0);
+                    assert.equal(get('ANNPLAYER').ISPLAYING(), false);
+                    assert.equal(get('ANNCOLL').ISPLAYING(), false);
+                    for (const enemy of get('GROUPENEMY').objects) assert.equal(enemy.ISPLAYING(), false);
+                    assert.equal(get('KEYBOARD').ISENABLED(), false);
+                    assert.equal(get('BTNRESTART').logic.enabled, false);
+                    assert.equal(get('TIMERSEQ').enabled, false);
+                } else {
+                    const button = get('BTNRESTART'), sprite = get(button.definition.GFXSTANDARD.objectName).getRenderObject();
+                    for (const event of ['pointerover', 'pointerdown', 'pointerup']) sprite.emit(event);
+                    await button.tick();
+                }
+                assert.equal(parent.paused, false, 'Failure dialogue must retain its tick processor');
+                assert.equal(sequence.ISPLAYING(), true);
+                let spoken = 0;
+                for (let tick = 0; tick < 240 && !routes.length; tick++) {
+                    if (voices.length) { voices.shift()(); spoken++; }
+                    await step(1);
+                }
+                assert.ok(spoken > 0, `${recovery} must finish its original voice sequence`);
+                assert.deepEqual(routes, ['FRED']); assert.equal(screenshots.length, 1);
+                assert.equal(sequence.ISPLAYING(), false);
+            } finally {
+                assert.deepEqual(engine.scopeManager.destroy(), [], `${recovery} Fred cleanup`);
+                assert.equal(stage.children.length, 0);
+            }
+        }
+    } finally {
+        assetLoader.loadSound = loadSound;
+        if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow;
+    }
+    console.log('FRED RECOVERY: original failure/restart sequences, actor/input freeze and fresh-scene requests passed');
+}
+
 async function verifyBroomPhysics() {
     const { world, get, addMedia } = await createArcadeFixture('MIOTLY', 'miotly', 'Miotly.cnv');
     for (let index = 1; index <= 10; index++) addMedia(`ANNKURZ_${index}`);
@@ -1557,6 +1714,8 @@ async function main() {
     await verifyMazePlayers();
     await verifyMazePuzzleInitialization();
     await verifyMazeRecovery();
+    await verifyFredRoute();
+    await verifyFredRecovery();
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();

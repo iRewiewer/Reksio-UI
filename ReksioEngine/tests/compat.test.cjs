@@ -568,6 +568,18 @@ test('Magicienii removes only the global startup pointer warp, preserving relati
     assert.equal(patchMagicieniiSource('other/game.cnv', source), source);
 });
 
+test('Magicienii Fred failure keeps its dialogue processor running and rejects further input', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/fred/fred.cnv';
+    const source = 'ANNPLAYER^STOP(FALSE);FRED^PAUSE();SEQNARRATOR^PLAY("FAILED");OTHER^PAUSE();';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.equal(repaired, 'ANNPLAYER^STOP(FALSE);KEYBOARD^DISABLE();BTNRESTART^DISABLE();TIMERSEQ^DISABLE();SEQNARRATOR^PLAY("FAILED");OTHER^PAUSE();');
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const name of ['fred/other.cnv', 'labirynt/labirynt.cnv', 'arcade/arcade.cnv']) {
+        assert.equal(patchMagicieniiSource(`dane/game/przygoda/${name}`, source), source);
+    }
+});
+
 test('Magicienii maze failure and restart freeze animations without pausing their dialogue processor', () => {
     const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
     const file = 'dane/game/przygoda/labirynt/labirynt.cnv';
