@@ -109,12 +109,17 @@ export class Scene extends ParentType<SceneDefinition> {
 
         targetGroup.removeAll()
 
-        const scope = this.engine.currentScene?.scope
-        if (!scope) {
-            return
-        }
+        const objects = this.engine.compat.magicieniiAssets
+            ? new Set(this.engine.scopeManager.scopes.flatMap((scope) => scope.objects).filter((object) => {
+                // CNV overlays can be stored outside the scene scope while still belonging to it.
+                for (let owner = object.parent; owner; owner = owner.parent) {
+                    if (owner === this) return true
+                }
+                return false
+            }))
+            : this.engine.currentScene?.scope?.objects ?? []
 
-        for (const [key, value] of scope.content.entries()) {
+        for (const value of objects) {
             if (value instanceof Animo && value.isPlaying) {
                 targetGroup.add(value)
             }

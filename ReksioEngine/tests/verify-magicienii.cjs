@@ -56,6 +56,8 @@ const { loadAnn } = load('fileFormats/ann/index.ts');
 const { Animo } = load('engine/types/animo.ts');
 const { Mouse } = load('engine/types/mouse.ts');
 const { Keyboard } = load('engine/types/keyboard.ts');
+const { Scene } = load('engine/types/scene.ts');
+const { Sequence } = load('engine/types/sequence.ts');
 const { Group } = load('engine/types/group.ts');
 const { Struct } = load('engine/types/struct.ts');
 const { World } = load('engine/types/world.ts');
@@ -175,7 +177,9 @@ async function createArcadeFixture(scene, folder, filename, overlay) {
         filesystem: { getFile: async (name) => bytes(name) },
     };
     engine.scripting = new ScriptingManager(engine);
-    const parent = { name: scene, scope };
+    const parent = new Scene(engine, null, { TYPE: 'SCENE', NAME: scene });
+    parent.scope = scope; parent.getRelativePath = engine.currentScene.getRelativePath;
+    engine.currentScene = parent; scope.set(scene, parent);
     // Empty collision masks isolate original movement scripts from rendering and level obstacles.
     class Media extends Type {
         x = 0; y = 0; event = 'PLAY'; playing = false;
@@ -600,6 +604,7 @@ async function createMazePuzzleFixture(level) {
     engine.rendering.setBackground = texture => backgrounds.push(texture);
     engine.filesystem = new Filesystem({
         hasFile: name => fs.existsSync(path.join(assets, name)),
+        registerLogicalFilenames() {},
         getRawFile: async name => {
             reads.push(name);
             if (!fs.existsSync(path.join(assets, name))) throw new FileNotFoundError(name);
@@ -763,6 +768,78 @@ async function verifyMazePuzzleInitialization() {
         }
     }
     console.log(`MAZE PUZZLES: full image/animation startup, ${plates} plate updates, ${switches} linked switches, save round-trip and ${exits} exit decisions passed`);
+}
+
+async function verifyMazeRecovery() {
+    const previousWindow = globalThis.window, assetLoader = load('filesystem/assetsLoader.ts');
+    const loadSound = assetLoader.loadSound;
+    globalThis.window = new EventTarget();
+    try {
+        for (const recovery of ['FAILED', 'RESTART']) {
+            const fixture = await createMazePuzzleFixture(0);
+            const { engine, parent, scope, defs, get, stage, backgrounds } = fixture;
+            const voices = [], routes = [], screenshots = [];
+            const voice = onEnd => {
+                const instance = { isPlaying: true, stop() { this.isPlaying = false; }, pause() {}, resume() {} };
+                voices.push(() => { instance.isPlaying = false; onEnd?.(); });
+                return instance;
+            };
+            // Playback completion is driven here; sequence parsing, PIXEL animation and callbacks are real.
+            assetLoader.loadSound = async () => ({ play: options => voice(options?.onEnd) });
+            for (const object of scope.objects.filter(object => object.definition.TYPE === 'SOUND')) {
+                object.playForSequence = onEnd => voice(onEnd);
+            }
+            const keyboard = new Keyboard(engine, parent, defs.KEYBOARD);
+            const mouse = new Mouse(engine, parent, defs.MOUSE);
+            scope.set('KEYBOARD', keyboard); scope.set('MOUSE', mouse);
+            const episode = new Type(engine, parent, { TYPE: 'EPISODE', NAME: 'PRZYGODA' });
+            episode.GOTO = scene => routes.push(scene); scope.set(episode.name, episode);
+            const screenshot = new Type(engine, parent, { TYPE: 'BEHAVIOUR', NAME: '__SCREENSHOT__' });
+            screenshot.RUN = () => screenshots.push(true); scope.set(screenshot.name, screenshot);
+            const pixel = new Animo(engine, parent, { TYPE: 'ANIMO', NAME: '__RECOVERY_PIXEL__',
+                FILENAME: '$\\COMMON\\PIXEL.ANN', TOCANVAS: true, VISIBLE: true });
+            pixel.loadSfx = async () => {}; scope.set(pixel.name, pixel);
+            const sequence = new Sequence(engine, parent, defs.SEQLAB);
+            sequence.getAnimo = async filename => {
+                assert.equal(filename, '$\\COMMON\\PIXEL.ANN'); return pixel;
+            };
+            scope.set(sequence.name, sequence);
+            try {
+                await pixel.init(); await pixel.applyDefaults(); await pixel.ready(); await sequence.init();
+                const active = scope.objects.filter(object => object instanceof Animo && object.isPlaying);
+                assert.ok(active.some(object => /^ANNENEMY\d_\d$/.test(object.name)), 'Recovery must freeze moving enemy clones too');
+                if (recovery === 'FAILED') {
+                    await get('VARREXZYCIA').SET(0); await get('BEHRESTARTLEVEL').RUN();
+                } else {
+                    const button = get('BTNRESTART'), sprite = get(button.definition.GFXSTANDARD.objectName).getRenderObject();
+                    for (const event of ['pointerover', 'pointerdown', 'pointerup']) sprite.emit(event);
+                    await button.tick();
+                }
+                assert.equal(parent.paused, false, 'Recovery must not freeze the sequence tick queue');
+                assert.equal(keyboard.ISENABLED(), false); assert.equal(mouse.signalsDisabled, true);
+                assert.equal(get('BTNRESTART').logic.enabled, false, 'Recovery must reject repeated restart clicks');
+                assert.equal(sequence.ISPLAYING(), true);
+                for (const actor of active.filter(actor => actor !== pixel)) assert.equal(actor.ISPLAYING(), false, actor.name);
+                let spoken = 0;
+                for (let tick = 0; tick < 120 && !routes.length; tick++) {
+                    if (voices.length) { voices.shift()(); spoken++; }
+                    await sequence.tick(62.5); await pixel.tick(62.5);
+                }
+                assert.equal(spoken, recovery === 'FAILED' ? 1 : 2);
+                assert.deepEqual(routes, ['LABIRYNT'], 'Original sequence completion must request a fresh maze');
+                assert.equal(sequence.ISPLAYING(), false); assert.equal(screenshots.length, 1);
+                assert.equal(get('G_SARCADEOBJECTS').value, '0');
+            } finally {
+                assert.deepEqual(engine.scopeManager.destroy(), [], `${recovery} recovery cleanup`);
+                assert.equal(stage.children.length, 0); backgrounds.forEach(texture => texture.destroy(true));
+            }
+        }
+    } finally {
+        assetLoader.loadSound = loadSound;
+        if (previousWindow === undefined) delete globalThis.window;
+        else globalThis.window = previousWindow;
+    }
+    console.log('MAZE RECOVERY: original failure and restart callbacks, frozen actors/input, real sequences and fresh-maze requests passed');
 }
 
 async function verifyBroomPhysics() {
@@ -1189,6 +1266,7 @@ async function main() {
     await verifyMazeEnemies();
     await verifyMazePlayers();
     await verifyMazePuzzleInitialization();
+    await verifyMazeRecovery();
     await verifyDragonControls();
     await verifyDragonPattern();
     await verifyDragonLevelInitialization();

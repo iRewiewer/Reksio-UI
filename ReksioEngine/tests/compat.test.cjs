@@ -545,6 +545,44 @@ test('Magicienii repairs misspelled alchemy image priorities only in that source
     assert.equal(patchMagicieniiSource('dane/game/przygoda/magic/magic.cnv', source), source);
 });
 
+test('Magicienii maze failure and restart freeze animations without pausing their dialogue processor', () => {
+    const { patchMagicieniiSource } = loadModule('engine/patches/magicienii.ts');
+    const file = 'dane/game/przygoda/labirynt/labirynt.cnv';
+    const source = 'A:CODE={LABIRYNT^PAUSE();SEQLAB^PLAY("FAILED");}\n' +
+        'B:CODE={LABIRYNT^PAUSE();SEQLAB^PLAY("RESTART");}';
+    const repaired = patchMagicieniiSource(file, source);
+    assert.equal(repaired.includes('LABIRYNT^PAUSE();'), false);
+    assert.equal(repaired.split('__WEB_MAZEPAUSE__^RUN();').length - 1, 2);
+    assert.match(repaired, /GETPLAYINGANIMO\("__WEB_MAZEPLAYING__"\)/);
+    assert.match(repaired, /__WEB_MAZEPLAYING__\^PAUSE\(\);KEYBOARD\^DISABLE\(\);MOUSE\^DISABLESIGNAL\(\);BTNRESTART\^DISABLE\(\)/);
+    assert.equal(patchMagicieniiSource(file, repaired), repaired);
+    for (const name of ['labirynt/cnvlevel0.cnv', 'magic/magic.cnv', 'arcade/arcade.cnv']) {
+        assert.equal(patchMagicieniiSource(`dane/game/przygoda/${name}`, source), source);
+    }
+});
+
+test('Only Magicienii collects scene-owned playing animations across overlay scopes', () => {
+    class Actor { constructor(parent, playing = true) { this.parent = parent; this.isPlaying = playing; } }
+    class Collection { objects = []; removeAll() { this.objects = []; } add(object) { this.objects.push(object); } }
+    const { Scene } = loadModule('engine/types/scene.ts', {
+        './index': { ParentType: FakeType }, './behaviour': {}, '../../common/types': decorator,
+        '../../common/errors': { assert: assert.ok }, '../../filesystem/assetsLoader': {},
+        '../../filesystem': {}, './group': { Group: Collection }, './animo': { Animo: Actor },
+    });
+    for (const profile of ['default', 'magicienii', 'ozn', 'nemo', 'timpului']) {
+        const engine = { compat: createEngineCompat(profile) }, scene = new Scene(engine), other = new Scene(engine);
+        const first = new Actor(scene), clone = new Actor(scene), nested = new Actor({ parent: scene });
+        const stopped = new Actor(scene, false), foreign = new Actor(other), global = new Actor(null);
+        scene.scope = { objects: [first, stopped] }; engine.currentScene = scene;
+        engine.scopeManager = { scopes: [scene.scope, { objects: [clone, nested, first, foreign, global] }] };
+        const group = new Collection(); engine.getObject = () => group;
+        scene.GETPLAYINGANIMO('GROUP');
+        assert.deepEqual(group.objects, profile === 'magicienii' ? [first, clone, nested] : [first]);
+        other.GETPLAYINGANIMO('GROUP');
+        assert.deepEqual(group.objects, profile === 'magicienii' ? [foreign] : [first]);
+    }
+});
+
 test('Magicienii empty animation placeholders are restricted to two maze paths and never share mutable state', () => {
     const { getMagicieniiPlaceholderAnimation } = loadModule('engine/patches/magicienii.ts');
     for (const name of ['blank.ann', 'przedmioty1.ann']) {

@@ -14,6 +14,14 @@ export function getMagicieniiPlaceholderAnimation(filename: string): ANN | null 
 }
 
 export function patchMagicieniiSource(filename: string, source: string): string {
+    if (filename === 'dane/game/przygoda/labirynt/labirynt.cnv' && source.includes('LABIRYNT^PAUSE();')) {
+        // Freeze gameplay, but keep the failure/restart sequence's completion processor running.
+        return source.replaceAll('LABIRYNT^PAUSE();', '__WEB_MAZEPAUSE__^RUN();') + '\n' +
+            'OBJECT=__WEB_MAZEPLAYING__\n__WEB_MAZEPLAYING__:TYPE=GROUP\n' +
+            'OBJECT=__WEB_MAZEPAUSE__\n__WEB_MAZEPAUSE__:TYPE=BEHAVIOUR\n' +
+            '__WEB_MAZEPAUSE__:CODE={LABIRYNT^GETPLAYINGANIMO("__WEB_MAZEPLAYING__");' +
+            '__WEB_MAZEPLAYING__^PAUSE();KEYBOARD^DISABLE();MOUSE^DISABLESIGNAL();BTNRESTART^DISABLE();}\n'
+    }
     if (filename === 'dane/game/przygoda/arcade/alchemy.cnv') {
         return source.replaceAll('^SETPTIORITY(', '^SETPRIORITY(')
     }
